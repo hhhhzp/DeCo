@@ -130,7 +130,7 @@ python main.py fit -c ./configs_t2i/sft_res512.yaml  --ckpt_path=./ckpts/pretrai
 This repository is built based on [PixNerd](https://github.com/MCG-NJU/PixNerd) and [DDT](https://github.com/MCG-NJU/DDT). Thanks for their contributions and [Shuai Wang](https://github.com/WANGSSSSSSS)'s support!
 
 ## 📖 Citation 
-If you find MagCache is useful in your research or applications, please consider giving us a star ⭐ and citing it by the following BibTeX entry.
+If you find DeCo is useful in your research or applications, please consider giving us a star ⭐ and citing it by the following BibTeX entry.
 
 ```
 @inproceedings{
