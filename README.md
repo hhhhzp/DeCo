@@ -95,7 +95,7 @@ HF spaces: [https://14467288703cf06a3c.gradio.live](https://14467288703cf06a3c.g
 To host the local gradio demo, run the following command:
 ```bash
 # for text-to-image applications
-python app.py --config configs_t2i/inference_heavydecoder.yaml  --ckpt_path=./ckpts/t2i_DeCo.ckpt
+python app.py --config ./configs_t2i/sft_res512.yaml --ckpt_path=./ckpts/t2i_DeCo.ckpt
 ```
 
 ## 🤖 Usages
