@@ -125,6 +125,16 @@ python main.py fit -c ./configs_c2i/DeCo_XL_512.yaml --ckpt_path=/path/to/256/ch
 ```
 
 ```bash
+# multi-node training in lightning style, e.g., 4 nodes
+export MASTER_ADDR={Your Config}
+export MASTER_PORT={Your Config}
+export NODE_RANK={Your Config}
+export NNODES={Your Config}
+export NGPUS_PER_NODE={Your Config}
+python main.py fit -c ./configs_c2i/DeCo_XL.yaml --trainer.num_nodes=4
+```
+
+```bash
 # for t2i training
 python main.py fit -c ./configs_t2i/pretraining_res256.yaml
 python main.py fit -c ./configs_t2i/pretraining_res512.yaml --ckpt_path=./ckpts/pretrain256.ckpt
