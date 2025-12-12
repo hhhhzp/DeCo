@@ -18,9 +18,9 @@ trainer:
         name: *exp
   num_sanity_val_steps: 0
   max_steps: 200000
-  val_check_interval: 1
+  val_check_interval: 1000
   check_val_every_n_epoch: null
-  log_every_n_steps: 50
+  log_every_n_steps: 10
   deterministic: null
   inference_mode: true
   use_distributed_sampler: false
@@ -87,7 +87,7 @@ model:
   optimizer:
     class_path: torch.optim.AdamW
     init_args:
-      lr: 1e-4
+      lr: 2e-4
       weight_decay: 0.0
   eval_original_model: true
 data:
@@ -104,7 +104,7 @@ data:
       resolution: 224
       split: validation
       max_num_samples: 1000
-  train_batch_size: 32
+  train_batch_size: 16
   train_num_workers: 4
   pred_batch_size: 32
   pred_num_workers: 1
