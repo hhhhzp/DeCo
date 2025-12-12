@@ -18,7 +18,7 @@ trainer:
         name: *exp
   num_sanity_val_steps: 0
   max_steps: 200000
-  val_check_interval: 100000
+  val_check_interval: 1
   check_val_every_n_epoch: null
   log_every_n_steps: 50
   deterministic: null
@@ -94,23 +94,17 @@ data:
       resolution: 224
       split: train
   eval_dataset:
-    class_path: src.data.dataset.randn.ClassLabelRandomNDataset
+    class_path: src.data.dataset.imagenet.PixHFDataset
     init_args:
-      num_classes: 1000
-      max_num_instances: 50000
-      latent_shape:
-        - 3
-        - 256
-        - 256
+      root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k  # /path/to/ImageNet/train/
+      resolution: 224
+      split: val
   pred_dataset:
-    class_path: src.data.dataset.randn.ClassLabelRandomNDataset
+    class_path: src.data.dataset.imagenet.PixHFDataset
     init_args:
-      num_classes: 1000
-      max_num_instances: 50000
-      latent_shape:
-        - 3
-        - 256
-        - 256
+      root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k  # /path/to/ImageNet/train/
+      resolution: 224
+      split: val
   train_batch_size: 32
   train_num_workers: 4
   pred_batch_size: 32

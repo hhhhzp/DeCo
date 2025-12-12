@@ -171,7 +171,7 @@ class PixHFDataset(Dataset):
         raw_image = self.transform(raw_image)
 
         # 4. 转 Tensor (PIL -> Tensor)
-        raw_image = TF.to_tensor(raw_image)
+        raw_image = to_tensor(raw_image)
 
         # 5. 归一化
         normalized_image = self.normalize(raw_image)
