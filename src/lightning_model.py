@@ -164,6 +164,7 @@ class LightningModel(pl.LightningModule):
         # For reconstruction: input image, noise, metadata
         img, _, metadata = batch
 
+        x_t = torch.randn_like(img)
         with torch.no_grad():
             # Extract condition from input image (only once)
             if self.eval_original_model:
@@ -174,11 +175,11 @@ class LightningModel(pl.LightningModule):
         # sample images (no uncondition for reconstruction)
         if self.eval_original_model:
             samples = self.diffusion_sampler(
-                self.denoiser, img, condition, uncondition=condition
+                self.denoiser, x_t, condition, uncondition=condition
             )
         else:
             samples = self.diffusion_sampler(
-                self.ema_denoiser, img, condition, uncondition=condition
+                self.ema_denoiser, x_t, condition, uncondition=condition
             )
 
         samples = self.vae.decode(samples)
