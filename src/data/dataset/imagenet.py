@@ -122,11 +122,16 @@ class PixHFDataset(Dataset):
         resolution=256,
         random_crop=False,
         random_flip=False,
+        max_num_samples=None,  # <--- 新增参数
     ):
         super().__init__()
 
         self.dataset = load_dataset(root, split=split, trust_remote_code=True)
 
+        # 1.1 处理 Max Samples (新增逻辑)
+        # 使用 HF 原生的 shuffle + select，固定 seed 为 42
+        if max_num_samples is not None and max_num_samples < len(self.dataset):
+            self.dataset = self.dataset.shuffle(seed=42).select(range(max_num_samples))
         # 2. 恢复原本的 Transform 逻辑
         if random_crop:
             self.transform = transforms.Compose(
