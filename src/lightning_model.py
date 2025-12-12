@@ -163,7 +163,7 @@ class LightningModel(pl.LightningModule):
     def predict_step(self, batch, batch_idx):
         # For reconstruction: input image, noise, metadata
         img, _, metadata = batch
-        Xt = torch.randn_like(img)
+
         with torch.no_grad():
             # Extract condition from input image (only once)
             if self.eval_original_model:
@@ -174,11 +174,11 @@ class LightningModel(pl.LightningModule):
         # sample images (no uncondition for reconstruction)
         if self.eval_original_model:
             samples = self.diffusion_sampler(
-                self.denoiser, Xt, condition, uncondition=condition
+                self.denoiser, img, condition, uncondition=condition
             )
         else:
             samples = self.diffusion_sampler(
-                self.ema_denoiser, Xt, condition, uncondition=condition
+                self.ema_denoiser, img, condition, uncondition=condition
             )
 
         samples = self.vae.decode(samples)
@@ -187,20 +187,31 @@ class LightningModel(pl.LightningModule):
         if self._logged_images_count < 6:
             num_to_log = min(6 - self._logged_images_count, img.shape[0])
 
-            # Convert images to [0, 255] uint8 range for wandb
+            # Convert images from [-1, 1] to [0, 255] uint8
             original_imgs = fp2uint8(img[:num_to_log])
             reconstructed_imgs = fp2uint8(samples[:num_to_log])
 
-            # Log each comparison image with a unique key
-            for i in range(num_to_log):
-                # Concatenate original (left) and reconstructed (right) horizontally
-                comparison = torch.cat([original_imgs[i], reconstructed_imgs[i]], dim=2)
+            # Log each comparison image with wandb
+            import wandb
+            import numpy as np
 
-                # Use unique key for each image so they all show up in wandb
-                self.logger.log_image(
-                    key=f'reconstruction_{self._logged_images_count + i}',
-                    images=[comparison],
-                    step=self.global_step,
+            for i in range(num_to_log):
+                # Convert to numpy format [H, W, C]
+                orig_np = original_imgs[i].cpu().permute(1, 2, 0).numpy()
+                recon_np = reconstructed_imgs[i].cpu().permute(1, 2, 0).numpy()
+
+                # Concatenate horizontally (left: original, right: reconstructed)
+                combined_np = np.concatenate([orig_np, recon_np], axis=1)
+
+                # Log to wandb with unique key
+                self.logger.experiment.log(
+                    {
+                        f"reconstruction/sample_{self._logged_images_count + i}": wandb.Image(
+                            combined_np,
+                            caption=f"Sample {self._logged_images_count + i}: Original (Left) | Reconstructed (Right)",
+                        ),
+                        "global_step": self.global_step,
+                    }
                 )
 
             self._logged_images_count += num_to_log
