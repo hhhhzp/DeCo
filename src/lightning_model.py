@@ -12,6 +12,7 @@ from lightning.pytorch.callbacks import Callback
 
 
 from src.models.autoencoder.base import BaseAE, fp2uint8
+from src.models.transformer.modeling_internvl_chat import InternVLChatModel
 from src.utils.model_loader import ModelLoader
 from src.callbacks.simple_ema import SimpleEMA
 from src.diffusion.base.sampling import BaseSampler
