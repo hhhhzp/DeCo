@@ -152,7 +152,7 @@ class LightningModel(pl.LightningModule):
 
         # to be do! fix the bug in tqdm iteration when enabling accumulate_grad_batches>1
         for k, v in loss.items():
-            self.log(f"train/{k}", v)
+            self.log(f"train/{k}", v.cpu().item(), prog_bar=True, on_step=True)
         self.log_dict(loss, prog_bar=True, on_step=True, sync_dist=False)
         return loss["loss"]
 
