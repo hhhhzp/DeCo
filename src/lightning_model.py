@@ -106,6 +106,7 @@ class LightningModel(pl.LightningModule):
             # Encode image to latent space for diffusion
             x = self.vae.encode(img)
 
+        print(torch.max(x), torch.min(x))
         # Extract condition from original image (only once per image)
         # This replaces the external text/class condition
         # condition = self.denoiser.forward_condition(img)
