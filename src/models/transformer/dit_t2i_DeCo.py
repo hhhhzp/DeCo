@@ -18,6 +18,7 @@ from src.models.transformer.configuration_intern_vit import InternVisionConfig
 from torchvision.transforms import Normalize
 from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from timm.data.constants import OPENAI_CLIP_MEAN, OPENAI_CLIP_STD
+import torch.nn.functional as F
 
 
 def modulate(x, shift, scale):
@@ -577,8 +578,8 @@ class PixNerDiT(nn.Module):
 
         # 1. 提取特征并投影 [B, N, C]
         latent = self.latent_projector(self.extract_feature(x))
-
-        grid_size = size = int(latent.shape[1] ** 0.5)
+        latent = F.layer_norm(latent, normalized_shape=latent.shape[2:], eps=1e-6)
+        grid_size = int(latent.shape[1] ** 0.5)
         xpos = self.fetch_pos(grid_size, grid_size, x.device)
 
         y = self.learnable_tokens.expand(B, -1, -1)
