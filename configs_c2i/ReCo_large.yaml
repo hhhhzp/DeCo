@@ -5,7 +5,6 @@ tags:
 torch_hub_dir: ~/.cache/torch/hub
 huggingface_cache_dir: null
 trainer:
-  strategy: ddp_find_unused_parameters_true
   default_root_dir: ./universal_pix_workdirs
   accelerator: auto
   strategy: auto
@@ -13,7 +12,7 @@ trainer:
   num_nodes: 1
   precision: bf16-mixed
   logger:
-      class_path: lightning.pytorch.loggers.TensorBoardLogger
+      class_path: lightning.pytorch.loggers.WandbLogger
       init_args:
         save_dir: ./universal_pix_flow
         name: *exp
