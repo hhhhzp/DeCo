@@ -134,7 +134,7 @@ class LightningModel(pl.LightningModule):
         no_grad(self.denoiser.mlp1)
         # For reconstruction task: input image is both source and target
         img, _, metadata = batch  # img is the original image
-        print(eval_original_model, "eval_original_model")
+        print(self.eval_original_model, "eval_original_model")
         print(img.shape, "img.shape")
         with torch.no_grad():
             # Encode image to latent space for diffusion
