@@ -108,7 +108,7 @@ class LightningModel(pl.LightningModule):
 
         # Extract condition from original image (only once per image)
         # This replaces the external text/class condition
-        condition = self.denoiser.forward_condition(img)
+        # condition = self.denoiser.forward_condition(img)
 
         # Run diffusion training with extracted condition
         # No uncondition needed for reconstruction task
@@ -117,7 +117,7 @@ class LightningModel(pl.LightningModule):
             self.ema_denoiser,
             self.diffusion_sampler,
             x,
-            condition,
+            condition=None,
             uncondition=None,  # No CFG for reconstruction
             metadata=metadata,
         )
