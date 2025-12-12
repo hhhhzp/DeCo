@@ -127,7 +127,7 @@ class InternVLChatModel(PreTrainedModel):
         )
 
         self.img_context_token_id = None
-        self.conv_template = get_conv_template(self.template)
+        # self.conv_template = get_conv_template(self.template)
         if hasattr(config, 'system_message'):
             self.system_message = config.system_message
         else:
