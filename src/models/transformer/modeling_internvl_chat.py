@@ -10,7 +10,8 @@ from typing import List, Optional, Tuple, Union
 import torch.distributed as dist
 import torch.utils.checkpoint
 import transformers
-from peft import LoraConfig, get_peft_model
+
+# from peft import LoraConfig, get_peft_model
 from torch import nn
 from torch.nn import CrossEntropyLoss
 from transformers import (
