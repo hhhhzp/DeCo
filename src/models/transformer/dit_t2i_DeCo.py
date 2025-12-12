@@ -442,7 +442,7 @@ class PixNerDiT(nn.Module):
         self.select_layer = select_layer
 
         # Vision encoder
-        config = InternVLChatConfig.from_pretrained(self.model_path)
+        config = InternVLChatConfig.from_pretrained(config_path)
         vision_config = config.vision_config
         self.vision_model = InternVisionModel(vision_config)
         vit_hidden_size = config.vision_config.hidden_size
