@@ -39,6 +39,7 @@ class LightningModel(pl.LightningModule):
         eval_original_model: bool = False,
     ):
         super().__init__()
+        print(eval_original_model, "eval_original_model")
         self.vae = vae
         self.denoiser = denoiser
         self.ema_denoiser = copy.deepcopy(self.denoiser)
