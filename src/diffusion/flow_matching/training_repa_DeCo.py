@@ -252,19 +252,20 @@ class REPATrainer(BaseTrainer):
 
         cond = net.forward_condition(x)
         out = net(x_t, t, cond)
-        src_feature = self.proj(src_feature[0])
-        handle.remove()
+        # src_feature = self.proj(src_feature[0])
+        # handle.remove()
 
-        with torch.no_grad():
-            dst_feature = self.encoder(raw_images)
+        # with torch.no_grad():
+        #     dst_feature = self.encoder(raw_images)
 
-        if dst_feature.shape[1] != src_feature.shape[1]:
-            src_feature = src_feature[:, : dst_feature.shape[1]]
+        # if dst_feature.shape[1] != src_feature.shape[1]:
+        #     src_feature = src_feature[:, : dst_feature.shape[1]]
 
-        cos_sim = torch.nn.functional.cosine_similarity(
-            src_feature, dst_feature, dim=-1
-        )
-        cos_loss = 1 - cos_sim
+        # cos_sim = torch.nn.functional.cosine_similarity(
+        #     src_feature, dst_feature, dim=-1
+        # )
+        # cos_loss = 1 - cos_sim
+        cos_loss = torch.tensor(0)
 
         weight = self.loss_weight_fn(alpha, sigma)
         fm_loss = weight * (out - v_t) ** 2
