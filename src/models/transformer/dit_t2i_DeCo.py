@@ -478,7 +478,7 @@ class PixNerDiT(nn.Module):
 
         # s_embedder should take latent_channels * patch_size^2, not in_channels
         self.s_embedder = Embed(self.latent_channel, hidden_size, bias=True)
-        self.x_embedder = NerfEmbedder(in_channels, decoder_hidden_size, max_freqs=8)
+        self.x_embedder = NerfEmbedder(in_channels, hidden_size_x, max_freqs=8)
         self.t_embedder = TimestepEmbedder(hidden_size)
 
         # Condition projector to map latent_channel to hidden_size

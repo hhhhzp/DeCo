@@ -48,7 +48,7 @@ model:
         patch_size: 16
         num_groups: 16
         hidden_size: &hidden_dim 1024
-        decoder_hidden_size: 32
+        hidden_size_x: 32
         num_encoder_blocks: 6
         num_decoder_blocks: 3
         config_path: /apdcephfs/share_300000800/datamultimodal/models/InternVL3-1B
