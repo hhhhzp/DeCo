@@ -91,7 +91,7 @@ data:
   train_dataset:
     class_path: src.data.dataset.imagenet.PixImageNet
     init_args:
-      root: /data/datasets/ImageNet-1K/train  # /path/to/ImageNet/train/
+      root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k  # /path/to/ImageNet/train/
       resolution: 256
   eval_dataset:
     class_path: src.data.dataset.randn.ClassLabelRandomNDataset
