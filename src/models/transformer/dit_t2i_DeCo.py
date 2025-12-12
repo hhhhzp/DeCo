@@ -493,12 +493,11 @@ class PixNerDiT(nn.Module):
 
         # Decoder network with time embedding
         self.dec_net = SimpleMLPAdaLN(
-            in_channels=self.decoder_hidden_size,
-            model_channels=self.decoder_hidden_size,
-            out_channels=self.in_channels,
+            in_channels=hidden_size_x,
+            model_channels=hidden_size_x,
+            out_channels=self.in_channels,  # for vlb loss
             z_channels=self.hidden_size,
-            t_channels=self.hidden_size,
-            num_res_blocks=self.num_decoder_blocks,
+            num_res_blocks=num_decoder_blocks,
             patch_size=self.patch_size,
             grad_checkpointing=False,
         )
