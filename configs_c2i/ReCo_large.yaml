@@ -5,6 +5,7 @@ tags:
 torch_hub_dir: ~/.cache/torch/hub
 huggingface_cache_dir: null
 trainer:
+  strategy: DDPStrategy(find_unused_parameters=True)
   default_root_dir: ./universal_pix_workdirs
   accelerator: auto
   strategy: auto
