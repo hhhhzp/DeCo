@@ -42,7 +42,7 @@ model:
     init_args:
        scale: 1.0
   denoiser:
-    class_path: src.models.transformer.dit_c2i_DeCo.PixNerDiT
+    class_path: src.models.transformer.dit_t2i_DeCo.PixNerDiT
     init_args:
         in_channels: 3
         patch_size: 16
