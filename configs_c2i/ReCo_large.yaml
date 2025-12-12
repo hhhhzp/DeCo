@@ -104,7 +104,7 @@ data:
   pred_dataset:
     class_path: src.data.dataset.randn.ClassLabelRandomNDataset
     init_args:
-      num_classes: *num_classes
+      num_classes: 1000
       max_num_instances: 50000
       latent_shape:
         - 3
