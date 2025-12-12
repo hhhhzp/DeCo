@@ -71,7 +71,7 @@ model:
     init_args:
       num_steps: 50
       guidance: 1.0
-      guidance_interval_min: 0.0
+      guidance_interval_min: 1.0
       guidance_interval_max: 1.0
       scheduler: *scheduler
       w_scheduler: src.diffusion.flow_matching.scheduling.LinearScheduler
