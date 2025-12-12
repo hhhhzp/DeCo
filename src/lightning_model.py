@@ -9,7 +9,7 @@ from lightning.pytorch.utilities.types import OptimizerLRScheduler, STEP_OUTPUT
 from torch.optim.lr_scheduler import LRScheduler
 from torch.optim import Optimizer
 from lightning.pytorch.callbacks import Callback
-
+from transformers import AutoModel
 
 from src.models.autoencoder.base import BaseAE, fp2uint8
 from src.models.transformer.modeling_internvl_chat import InternVLChatModel
@@ -76,7 +76,7 @@ class LightningModel(pl.LightningModule):
             force_image_size: 如果指定，会 resize position embeddings 到该尺寸
         """
         # 从预训练模型加载 InternVLChatModel
-        model = InternVLChatModel.from_pretrained(
+        model = AutoModel.from_pretrained(
             pretrained_model_path,
             torch_dtype=torch.bfloat16,
             trust_remote_code=True,
