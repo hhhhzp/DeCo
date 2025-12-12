@@ -249,52 +249,6 @@ class TextRefineBlock(nn.Module):
         return x
 
 
-class ResBlock(nn.Module):
-    """
-    A residual block that can optionally change the number of channels.
-    :param channels: the number of input channels.
-    """
-
-    def __init__(self, channels, cond_channels):
-        super().__init__()
-        self.channels = channels
-
-        self.in_ln = nn.LayerNorm(channels, eps=1e-6)
-        self.mlp = nn.Sequential(
-            nn.Linear(channels, channels, bias=True),
-            nn.SiLU(),
-            nn.Linear(channels, channels, bias=True),
-        )
-
-        self.adaLN_modulation = nn.Sequential(
-            nn.SiLU(), nn.Linear(cond_channels, 3 * channels, bias=True)
-        )
-
-    def forward(self, x, y):
-        shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(y).chunk(3, dim=-1)
-        h = modulate(self.in_ln(x), shift_mlp, scale_mlp)
-        h = self.mlp(h)
-        return x + gate_mlp * h
-
-
-class FinalLayer(nn.Module):
-    """
-    The final layer adopted from DiT.
-    """
-
-    def __init__(self, model_channels, out_channels):
-        super().__init__()
-        self.norm_final = nn.LayerNorm(
-            model_channels, elementwise_affine=False, eps=1e-6
-        )
-        self.linear = nn.Linear(model_channels, out_channels, bias=True)
-
-    def forward(self, x):
-        x = self.norm_final(x)
-        x = self.linear(x)
-        return x
-
-
 class ResidualMLPBlock(nn.Module):
     def __init__(self, hidden_size, expansion_ratio=4):
         super().__init__()
@@ -325,6 +279,52 @@ class LatentConnectorModule(nn.Module):
         # x: [B, N, hidden_size]
         x = self.mlp_blocks(x)
         x = self.final_proj(x)
+        return x
+
+
+class ResBlock(nn.Module):
+    """
+    A residual block that can optionally change the number of channels.
+    :param channels: the number of input channels.
+    """
+
+    def __init__(self, channels):
+        super().__init__()
+        self.channels = channels
+
+        self.in_ln = nn.LayerNorm(channels, eps=1e-6)
+        self.mlp = nn.Sequential(
+            nn.Linear(channels, channels, bias=True),
+            nn.SiLU(),
+            nn.Linear(channels, channels, bias=True),
+        )
+
+        self.adaLN_modulation = nn.Sequential(
+            nn.SiLU(), nn.Linear(channels, 3 * channels, bias=True)
+        )
+
+    def forward(self, x, y):
+        shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(y).chunk(3, dim=-1)
+        h = modulate(self.in_ln(x), shift_mlp, scale_mlp)
+        h = self.mlp(h)
+        return x + gate_mlp * h
+
+
+class FinalLayer(nn.Module):
+    """
+    The final layer adopted from DiT.
+    """
+
+    def __init__(self, model_channels, out_channels):
+        super().__init__()
+        self.norm_final = nn.LayerNorm(
+            model_channels, elementwise_affine=False, eps=1e-6
+        )
+        self.linear = nn.Linear(model_channels, out_channels, bias=True)
+
+    def forward(self, x):
+        x = self.norm_final(x)
+        x = self.linear(x)
         return x
 
 
