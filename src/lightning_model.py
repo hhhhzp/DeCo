@@ -59,15 +59,14 @@ class LightningModel(pl.LightningModule):
         no_grad(self.vae)
         # no_grad(self.diffusion_sampler)
         no_grad(self.ema_denoiser)
-
+        self.init_vision_model()
         # torch.compile
         self.denoiser.compile()
         self.ema_denoiser.compile()
 
-    def init_teacher_model(
+    def init_vision_model(
         self,
         pretrained_model_path: str = "/apdcephfs/share_300000800/datamultimodal/models/InternVL3-1B",
-        force_image_size: Optional[int] = None,
     ):
         """
         从预训练的 InternVLChatModel 中加载冻结的 teacher model 用于自蒸馏

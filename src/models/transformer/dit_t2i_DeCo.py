@@ -15,6 +15,9 @@ from src.models.layers.rmsnorm import RMSNorm as Norm
 from src.models.transformer.configuration_internvl_chat import InternVLChatConfig
 from src.models.transformer.modeling_intern_vit import InternVisionModel
 from src.models.transformer.configuration_intern_vit import InternVisionConfig
+from torchvision.transforms import Normalize
+from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
+from timm.data.constants import OPENAI_CLIP_MEAN, OPENAI_CLIP_STD
 
 
 def modulate(x, shift, scale):
@@ -549,6 +552,9 @@ class PixNerDiT(nn.Module):
         :param pixel_values: input image [B, C, H, W]
         :return: vit_embeds [B, num_patches, decoder_hidden_size]
         """
+        pixel_values = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(
+            pixel_values * 0.5 + 0.5
+        )
         if self.select_layer == -1:
             vit_embeds = self.vision_model(
                 pixel_values=pixel_values, output_hidden_states=False, return_dict=True
