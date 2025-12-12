@@ -71,15 +71,15 @@ class REPATrainer(BaseTrainer):
         self.encoder = encoder
         no_grad(self.encoder)
 
-        self.proj = nn.Sequential(
-            nn.Sequential(
-                nn.Linear(proj_denoiser_dim, proj_hidden_dim),
-                nn.SiLU(),
-                nn.Linear(proj_hidden_dim, proj_hidden_dim),
-                nn.SiLU(),
-                nn.Linear(proj_hidden_dim, proj_encoder_dim),
-            )
-        )
+        # self.proj = nn.Sequential(
+        #     nn.Sequential(
+        #         nn.Linear(proj_denoiser_dim, proj_hidden_dim),
+        #         nn.SiLU(),
+        #         nn.Linear(proj_hidden_dim, proj_hidden_dim),
+        #         nn.SiLU(),
+        #         nn.Linear(proj_hidden_dim, proj_encoder_dim),
+        #     )
+        # )
 
         # DCT 配置
         self.block_size = 8
