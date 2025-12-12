@@ -265,7 +265,7 @@ class REPATrainer(BaseTrainer):
         #     src_feature, dst_feature, dim=-1
         # )
         # cos_loss = 1 - cos_sim
-        cos_loss = torch.tensor(0)
+        # cos_loss = torch.tensor(0).to(out.dtype)
 
         weight = self.loss_weight_fn(alpha, sigma)
         fm_loss = weight * (out - v_t) ** 2
@@ -277,10 +277,9 @@ class REPATrainer(BaseTrainer):
         out = dict(
             fm_loss=fm_loss.mean(),
             fm_loss_freq=fm_loss_freq,
-            cos_loss=cos_loss.mean(),
-            loss=fm_loss.mean()
-            + self.freq_loss_weight * fm_loss_freq
-            + self.feat_loss_weight * cos_loss.mean(),
+            # cos_loss=cos_loss.mean(),
+            loss=fm_loss.mean() + self.freq_loss_weight * fm_loss_freq,
+            # + self.feat_loss_weight * cos_loss.mean(),
         )
         return out
 
