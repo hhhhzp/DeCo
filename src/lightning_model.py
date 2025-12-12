@@ -39,7 +39,6 @@ class LightningModel(pl.LightningModule):
         eval_original_model: bool = False,
     ):
         super().__init__()
-        print(eval_original_model, "eval_original_model")
         self.vae = vae
         self.denoiser = denoiser
         self.ema_denoiser = copy.deepcopy(self.denoiser)
@@ -52,9 +51,8 @@ class LightningModel(pl.LightningModule):
         self.eval_original_model = eval_original_model
 
         self._strict_loading = False
-        self._logged_images_count = (
-            0  # Track how many images have been logged for comparison
-        )
+        self._logged_images_count = 0
+        # Track how many images have been logged for comparison
 
     def configure_model(self) -> None:
         self.trainer.strategy.barrier()
@@ -136,7 +134,8 @@ class LightningModel(pl.LightningModule):
         no_grad(self.denoiser.mlp1)
         # For reconstruction task: input image is both source and target
         img, _, metadata = batch  # img is the original image
-
+        print(eval_original_model, "eval_original_model")
+        print(img.shape, "img.shape")
         with torch.no_grad():
             # Encode image to latent space for diffusion
             x = self.vae.encode(img)
