@@ -201,7 +201,7 @@ class LightningModel(pl.LightningModule):
                 comparison_images.append(comparison)
 
             # Log images directly as a list
-            self.log_image(
+            self.logger.log_image(
                 key='reconstruction_comparison',
                 images=comparison_images,
                 step=self.global_step,
