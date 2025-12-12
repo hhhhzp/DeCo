@@ -134,7 +134,6 @@ class LightningModel(pl.LightningModule):
             # Encode image to latent space for diffusion
             x = self.vae.encode(img)
 
-        print(torch.max(x), torch.min(x))
         # Extract condition from original image (only once per image)
         # This replaces the external text/class condition
         # condition = self.denoiser.forward_condition(img)
@@ -152,7 +151,7 @@ class LightningModel(pl.LightningModule):
         )
 
         # to be do! fix the bug in tqdm iteration when enabling accumulate_grad_batches>1
-        for k, v in loss:
+        for k, v in loss.items():
             self.log(f"train/{k}", v)
         self.log_dict(loss, prog_bar=True, on_step=True, sync_dist=False)
         return loss["loss"]
