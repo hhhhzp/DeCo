@@ -125,6 +125,8 @@ class LightningModel(pl.LightningModule):
         self.ema_tracker.setup_models(net=self.denoiser, ema_net=self.ema_denoiser)
 
     def training_step(self, batch, batch_idx):
+        no_grad(self.denoiser.vision_model)
+        no_grad(self.denoiser.mlp1)
         # For reconstruction task: input image is both source and target
         img, _, metadata = batch  # img is the original image
 
