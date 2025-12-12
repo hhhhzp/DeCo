@@ -117,7 +117,7 @@ from datasets import load_dataset
 class PixHFDataset(Dataset):
     def __init__(
         self,
-        data_path,
+        root,
         split='train',
         resolution=256,
         random_crop=False,
@@ -125,7 +125,7 @@ class PixHFDataset(Dataset):
     ):
         super().__init__()
 
-        self.dataset = load_dataset(data_path, split=split, trust_remote_code=True)
+        self.dataset = load_dataset(root, split=split, trust_remote_code=True)
 
         # 2. 恢复原本的 Transform 逻辑
         if random_crop:
