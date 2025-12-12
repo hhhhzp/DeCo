@@ -13,4 +13,3 @@ webdataset
 tensorboard
 datasets
 scikit-image
-flash_attn-2.7.4.post1+cu12torch2.7cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
