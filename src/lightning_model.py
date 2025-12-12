@@ -63,6 +63,32 @@ class LightningModel(pl.LightningModule):
         self.denoiser.compile()
         self.ema_denoiser.compile()
 
+    def init_teacher_model(
+        self,
+        pretrained_model_path: str = "/apdcephfs/share_300000800/datamultimodal/models/InternVL3-1B",
+        force_image_size: Optional[int] = None,
+    ):
+        """
+        从预训练的 InternVLChatModel 中加载冻结的 teacher model 用于自蒸馏
+
+        Args:
+            pretrained_model_path: 预训练模型路径
+            force_image_size: 如果指定，会 resize position embeddings 到该尺寸
+        """
+        # 从预训练模型加载 InternVLChatModel
+        model = InternVLChatModel.from_pretrained(
+            pretrained_model_path,
+            torch_dtype=torch.bfloat16,
+            trust_remote_code=True,
+        )
+
+        # 提取 vision_model 和 mlp1
+        self.denoiser.vision_model.load_state_dict(model.vision_model.state_dict())
+        self.denoiser.mlp1.load_state_dict(model.mlp1.state_dict())
+
+        no_grad(self.denoiser.vision_model)
+        no_grad(self.denoiser.mlp1)
+
     def configure_callbacks(self) -> Union[Sequence[Callback], Callback]:
         return [self.ema_tracker]
 
