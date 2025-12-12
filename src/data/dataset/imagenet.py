@@ -125,8 +125,6 @@ class PixHFDataset(Dataset):
     ):
         super().__init__()
 
-        # 1. 在类内部完成 load_dataset
-        print(f"Loading HF dataset: {data_path} ({split})...")
         self.dataset = load_dataset(data_path, split=split, trust_remote_code=True)
 
         # 2. 恢复原本的 Transform 逻辑
