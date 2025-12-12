@@ -421,7 +421,7 @@ class PixNerDiT(nn.Module):
         in_channels=4,
         num_groups=12,
         hidden_size=1152,
-        decoder_hidden_size=64,
+        hidden_size_x=64,
         num_encoder_blocks=18,
         num_decoder_blocks=4,
         patch_size=2,
@@ -435,7 +435,7 @@ class PixNerDiT(nn.Module):
         self.out_channels = in_channels
         self.hidden_size = hidden_size
         self.num_groups = num_groups
-        self.decoder_hidden_size = decoder_hidden_size
+        self.decoder_hidden_size = hidden_size_x
         self.num_encoder_blocks = num_encoder_blocks
         self.num_decoder_blocks = num_decoder_blocks
         self.num_blocks = self.num_encoder_blocks + self.num_decoder_blocks
