@@ -100,13 +100,6 @@ data:
       resolution: 224
       split: validation
       max_num_samples: 1000
-  pred_dataset:
-    class_path: src.data.dataset.imagenet.PixHFDataset
-    init_args:
-      root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k  # /path/to/ImageNet/train/
-      resolution: 224
-      split: validation
-      max_num_samples: 1000
   train_batch_size: 32
   train_num_workers: 4
   pred_batch_size: 32

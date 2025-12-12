@@ -3,6 +3,7 @@ import os.path
 import copy
 import torch
 import torch.nn as nn
+import torchvision
 import lightning.pytorch as pl
 from lightning.pytorch.core.optimizer import LightningOptimizer
 from lightning.pytorch.utilities.types import OptimizerLRScheduler, STEP_OUTPUT
@@ -50,6 +51,9 @@ class LightningModel(pl.LightningModule):
         self.eval_original_model = eval_original_model
 
         self._strict_loading = False
+        self._logged_images_count = (
+            0  # Track how many images have been logged for comparison
+        )
 
     def configure_model(self) -> None:
         self.trainer.strategy.barrier()
@@ -115,9 +119,11 @@ class LightningModel(pl.LightningModule):
 
     def on_validation_start(self) -> None:
         self.ema_denoiser.to(torch.float32)
+        self._logged_images_count = 0  # Reset counter at validation start
 
     def on_predict_start(self) -> None:
         self.ema_denoiser.to(torch.float32)
+        self._logged_images_count = 0  # Reset counter at predict start
 
     # sanity check before training start
     def on_train_start(self) -> None:
@@ -176,6 +182,33 @@ class LightningModel(pl.LightningModule):
             )
 
         samples = self.vae.decode(samples)
+
+        # Log first 6 images comparison (original vs reconstructed)
+        if self._logged_images_count < 6:
+            num_to_log = min(6 - self._logged_images_count, img.shape[0])
+
+            # Convert images to [0, 1] range for visualization
+            # Both img and samples are in [-1, 1]
+            original_imgs = (img[:num_to_log] + 1.0) / 2.0  # [-1, 1] -> [0, 1]
+            reconstructed_imgs = (samples[:num_to_log] + 1.0) / 2.0  # [-1, 1] -> [0, 1]
+
+            # Concatenate original (left) and reconstructed (right) horizontally
+            comparison_images = []
+            for i in range(num_to_log):
+                comparison = torch.cat(
+                    [original_imgs[i], reconstructed_imgs[i]], dim=2
+                )  # Concat along width (C, H, W*2)
+                comparison_images.append(comparison)
+
+            # Log images directly as a list
+            self.logger.log_image(
+                key='reconstruction_comparison',
+                images=comparison_images,
+                step=self.global_step,
+            )
+
+            self._logged_images_count += num_to_log
+
         # fp32 -1,1 -> uint8 0,255
         samples = fp2uint8(samples)
         return samples
