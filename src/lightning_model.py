@@ -163,7 +163,7 @@ class LightningModel(pl.LightningModule):
     def predict_step(self, batch, batch_idx):
         # For reconstruction: input image, noise, metadata
         img, _, metadata = batch
-
+        Xt = torch.randn_like(img)
         with torch.no_grad():
             # Extract condition from input image (only once)
             if self.eval_original_model:
@@ -174,11 +174,11 @@ class LightningModel(pl.LightningModule):
         # sample images (no uncondition for reconstruction)
         if self.eval_original_model:
             samples = self.diffusion_sampler(
-                self.denoiser, img, condition, uncondition=condition
+                self.denoiser, Xt, condition, uncondition=condition
             )
         else:
             samples = self.diffusion_sampler(
-                self.ema_denoiser, img, condition, uncondition=condition
+                self.ema_denoiser, Xt, condition, uncondition=condition
             )
 
         samples = self.vae.decode(samples)
@@ -187,25 +187,21 @@ class LightningModel(pl.LightningModule):
         if self._logged_images_count < 6:
             num_to_log = min(6 - self._logged_images_count, img.shape[0])
 
-            # Convert images to [0, 1] range for visualization
-            # Both img and samples are in [-1, 1]
-            original_imgs = (img[:num_to_log] + 1.0) / 2.0  # [-1, 1] -> [0, 1]
-            reconstructed_imgs = (samples[:num_to_log] + 1.0) / 2.0  # [-1, 1] -> [0, 1]
+            # Convert images to [0, 255] uint8 range for wandb
+            original_imgs = fp2uint8(img[:num_to_log])
+            reconstructed_imgs = fp2uint8(samples[:num_to_log])
 
-            # Concatenate original (left) and reconstructed (right) horizontally
-            comparison_images = []
+            # Log each comparison image with a unique key
             for i in range(num_to_log):
-                comparison = torch.cat(
-                    [original_imgs[i], reconstructed_imgs[i]], dim=2
-                )  # Concat along width (C, H, W*2)
-                comparison_images.append(comparison)
+                # Concatenate original (left) and reconstructed (right) horizontally
+                comparison = torch.cat([original_imgs[i], reconstructed_imgs[i]], dim=2)
 
-            # Log images directly as a list
-            self.logger.log_image(
-                key='reconstruction_comparison',
-                images=comparison_images,
-                step=self.global_step,
-            )
+                # Use unique key for each image so they all show up in wandb
+                self.logger.log_image(
+                    key=f'reconstruction_{self._logged_images_count + i}',
+                    images=[comparison],
+                    step=self.global_step,
+                )
 
             self._logged_images_count += num_to_log
 
