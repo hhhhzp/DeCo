@@ -61,6 +61,7 @@ model:
         init_args:
           weight_path: ~/.cache/torch/hub/checkpoints/dinov2_vitb14_pretrain.pth
       align_layer: 3
+      null_condition_p: 0.0
       proj_denoiser_dim: *hidden_dim
       proj_hidden_dim: *hidden_dim
       proj_encoder_dim: 768
