@@ -168,11 +168,11 @@ class LightningModel(pl.LightningModule):
         # sample images (no uncondition for reconstruction)
         if self.eval_original_model:
             samples = self.diffusion_sampler(
-                self.denoiser, img, condition, uncondition=None
+                self.denoiser, img, condition, uncondition=condition
             )
         else:
             samples = self.diffusion_sampler(
-                self.ema_denoiser, img, condition, uncondition=None
+                self.ema_denoiser, img, condition, uncondition=condition
             )
 
         samples = self.vae.decode(samples)
