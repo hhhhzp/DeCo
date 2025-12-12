@@ -152,13 +152,13 @@ class LightningModel(pl.LightningModule):
 
         # to be do! fix the bug in tqdm iteration when enabling accumulate_grad_batches>1
         for k, v in loss.items():
-            self.log(f"train/{k}", v.cpu().item(), prog_bar=True, on_step=True)
+            self.log(f"train/{k}", v.cpu().item())
         self.log_dict(loss, prog_bar=True, on_step=True, sync_dist=False)
         return loss["loss"]
 
     def predict_step(self, batch, batch_idx):
         # For reconstruction: input image, noise, metadata
-        img, xT, metadata = batch
+        img, _, metadata = batch
 
         with torch.no_grad():
             # Extract condition from input image (only once)
@@ -170,11 +170,11 @@ class LightningModel(pl.LightningModule):
         # sample images (no uncondition for reconstruction)
         if self.eval_original_model:
             samples = self.diffusion_sampler(
-                self.denoiser, xT, condition, uncondition=None
+                self.denoiser, img, condition, uncondition=None
             )
         else:
             samples = self.diffusion_sampler(
-                self.ema_denoiser, xT, condition, uncondition=None
+                self.ema_denoiser, img, condition, uncondition=None
             )
 
         samples = self.vae.decode(samples)
