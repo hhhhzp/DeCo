@@ -89,6 +89,7 @@ model:
     init_args:
       lr: 1e-4
       weight_decay: 0.0
+  eval_original_model: true
 data:
   train_dataset:
     class_path: src.data.dataset.imagenet.PixHFDataset
