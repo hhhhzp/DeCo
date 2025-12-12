@@ -12,7 +12,6 @@ from lightning.pytorch.callbacks import Callback
 
 
 from src.models.autoencoder.base import BaseAE, fp2uint8
-from src.models.conditioner.base import BaseConditioner
 from src.utils.model_loader import ModelLoader
 from src.callbacks.simple_ema import SimpleEMA
 from src.diffusion.base.sampling import BaseSampler
@@ -24,21 +23,21 @@ EMACallable = Callable[[nn.Module, nn.Module], SimpleEMA]
 OptimizerCallable = Callable[[Iterable], Optimizer]
 LRSchedulerCallable = Callable[[Optimizer], LRScheduler]
 
+
 class LightningModel(pl.LightningModule):
-    def __init__(self,
-                 vae: BaseAE,
-                 conditioner: BaseConditioner,
-                 denoiser: nn.Module,
-                 diffusion_trainer: BaseTrainer,
-                 diffusion_sampler: BaseSampler,
-                 ema_tracker: SimpleEMA=None,
-                 optimizer: OptimizerCallable = None,
-                 lr_scheduler: LRSchedulerCallable = None,
-                 eval_original_model: bool = False,
-                 ):
+    def __init__(
+        self,
+        vae: BaseAE,
+        denoiser: nn.Module,
+        diffusion_trainer: BaseTrainer,
+        diffusion_sampler: BaseSampler,
+        ema_tracker: SimpleEMA = None,
+        optimizer: OptimizerCallable = None,
+        lr_scheduler: LRSchedulerCallable = None,
+        eval_original_model: bool = False,
+    ):
         super().__init__()
         self.vae = vae
-        self.conditioner = conditioner
         self.denoiser = denoiser
         self.ema_denoiser = copy.deepcopy(self.denoiser)
         self.diffusion_sampler = diffusion_sampler
@@ -55,8 +54,7 @@ class LightningModel(pl.LightningModule):
         self.trainer.strategy.barrier()
         copy_params(src_model=self.denoiser, dst_model=self.ema_denoiser)
 
-        # disable grad for conditioner and vae
-        no_grad(self.conditioner)
+        # disable grad for vae
         no_grad(self.vae)
         # no_grad(self.diffusion_sampler)
         no_grad(self.ema_denoiser)
@@ -73,22 +71,21 @@ class LightningModel(pl.LightningModule):
         params_trainer = filter_nograd_tensors(self.diffusion_trainer.parameters())
         params_sampler = filter_nograd_tensors(self.diffusion_sampler.parameters())
         param_groups = [
-            {"params": params_denoiser, },
-            {"params": params_trainer,},
+            {
+                "params": params_denoiser,
+            },
+            {
+                "params": params_trainer,
+            },
             {"params": params_sampler, "lr": 1e-3},
         ]
         # optimizer: torch.optim.Optimizer = self.optimizer([*params_trainer, *params_denoiser])
         optimizer: torch.optim.Optimizer = self.optimizer(param_groups)
         if self.lr_scheduler is None:
-            return dict(
-                optimizer=optimizer
-            )
+            return dict(optimizer=optimizer)
         else:
             lr_scheduler = self.lr_scheduler(optimizer)
-            return dict(
-                optimizer=optimizer,
-                lr_scheduler=lr_scheduler
-            )
+            return dict(optimizer=optimizer, lr_scheduler=lr_scheduler)
 
     def on_validation_start(self) -> None:
         self.ema_denoiser.to(torch.float32)
@@ -101,27 +98,54 @@ class LightningModel(pl.LightningModule):
         self.ema_denoiser.to(torch.float32)
         self.ema_tracker.setup_models(net=self.denoiser, ema_net=self.ema_denoiser)
 
-
     def training_step(self, batch, batch_idx):
-        x, y, metadata = batch
+        # For reconstruction task: input image is both source and target
+        img, _, metadata = batch  # img is the original image
+
         with torch.no_grad():
-            x = self.vae.encode(x)
-            condition, uncondition = self.conditioner(y, metadata)
-        loss = self.diffusion_trainer(self.denoiser, self.ema_denoiser, self.diffusion_sampler, x, condition, uncondition, metadata)
+            # Encode image to latent space for diffusion
+            x = self.vae.encode(img)
+
+        # Extract condition from original image (only once per image)
+        # This replaces the external text/class condition
+        condition = self.denoiser.forward_condition(img)
+
+        # Run diffusion training with extracted condition
+        # No uncondition needed for reconstruction task
+        loss = self.diffusion_trainer(
+            self.denoiser,
+            self.ema_denoiser,
+            self.diffusion_sampler,
+            x,
+            condition,
+            uncondition=None,  # No CFG for reconstruction
+            metadata=metadata,
+        )
+
         # to be do! fix the bug in tqdm iteration when enabling accumulate_grad_batches>1
         self.log_dict(loss, prog_bar=True, on_step=True, sync_dist=False)
         return loss["loss"]
 
     def predict_step(self, batch, batch_idx):
-        xT, y, metadata = batch
-        with torch.no_grad():
-            condition, uncondition = self.conditioner(y)
+        # For reconstruction: input image, noise, metadata
+        img, xT, metadata = batch
 
-        # sample images
+        with torch.no_grad():
+            # Extract condition from input image (only once)
+            if self.eval_original_model:
+                condition = self.denoiser.forward_condition(img)
+            else:
+                condition = self.ema_denoiser.forward_condition(img)
+
+        # sample images (no uncondition for reconstruction)
         if self.eval_original_model:
-            samples = self.diffusion_sampler(self.denoiser, xT, condition, uncondition)
+            samples = self.diffusion_sampler(
+                self.denoiser, xT, condition, uncondition=None
+            )
         else:
-            samples = self.diffusion_sampler(self.ema_denoiser, xT, condition, uncondition)
+            samples = self.diffusion_sampler(
+                self.ema_denoiser, xT, condition, uncondition=None
+            )
 
         samples = self.vae.decode(samples)
         # fp32 -1,1 -> uint8 0,255
@@ -137,15 +161,16 @@ class LightningModel(pl.LightningModule):
             destination = {}
         self._save_to_state_dict(destination, prefix, keep_vars)
         self.denoiser.state_dict(
-            destination=destination,
-            prefix=prefix+"denoiser.",
-            keep_vars=keep_vars)
+            destination=destination, prefix=prefix + "denoiser.", keep_vars=keep_vars
+        )
         self.ema_denoiser.state_dict(
             destination=destination,
-            prefix=prefix+"ema_denoiser.",
-            keep_vars=keep_vars)
+            prefix=prefix + "ema_denoiser.",
+            keep_vars=keep_vars,
+        )
         self.diffusion_trainer.state_dict(
             destination=destination,
-            prefix=prefix+"diffusion_trainer.",
-            keep_vars=keep_vars)
+            prefix=prefix + "diffusion_trainer.",
+            keep_vars=keep_vars,
+        )
         return destination
