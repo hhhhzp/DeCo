@@ -81,7 +81,7 @@ class LightningModel(pl.LightningModule):
         # 从预训练模型加载 InternVLChatModel
         model = AutoModel.from_pretrained(
             pretrained_model_path,
-            torch_dtype=torch.bfloat16,
+            dtype=torch.bfloat16,
             trust_remote_code=True,
         )
 
@@ -166,8 +166,10 @@ class LightningModel(pl.LightningModule):
 
         generator = torch.Generator().manual_seed(42)
         x_t = torch.randn(
-            img.shape, generator=generator, dtype=torch.float32, device=img.device
-        )
+            img.shape,
+            generator=generator,
+            dtype=torch.float32,
+        ).to(img.device)
         with torch.no_grad():
             # Extract condition from input image (only once)
             if self.eval_original_model:
