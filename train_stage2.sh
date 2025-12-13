@@ -10,6 +10,9 @@ export NCCL_SOCKET_IFNAME=bond1
 # export NCCL_DEBUG=INFO
 export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
 
+export http_proxy="http://star-proxy.oa.com:3128"
+export https_proxy="http://star-proxy.oa.com:3128"
+
 # export WANDB_RESUME=auto
 # export WANDB_RUN_ID=uzh3m4s6
 
