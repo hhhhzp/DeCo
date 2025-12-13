@@ -91,18 +91,13 @@ model:
       lr: 2e-4
       weight_decay: 0.0
   lr_scheduler:
-    class_path: torch.optim.lr_scheduler.SequentialLR
+    class_path: torch.optim.lr_scheduler.CosineAnnealingLR
     init_args:
-      schedulers:
-        - class_path: torch.optim.lr_scheduler.LinearLR
-          init_args:
-            start_factor: 0.01
-            end_factor: 1.0
-            total_iters: 2000
-        - class_path: torch.optim.lr_scheduler.CosineAnnealingLR
-          init_args:
-            T_max: 198000
-      milestones: [1000]
+      T_max: 200000
+      eta_min: 2e-5
+    interval: step
+    warmup_ratio: 0.01
+    warmup_steps: 1000
   eval_original_model: true
   distill: true
   pretrain_model_path: ./universal_pix_workdirs/exp_DeCo_256_large/epoch=23-step=60000.ckpt
