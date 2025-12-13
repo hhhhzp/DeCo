@@ -72,7 +72,7 @@ model:
   diffusion_sampler:
     class_path: src.diffusion.flow_matching.sampling.EulerSampler
     init_args:
-      num_steps: 50
+      num_steps: 100
       guidance: 1.0
       guidance_interval_min: 1.0
       guidance_interval_max: 1.0
