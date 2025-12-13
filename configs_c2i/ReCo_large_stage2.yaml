@@ -88,7 +88,7 @@ model:
   optimizer:
     class_path: torch.optim.AdamW
     init_args:
-      lr: 2e-4
+      lr: 1e-4
       weight_decay: 0.0
   eval_original_model: true
   distill: true
