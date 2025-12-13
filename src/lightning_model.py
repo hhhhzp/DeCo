@@ -228,6 +228,12 @@ class LightningModel(pl.LightningModule):
             loss["distill_loss"] = distill_loss
             loss["loss"] = loss["loss"] + distill_loss
 
+        # Log learning rate for LR curve tracking
+        if self.trainer.optimizers:
+            optimizer = self.trainer.optimizers[0]
+            current_lr = optimizer.param_groups[0]['lr']
+            loss["learning_rate"] = current_lr
+
         # to be do! fix the bug in tqdm iteration when enabling accumulate_grad_batches>1
         self.log_dict(loss, prog_bar=True, on_step=True, sync_dist=False)
         return loss["loss"]
