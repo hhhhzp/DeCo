@@ -70,17 +70,20 @@ class LightningModel(pl.LightningModule):
         no_grad(self.vae)
         # no_grad(self.diffusion_sampler)
         no_grad(self.ema_denoiser)
-        self.init_vision_model()
 
-        # Initialize teacher model if distillation is enabled
-        if self.distill:
-            self.init_teacher_model()
-
+        # 首先加载用户指定的预训练权重
         if self.pretrain_model_path is not None:
             checkpoint = torch.load(self.pretrain_model_path, map_location='cpu')
             msg = self.load_state_dict(checkpoint['state_dict'], strict=False)
             if self.global_rank == 0:
                 print(f"Loaded pretrained model from {self.pretrain_model_path}: {msg}")
+
+        # 然后初始化vision model（如果预训练权重中不包含vision model部分）
+        self.init_vision_model()
+
+        # Initialize teacher model if distillation is enabled
+        if self.distill:
+            self.init_teacher_model()
 
         # torch.compile
         self.denoiser.compile()
