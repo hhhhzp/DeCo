@@ -11,7 +11,12 @@ from lightning.pytorch.utilities.types import OptimizerLRScheduler, STEP_OUTPUT
 from torch.optim.lr_scheduler import LRScheduler
 from torch.optim import Optimizer
 from lightning.pytorch.callbacks import Callback
-from transformers import AutoModel, AutoConfig, get_constant_schedule_with_warmup
+from transformers import (
+    AutoModel,
+    AutoConfig,
+    get_constant_schedule_with_warmup,
+    get_linear_schedule_with_warmup,
+)
 
 from src.models.autoencoder.base import BaseAE, fp2uint8
 from src.models.transformer.modeling_internvl_chat import InternVLChatModel
@@ -170,8 +175,10 @@ class LightningModel(pl.LightningModule):
         ]
         # optimizer: torch.optim.Optimizer = self.optimizer([*params_trainer, *params_denoiser])
         optimizer: torch.optim.Optimizer = self.optimizer(param_groups)
-        lr_scheduler = transformers.get_constant_schedule_with_warmup(
-            optimizer, num_warmup_steps=1000
+        lr_scheduler = get_linear_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=1000,
+            num_training_steps=self.total_steps(),
         )
         return dict(optimizer=optimizer, lr_scheduler=lr_scheduler)
 
