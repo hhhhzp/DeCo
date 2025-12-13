@@ -165,7 +165,7 @@ class LightningModel(pl.LightningModule):
         img, _, metadata = batch
 
         generator = torch.Generator().manual_seed(42)
-        x_t = torch.randn_like(img, generator=generator, dtype=torch.float32)
+        x_t = torch.randn(img.shape, generator=generator, dtype=torch.float32)
         with torch.no_grad():
             # Extract condition from input image (only once)
             if self.eval_original_model:
