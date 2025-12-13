@@ -15,7 +15,7 @@ export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
 
 # multi-node training in lightning style, e.g., 4 nodes
 export MASTER_ADDR=29.111.44.218
-export MASTER_PORT=28778
+export MASTER_PORT=18778
 export NNODES=1
 export NGPUS_PER_NODE=8
 export NODE_RANK=${NODE_RANK:-0}
