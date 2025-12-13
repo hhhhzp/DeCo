@@ -38,6 +38,7 @@ class LightningModel(pl.LightningModule):
         lr_scheduler: LRSchedulerCallable = None,
         eval_original_model: bool = False,
         distill: bool = False,
+        pretrain_model_path: str = None,
     ):
         super().__init__()
         self.vae = vae
@@ -59,6 +60,9 @@ class LightningModel(pl.LightningModule):
         self._strict_loading = False
         self._logged_images_count = 0
         # Track how many images have been logged for comparison
+        if pretrain_model_path is not None:
+            msg = self.load_from_checkpoint(pretrain_model_path)['state_dict']
+            print(msg)
 
     def configure_model(self) -> None:
         self.trainer.strategy.barrier()
