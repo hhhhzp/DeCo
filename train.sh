@@ -20,4 +20,5 @@ python main.py fit -c configs_c2i/ReCo_large.yaml \
     --trainer.num_nodes=4 \
     --trainer.devices=8 \
     --trainer.strategy=ddp \
-    --ckpt_path=./universal_pix_workdirs/exp_DeCo_256_large/epoch=7-step=20000.ckpt
+    --ckpt_path=./universal_pix_workdirs/exp_DeCo_256_large/epoch=7-step=20000.ckpt \
+    --resume_run_id=uzh3m4s6
