@@ -4,13 +4,14 @@ import copy
 import torch
 import torch.nn as nn
 import torchvision
+import transformers
 import lightning.pytorch as pl
 from lightning.pytorch.core.optimizer import LightningOptimizer
 from lightning.pytorch.utilities.types import OptimizerLRScheduler, STEP_OUTPUT
 from torch.optim.lr_scheduler import LRScheduler
 from torch.optim import Optimizer
 from lightning.pytorch.callbacks import Callback
-from transformers import AutoModel, AutoConfig
+from transformers import AutoModel, AutoConfig, get_constant_schedule_with_warmup
 
 from src.models.autoencoder.base import BaseAE, fp2uint8
 from src.models.transformer.modeling_internvl_chat import InternVLChatModel
@@ -169,11 +170,10 @@ class LightningModel(pl.LightningModule):
         ]
         # optimizer: torch.optim.Optimizer = self.optimizer([*params_trainer, *params_denoiser])
         optimizer: torch.optim.Optimizer = self.optimizer(param_groups)
-        if self.lr_scheduler is None:
-            return dict(optimizer=optimizer)
-        else:
-            lr_scheduler = self.lr_scheduler(optimizer)
-            return dict(optimizer=optimizer, lr_scheduler=lr_scheduler)
+        lr_scheduler = transformers.get_constant_schedule_with_warmup(
+            optimizer, num_warmup_steps=1000
+        )
+        return dict(optimizer=optimizer, lr_scheduler=lr_scheduler)
 
     def on_validation_start(self) -> None:
         self.ema_denoiser.to(torch.float32)

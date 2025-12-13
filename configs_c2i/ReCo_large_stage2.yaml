@@ -90,11 +90,6 @@ model:
     init_args:
       lr: 2e-4
       weight_decay: 0.0
-  lr_scheduler:
-    class_path: transformers.get_cosine_schedule_with_warmup
-    init_args:
-      num_warmup_steps: 1000
-      num_training_steps: 200000
   eval_original_model: true
   distill: true
   pretrain_model_path: ./universal_pix_workdirs/exp_DeCo_256_large/epoch=23-step=60000.ckpt
