@@ -24,4 +24,4 @@ python main.py fit -c configs_c2i/ReCo_large_stage2.yaml \
     --trainer.num_nodes=1 \
     --trainer.devices=8 \
     --trainer.strategy=ddp \
-    --ckpt_path=./universal_pix_workdirs/exp_DeCo_256_large/epoch=7-step=20000.ckpt
+    --ckpt_path=./universal_pix_workdirs/exp_DeCo_256_large/epoch=9-step=25000.ckpt
