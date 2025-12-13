@@ -1,7 +1,7 @@
 import torch
-import pytorch_lightning as pl
-from pytorch_lightning.callbacks import Callback
-from pytorch_lightning.utilities import rank_zero_info
+import lightning.pytorch as pl
+from lightning.pytorch.callbacks import Callback
+from lightning.pytorch.utilities import rank_zero_info
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 
 
