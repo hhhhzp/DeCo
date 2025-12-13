@@ -35,8 +35,6 @@ trainer:
          save_dir: 200k_ode50_cfg1.0
          save_compressed: true
     - class_path: src.callbacks.compute_metrics.ComputeMetricsHook
-      init_args:
-         metric_batch_size: 32
   plugins:
     - src.plugins.bd_env.BDEnvironment
 model:
