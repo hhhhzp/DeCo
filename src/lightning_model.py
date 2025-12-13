@@ -61,8 +61,9 @@ class LightningModel(pl.LightningModule):
         self._logged_images_count = 0
         # Track how many images have been logged for comparison
         if pretrain_model_path is not None:
-            msg = self.load_from_checkpoint(pretrain_model_path)['state_dict']
-            print(msg)
+            checkpoint = torch.load(pretrain_model_path, map_location='cpu')
+            self.load_state_dict(checkpoint['state_dict'], strict=False)
+            print(f"Loaded pretrained model from {pretrain_model_path}")
 
     def configure_model(self) -> None:
         self.trainer.strategy.barrier()
