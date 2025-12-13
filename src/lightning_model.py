@@ -170,57 +170,51 @@ class LightningModel(pl.LightningModule):
             generator=generator,
             dtype=torch.float32,
         ).to(img.device)
+
+        # Select model and compute condition only once
+        model = self.denoiser if self.eval_original_model else self.ema_denoiser
+
         with torch.no_grad():
             # Extract condition from input image (only once)
-            if self.eval_original_model:
-                condition = self.denoiser.forward_condition(img)
-            else:
-                condition = self.ema_denoiser.forward_condition(img)
-
-        # sample images (no uncondition for reconstruction)
-        if self.eval_original_model:
+            condition = model.forward_condition(img)
+            # sample images (no uncondition for reconstruction)
             samples = self.diffusion_sampler(
-                self.denoiser, x_t, condition, uncondition=condition
+                model, x_t, condition, uncondition=condition
             )
-        else:
-            samples = self.diffusion_sampler(
-                self.ema_denoiser, x_t, condition, uncondition=condition
-            )
+            samples = self.vae.decode(samples)
 
-        samples = self.vae.decode(samples)
+            # Log first 6 images comparison (original vs reconstructed)
+            if self._logged_images_count < 6:
+                num_to_log = min(6 - self._logged_images_count, img.shape[0])
 
-        # Log first 6 images comparison (original vs reconstructed)
-        if self._logged_images_count < 6:
-            num_to_log = min(6 - self._logged_images_count, img.shape[0])
+                # Convert images from [-1, 1] to [0, 255] uint8
+                original_imgs = fp2uint8(img[:num_to_log])
+                reconstructed_imgs = fp2uint8(samples[:num_to_log])
 
-            # Convert images from [-1, 1] to [0, 255] uint8
-            original_imgs = fp2uint8(img[:num_to_log])
-            reconstructed_imgs = fp2uint8(samples[:num_to_log])
+                # Log each comparison image with wandb
+                import wandb
+                import numpy as np
 
-            # Log each comparison image with wandb
-            import wandb
-            import numpy as np
+                for i in range(num_to_log):
+                    # Convert to numpy format [H, W, C]
+                    orig_np = original_imgs[i].cpu().permute(1, 2, 0).numpy()
+                    recon_np = reconstructed_imgs[i].cpu().permute(1, 2, 0).numpy()
 
-            for i in range(num_to_log):
-                # Convert to numpy format [H, W, C]
-                orig_np = original_imgs[i].cpu().permute(1, 2, 0).numpy()
-                recon_np = reconstructed_imgs[i].cpu().permute(1, 2, 0).numpy()
+                    # Concatenate horizontally (left: original, right: reconstructed)
+                    combined_np = np.concatenate([orig_np, recon_np], axis=1)
 
-                # Concatenate horizontally (left: original, right: reconstructed)
-                combined_np = np.concatenate([orig_np, recon_np], axis=1)
+                    # Log to wandb with unique key
+                    self.logger.experiment.log(
+                        {
+                            f"reconstruction/sample_{self._logged_images_count + i}": wandb.Image(
+                                combined_np,
+                                caption=f"Sample {self._logged_images_count + i}: Original (Left) | Reconstructed (Right)",
+                            ),
+                            "global_step": self.global_step,
+                        }
+                    )
 
-                # Log to wandb with unique key
-                self.logger.experiment.log(
-                    {
-                        f"reconstruction/sample_{self._logged_images_count + i}": wandb.Image(
-                            combined_np,
-                            caption=f"Sample {self._logged_images_count + i}: Original (Left) | Reconstructed (Right)",
-                        ),
-                        "global_step": self.global_step,
-                    }
-                )
-
-            self._logged_images_count += num_to_log
+                self._logged_images_count += num_to_log
 
         # fp32 -1,1 -> uint8 0,255
         samples = fp2uint8(samples)

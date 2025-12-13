@@ -233,22 +233,22 @@ class REPATrainer(BaseTrainer):
         x_t = alpha * x + noise * sigma
         v_t = dalpha * x + dsigma * noise
 
-        src_feature = []
+        # src_feature = []
 
-        def forward_hook(net, input, output):
-            feature = output
-            if isinstance(feature, tuple):
-                feature = feature[0]  # mmdit
-            src_feature.append(feature)
+        # def forward_hook(net, input, output):
+        #     feature = output
+        #     if isinstance(feature, tuple):
+        #         feature = feature[0]  # mmdit
+        #     src_feature.append(feature)
 
-        if getattr(net, "encoder", None) is not None:
-            handle = net.encoder.blocks[self.align_layer - 1].register_forward_hook(
-                forward_hook
-            )
-        else:
-            handle = net.blocks[self.align_layer - 1].register_forward_hook(
-                forward_hook
-            )
+        # if getattr(net, "encoder", None) is not None:
+        #     handle = net.encoder.blocks[self.align_layer - 1].register_forward_hook(
+        #         forward_hook
+        #     )
+        # else:
+        #     handle = net.blocks[self.align_layer - 1].register_forward_hook(
+        #         forward_hook
+        #     )
 
         cond = net.forward_condition(x)
         out = net(x_t, t, cond)
