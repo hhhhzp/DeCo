@@ -1,175 +1,85 @@
-import lightning.pytorch as pl
-from lightning.pytorch import Callback
-
 import torch
-import numpy as np
-from typing import Any, Dict
-from lightning.pytorch.utilities.types import STEP_OUTPUT
-from lightning_utilities.core.rank_zero import rank_zero_info
+import pytorch_lightning as pl
+from pytorch_lightning.callbacks import Callback
+from pytorch_lightning.utilities import rank_zero_info
+from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 
 
 class ComputeMetricsHook(Callback):
     """
-    Callback for computing reconstruction quality metrics (PSNR, SSIM).
-    Collects original and reconstructed images during validation/prediction,
-    then computes and logs metrics at epoch end.
+    Callback for computing reconstruction quality metrics (PSNR, SSIM) using TorchMetrics.
+    Fully GPU-accelerated and DDP-safe.
     """
 
-    def __init__(self, metric_batch_size: int = 32):
-        """
-        Args:
-            metric_batch_size: Batch size for processing metrics to avoid OOM
-        """
-        self.metric_batch_size = metric_batch_size
-        self.psnr_values = []
-        self.ssim_values = []
+    def __init__(self):
+        super().__init__()
+        # 初始化指标计算器，dist_sync_on_step=False 表示我们只在 epoch 结束时同步
+        # data_range=1.0 对应 [0, 1] 的数据范围
+        self.psnr = PeakSignalNoiseRatio(data_range=1.0)
+        self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0)
 
-    def metrics_start(self):
-        """Initialize metric collection"""
-        self.psnr_values = []
-        self.ssim_values = []
-        rank_zero_info("Starting metric computation...")
+    def setup(self, trainer, pl_module, stage=None):
+        # 确保指标模块被移动到正确的设备上
+        if hasattr(pl_module, "device"):
+            self.psnr = self.psnr.to(pl_module.device)
+            self.ssim = self.ssim.to(pl_module.device)
 
-    def collect_batch(
-        self,
-        trainer: "pl.Trainer",
-        pl_module: "pl.LightningModule",
-        reconstructed: STEP_OUTPUT,
-        batch: Any,
-    ) -> None:
-        """
-        Compute metrics for each batch independently on each GPU.
+    def _update_metrics(self, pl_module, outputs, batch):
+        # 提取数据 (假设 batch 格式为 [img, label, metadata])
+        original_img, _, _ = batch
 
-        Args:
-            trainer: PyTorch Lightning trainer
-            pl_module: Lightning module
-            reconstructed: Reconstructed images (output from model), float [-1, 1]
-            batch: Original batch containing input images, float [-1, 1]
-        """
-        from skimage.metrics import peak_signal_noise_ratio as psnr_loss
-        from skimage.metrics import structural_similarity as ssim_loss
+        # 确保数据在同一设备
+        reconstructed = outputs.to(pl_module.device)
+        original_img = original_img.to(pl_module.device)
 
-        # Extract original images from batch (range: [-1, 1])
-        original_img, _, metadata = batch
+        # 根据数据类型进行归一化处理
+        if reconstructed.dtype == torch.uint8:
+            # uint8 类型: [0, 255] -> [0, 1]
+            reconstructed = reconstructed.float() / 255.0
+        else:
+            # float 类型: 假设 [-1, 1] -> [0, 1]
+            reconstructed = torch.clamp((reconstructed + 1.0) / 2.0, 0.0, 1.0)
 
-        # Convert both images from [-1, 1] to [0, 1]
-        reconstructed = (reconstructed + 1.0) / 2.0
-        reconstructed = torch.clamp(reconstructed, 0.0, 1.0)
+        if original_img.dtype == torch.uint8:
+            # uint8 类型: [0, 255] -> [0, 1]
+            original_img = original_img.float() / 255.0
+        else:
+            # float 类型: 假设 [-1, 1] -> [0, 1]
+            original_img = torch.clamp((original_img + 1.0) / 2.0, 0.0, 1.0)
 
-        original_img = (original_img + 1.0) / 2.0
-        original_img = torch.clamp(original_img, 0.0, 1.0)
+        # 更新指标状态 (此时不计算最终值，只累积统计量)
+        self.psnr.update(reconstructed, original_img)
+        self.ssim.update(reconstructed, original_img)
 
-        # Convert to numpy for metric computation
-        original_np = original_img.cpu().numpy()
-        reconstructed_np = reconstructed.cpu().numpy()
+    def _log_and_reset(self, pl_module, prefix="val"):
+        # 计算最终指标 (自动处理 DDP 同步)
+        final_psnr = self.psnr.compute()
+        final_ssim = self.ssim.compute()
 
-        batch_size = original_np.shape[0]
+        rank_zero_info(f"[{prefix}] PSNR: {final_psnr:.4f} | SSIM: {final_ssim:.4f}")
 
-        # Compute metrics for each image in the batch
-        for i in range(batch_size):
-            # Convert to [H, W, C] format
-            orig = np.transpose(original_np[i], (1, 2, 0))
-            recon = np.transpose(reconstructed_np[i], (1, 2, 0))
+        # Log 到 TensorBoard/WandB
+        pl_module.log(f"{prefix}/psnr", final_psnr, sync_dist=True, rank_zero_only=True)
+        pl_module.log(f"{prefix}/ssim", final_ssim, sync_dist=True, rank_zero_only=True)
 
-            # Compute PSNR (data_range=1.0 because images are in [0,1] range)
-            psnr_val = psnr_loss(orig, recon, data_range=1.0)
-            self.psnr_values.append(psnr_val)
-
-            # Compute SSIM
-            ssim_val = ssim_loss(orig, recon, data_range=1.0, channel_axis=-1)
-            self.ssim_values.append(ssim_val)
-
-    def metrics_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule"):
-        """
-        Aggregate and log metrics at epoch end across all GPUs.
-        """
-        if len(self.psnr_values) == 0:
-            rank_zero_info("No metrics collected")
-            return
-
-        # Convert to tensors for distributed synchronization
-        psnr_tensor = torch.tensor(self.psnr_values, device=pl_module.device)
-        ssim_tensor = torch.tensor(self.ssim_values, device=pl_module.device)
-
-        # Gather all values from all GPUs
-        all_psnr = pl_module.all_gather(psnr_tensor).flatten()
-        all_ssim = pl_module.all_gather(ssim_tensor).flatten()
-
-        # Only log on rank 0
-        if trainer.is_global_zero:
-            # Compute statistics
-            psnr_mean = all_psnr.mean().item()
-            psnr_std = all_psnr.std().item()
-            ssim_mean = all_ssim.mean().item()
-            ssim_std = all_ssim.std().item()
-
-            rank_zero_info(f"Computed metrics for {len(all_psnr)} images")
-            rank_zero_info(f"PSNR: {psnr_mean:.4f} ± {psnr_std:.4f}")
-            rank_zero_info(f"SSIM: {ssim_mean:.4f} ± {ssim_std:.4f}")
-
-            # Log to tensorboard/logger
-            pl_module.log(
-                "metrics/psnr",
-                psnr_mean,
-                on_epoch=True,
-                sync_dist=False,
-                rank_zero_only=True,
-            )
-            pl_module.log(
-                "metrics/ssim",
-                ssim_mean,
-                on_epoch=True,
-                sync_dist=False,
-                rank_zero_only=True,
-            )
-
-        # Clear collected metrics
-        self.psnr_values = []
-        self.ssim_values = []
+        # 重置状态以备下一个 epoch
+        self.psnr.reset()
+        self.ssim.reset()
 
     # ========== Validation hooks ==========
-    def on_validation_epoch_start(
-        self, trainer: "pl.Trainer", pl_module: "pl.LightningModule"
-    ) -> None:
-        self.metrics_start()
-
     def on_validation_batch_end(
-        self,
-        trainer: "pl.Trainer",
-        pl_module: "pl.LightningModule",
-        outputs: STEP_OUTPUT,
-        batch: Any,
-        batch_idx: int,
-        dataloader_idx: int = 0,
-    ) -> None:
-        self.collect_batch(trainer, pl_module, outputs, batch)
+        self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0
+    ):
+        self._update_metrics(pl_module, outputs, batch)
 
-    def on_validation_epoch_end(
-        self, trainer: "pl.Trainer", pl_module: "pl.LightningModule"
-    ) -> None:
-        self.metrics_end(trainer, pl_module)
+    def on_validation_epoch_end(self, trainer, pl_module):
+        self._log_and_reset(pl_module, prefix="metrics")  # 或者 "val"
 
     # ========== Prediction hooks ==========
-    def on_predict_epoch_start(
-        self, trainer: "pl.Trainer", pl_module: "pl.LightningModule"
-    ) -> None:
-        self.metrics_start()
-
     def on_predict_batch_end(
-        self,
-        trainer: "pl.Trainer",
-        pl_module: "pl.LightningModule",
-        outputs: Any,
-        batch: Any,
-        batch_idx: int,
-        dataloader_idx: int = 0,
-    ) -> None:
-        self.collect_batch(trainer, pl_module, outputs, batch)
+        self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0
+    ):
+        self._update_metrics(pl_module, outputs, batch)
 
-    def on_predict_epoch_end(
-        self, trainer: "pl.Trainer", pl_module: "pl.LightningModule"
-    ) -> None:
-        self.metrics_end(trainer, pl_module)
-
-    def state_dict(self) -> Dict[str, Any]:
-        return dict()
+    def on_predict_epoch_end(self, trainer, pl_module):
+        self._log_and_reset(pl_module, prefix="predict_metrics")

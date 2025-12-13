@@ -164,7 +164,8 @@ class LightningModel(pl.LightningModule):
         # For reconstruction: input image, noise, metadata
         img, _, metadata = batch
 
-        x_t = torch.randn_like(img)
+        generator = torch.Generator().manual_seed(42)
+        x_t = torch.randn_like(img, generator=generator, dtype=torch.float32)
         with torch.no_grad():
             # Extract condition from input image (only once)
             if self.eval_original_model:

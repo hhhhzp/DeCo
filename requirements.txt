@@ -13,3 +13,4 @@ webdataset
 tensorboard
 datasets
 scikit-image
+torchmetrics[image]
