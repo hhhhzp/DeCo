@@ -60,10 +60,7 @@ class LightningModel(pl.LightningModule):
         self._strict_loading = False
         self._logged_images_count = 0
         # Track how many images have been logged for comparison
-        if pretrain_model_path is not None:
-            checkpoint = torch.load(pretrain_model_path, map_location='cpu')
-            msg = self.load_state_dict(checkpoint['state_dict'], strict=False)
-            print(f"Loaded pretrained model from {pretrain_model_path}: {msg}")
+        self.pretrain_model_path = pretrain_model_path
 
     def configure_model(self) -> None:
         self.trainer.strategy.barrier()
@@ -78,6 +75,12 @@ class LightningModel(pl.LightningModule):
         # Initialize teacher model if distillation is enabled
         if self.distill:
             self.init_teacher_model()
+
+        if self.pretrain_model_path is not None:
+            checkpoint = torch.load(self.pretrain_model_path, map_location='cpu')
+            msg = self.load_state_dict(checkpoint['state_dict'], strict=False)
+            if self.global_rank == 0:
+                print(f"Loaded pretrained model from {self.pretrain_model_path}: {msg}")
 
         # torch.compile
         self.denoiser.compile()
@@ -185,8 +188,9 @@ class LightningModel(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         # For reconstruction task: input image is both source and target
         img, _, metadata = batch  # img is the original image
-        # print(self.eval_original_model, "eval_original_model")
-        # print(img.shape, "img.shape")
+        # if self.global_rank == 0:
+        #     print(self.eval_original_model, "eval_original_model")
+        #     print(img.shape, "img.shape")
         with torch.no_grad():
             # Encode image to latent space for diffusion
             x = self.vae.encode(img)
