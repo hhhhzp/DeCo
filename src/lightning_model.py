@@ -10,7 +10,7 @@ from lightning.pytorch.utilities.types import OptimizerLRScheduler, STEP_OUTPUT
 from torch.optim.lr_scheduler import LRScheduler
 from torch.optim import Optimizer
 from lightning.pytorch.callbacks import Callback
-from transformers import AutoModel
+from transformers import AutoModel, AutoConfig
 
 from src.models.autoencoder.base import BaseAE, fp2uint8
 from src.models.transformer.modeling_internvl_chat import InternVLChatModel
@@ -37,6 +37,7 @@ class LightningModel(pl.LightningModule):
         optimizer: OptimizerCallable = None,
         lr_scheduler: LRSchedulerCallable = None,
         eval_original_model: bool = False,
+        distill: bool = False,
     ):
         super().__init__()
         self.vae = vae
@@ -49,6 +50,11 @@ class LightningModel(pl.LightningModule):
         self.lr_scheduler = lr_scheduler
 
         self.eval_original_model = eval_original_model
+        self.distill = distill
+
+        # Initialize teacher model for distillation
+        if self.distill:
+            self.teacher_denoiser = copy.deepcopy(self.denoiser)
 
         self._strict_loading = False
         self._logged_images_count = 0
@@ -63,6 +69,11 @@ class LightningModel(pl.LightningModule):
         # no_grad(self.diffusion_sampler)
         no_grad(self.ema_denoiser)
         self.init_vision_model()
+
+        # Initialize teacher model if distillation is enabled
+        if self.distill:
+            self.init_teacher_model()
+
         # torch.compile
         self.denoiser.compile()
         self.ema_denoiser.compile()
@@ -72,15 +83,19 @@ class LightningModel(pl.LightningModule):
         pretrained_model_path: str = "/apdcephfs/share_300000800/datamultimodal/models/InternVL3-1B",
     ):
         """
-        从预训练的 InternVLChatModel 中加载冻结的 teacher model 用于自蒸馏
+        从预训练的 InternVLChatModel 中加载 vision model 和 mlp1
 
         Args:
             pretrained_model_path: 预训练模型路径
-            force_image_size: 如果指定，会 resize position embeddings 到该尺寸
         """
         # 从预训练模型加载 InternVLChatModel
+        config = AutoConfig.from_pretrained(
+            pretrained_model_path, trust_remote_code=True
+        )
+        config.vision_config.drop_path_rate = 0.0
         model = AutoModel.from_pretrained(
             pretrained_model_path,
+            config=config,
             dtype=torch.bfloat16,
             trust_remote_code=True,
         )
@@ -89,8 +104,41 @@ class LightningModel(pl.LightningModule):
         self.denoiser.vision_model.load_state_dict(model.vision_model.state_dict())
         self.denoiser.mlp1.load_state_dict(model.mlp1.state_dict())
 
-        no_grad(self.denoiser.vision_model)
-        no_grad(self.denoiser.mlp1)
+        # 如果不进行蒸馏，则冻结 vision_model 和 mlp1
+        if not self.distill:
+            no_grad(self.denoiser.vision_model)
+            no_grad(self.denoiser.mlp1)
+
+    def init_teacher_model(
+        self,
+        pretrained_model_path: str = "/apdcephfs/share_300000800/datamultimodal/models/InternVL3-1B",
+    ):
+        """
+        初始化冻结的 teacher model 用于自蒸馏
+
+        Args:
+            pretrained_model_path: 预训练模型路径
+        """
+        # 从预训练模型加载 InternVLChatModel
+        config = AutoConfig.from_pretrained(
+            pretrained_model_path, trust_remote_code=True
+        )
+        config.vision_config.drop_path_rate = 0.0
+        model = AutoModel.from_pretrained(
+            pretrained_model_path,
+            config=config,
+            dtype=torch.bfloat16,
+            trust_remote_code=True,
+        )
+
+        # 提取 vision_model 和 mlp1 到 teacher model
+        self.teacher_denoiser.vision_model.load_state_dict(
+            model.vision_model.state_dict()
+        )
+        self.teacher_denoiser.mlp1.load_state_dict(model.mlp1.state_dict())
+
+        # 冻结整个 teacher model
+        no_grad(self.teacher_denoiser)
 
     def configure_callbacks(self) -> Union[Sequence[Callback], Callback]:
         return [self.ema_tracker]
@@ -130,8 +178,6 @@ class LightningModel(pl.LightningModule):
         self.ema_tracker.setup_models(net=self.denoiser, ema_net=self.ema_denoiser)
 
     def training_step(self, batch, batch_idx):
-        no_grad(self.denoiser.vision_model)
-        no_grad(self.denoiser.mlp1)
         # For reconstruction task: input image is both source and target
         img, _, metadata = batch  # img is the original image
         # print(self.eval_original_model, "eval_original_model")
@@ -142,7 +188,8 @@ class LightningModel(pl.LightningModule):
 
         # Extract condition from original image (only once per image)
         # This replaces the external text/class condition
-        # condition = self.denoiser.forward_condition(img)
+        vit_embeds = self.denoiser.extract_feature(img)
+        condition = self.denoiser.forward_condition(img, vit_embeds=vit_embeds)
 
         # Run diffusion training with extracted condition
         # No uncondition needed for reconstruction task
@@ -151,10 +198,23 @@ class LightningModel(pl.LightningModule):
             self.ema_denoiser,
             self.diffusion_sampler,
             x,
-            condition=None,
+            condition=condition,
             uncondition=None,  # No CFG for reconstruction
             metadata=metadata,
         )
+
+        # Add distillation loss if enabled
+        if self.distill:
+            with torch.no_grad():
+                # Extract teacher features using frozen teacher model
+                teacher_vit_embeds = self.teacher_denoiser.extract_feature(img).detach()
+
+            # MSE loss for feature alignment
+            distill_loss = torch.nn.functional.mse_loss(vit_embeds, teacher_vit_embeds)
+
+            # Add distillation loss to total loss
+            loss["distill_loss"] = distill_loss
+            loss["loss"] = loss["loss"] + distill_loss
 
         # to be do! fix the bug in tqdm iteration when enabling accumulate_grad_batches>1
         self.log_dict(loss, prog_bar=True, on_step=True, sync_dist=False)

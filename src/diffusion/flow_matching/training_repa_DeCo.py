@@ -250,8 +250,8 @@ class REPATrainer(BaseTrainer):
         #         forward_hook
         #     )
 
-        cond = net.forward_condition(x)
-        out = net(x_t, t, cond)
+        # cond = net.forward_condition(x)
+        out = net(x_t, t, y)
         # src_feature = self.proj(src_feature[0])
         # handle.remove()
 

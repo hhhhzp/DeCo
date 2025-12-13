@@ -448,6 +448,7 @@ class PixNerDiT(nn.Module):
         # Vision encoder
         config = InternVLChatConfig.from_pretrained(config_path)
         vision_config = config.vision_config
+        vision_config.drop_path_rate = 0.0
         self.vision_model = InternVisionModel(vision_config)
         vit_hidden_size = config.vision_config.hidden_size
         llm_hidden_size = config.llm_config.hidden_size
@@ -573,11 +574,14 @@ class PixNerDiT(nn.Module):
         vit_embeds = self.mlp1(vit_embeds)
         return vit_embeds
 
-    def forward_condition(self, x):
+    def forward_condition(self, x, vit_embeds=None):
         B = x.shape[0]
 
         # 1. 提取特征并投影 [B, N, C]
-        latent = self.latent_projector(self.extract_feature(x))
+        if vit_embeds is None:
+            latent = self.latent_projector(self.extract_feature(x))
+        else:
+            latent = self.latent_projector(vit_embeds)
         latent = F.layer_norm(latent, normalized_shape=latent.shape[2:], eps=1e-6)
         grid_size = int(latent.shape[1] ** 0.5)
         xpos = self.fetch_pos(grid_size, grid_size, x.device)
