@@ -284,6 +284,7 @@ class REPATrainer(BaseTrainer):
         return out
 
     def state_dict(self, *args, destination=None, prefix="", keep_vars=False):
+        pass
         # self.proj.state_dict(
         #     destination=destination, prefix=prefix + "proj.", keep_vars=keep_vars
         # )
