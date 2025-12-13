@@ -129,9 +129,17 @@ class PixHFDataset(Dataset):
         self.dataset = load_dataset(root, split=split, trust_remote_code=True)
 
         # 1.1 处理 Max Samples (新增逻辑)
-        # 使用 HF 原生的 shuffle + select，固定 seed 为 42
+        # 使用 np.random.choice 随机选择固定的样本索引（用于一致性评估）
         if max_num_samples is not None and max_num_samples < len(self.dataset):
-            self.dataset = self.dataset.shuffle(seed=42).select(range(max_num_samples))
+            total_samples = len(self.dataset)
+            # 设置随机数种子以确保可复现性
+            np.random.seed(42)
+            selected_indices = np.random.choice(
+                total_samples,
+                size=min(max_num_samples, total_samples),
+                replace=False,
+            ).tolist()
+            self.dataset = self.dataset.select(selected_indices)
         # 2. 恢复原本的 Transform 逻辑
         if random_crop:
             self.transform = transforms.Compose(
