@@ -67,13 +67,6 @@ class LightningModel(pl.LightningModule):
 
     def configure_model(self) -> None:
         self.trainer.strategy.barrier()
-        copy_params(src_model=self.denoiser, dst_model=self.ema_denoiser)
-
-        # disable grad for vae
-        no_grad(self.vae)
-        # no_grad(self.diffusion_sampler)
-        no_grad(self.ema_denoiser)
-
         # 然后初始化vision model（如果预训练权重中不包含vision model部分）
         self.init_vision_model()
 
@@ -87,6 +80,13 @@ class LightningModel(pl.LightningModule):
             msg = self.load_state_dict(checkpoint['state_dict'], strict=False)
             if self.global_rank == 0:
                 print(f"Loaded pretrained model from {self.pretrain_model_path}: {msg}")
+
+        copy_params(src_model=self.denoiser, dst_model=self.ema_denoiser)
+
+        # disable grad for vae
+        no_grad(self.vae)
+        # no_grad(self.diffusion_sampler)
+        no_grad(self.ema_denoiser)
 
         # torch.compile with optimized settings
         # compile_mode = "max-autotune"  # Use max-autotune for best performance
