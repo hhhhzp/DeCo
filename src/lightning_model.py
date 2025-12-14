@@ -89,13 +89,11 @@ class LightningModel(pl.LightningModule):
                 print(f"Loaded pretrained model from {self.pretrain_model_path}: {msg}")
 
         # torch.compile with optimized settings
-        compile_mode = "max-autotune"  # Use max-autotune for best performance
+        # compile_mode = "max-autotune"  # Use max-autotune for best performance
         if self.distill:
-            self.teacher_denoiser = torch.compile(
-                self.teacher_denoiser, mode=compile_mode
-            )
-        self.denoiser = torch.compile(self.denoiser, mode=compile_mode)
-        self.ema_denoiser = torch.compile(self.ema_denoiser, mode=compile_mode)
+            self.teacher_denoiser = torch.compile(self.teacher_denoiser)
+        self.denoiser = torch.compile(self.denoiser)
+        self.ema_denoiser = torch.compile(self.ema_denoiser)
 
     def init_vision_model(
         self,
