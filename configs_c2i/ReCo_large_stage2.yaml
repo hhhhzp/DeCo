@@ -112,8 +112,8 @@ data:
       split: validation
       max_num_samples: 1000
   # Optimized data loading settings
-  train_batch_size: 32  # Increased from 16 (adjust based on GPU memory)
-  train_num_workers: 16  # Increased from 8 for better CPU utilization
+  train_batch_size: 16  # Increased from 16 (adjust based on GPU memory)
+  train_num_workers: 8  # Increased from 8 for better CPU utilization
   train_prefetch_factor: 4  # Prefetch batches for smoother training
   pred_batch_size: 32
   pred_num_workers: 4
