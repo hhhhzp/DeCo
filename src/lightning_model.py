@@ -40,6 +40,7 @@ class LightningModel(pl.LightningModule):
         eval_original_model: bool = False,
         distill: bool = False,
         pretrain_model_path: str = None,
+        diffusion_batch_mul: int = 4,  # Configurable latent replication factor
     ):
         super().__init__()
         self.vae = vae
@@ -53,6 +54,7 @@ class LightningModel(pl.LightningModule):
 
         self.eval_original_model = eval_original_model
         self.distill = distill
+        self.diffusion_batch_mul = diffusion_batch_mul  # Multiply latent samples to improve training efficiency
 
         # Initialize teacher model for distillation
         if self.distill:
@@ -72,13 +74,6 @@ class LightningModel(pl.LightningModule):
         # no_grad(self.diffusion_sampler)
         no_grad(self.ema_denoiser)
 
-        # 首先加载用户指定的预训练权重
-        if self.pretrain_model_path is not None:
-            checkpoint = torch.load(self.pretrain_model_path, map_location='cpu')
-            msg = self.load_state_dict(checkpoint['state_dict'], strict=False)
-            if self.global_rank == 0:
-                print(f"Loaded pretrained model from {self.pretrain_model_path}: {msg}")
-
         # 然后初始化vision model（如果预训练权重中不包含vision model部分）
         self.init_vision_model()
 
@@ -86,9 +81,21 @@ class LightningModel(pl.LightningModule):
         if self.distill:
             self.init_teacher_model()
 
-        # torch.compile
-        self.denoiser.compile()
-        self.ema_denoiser.compile()
+        # 首先加载用户指定的预训练权重
+        if self.pretrain_model_path is not None:
+            checkpoint = torch.load(self.pretrain_model_path, map_location='cpu')
+            msg = self.load_state_dict(checkpoint['state_dict'], strict=False)
+            if self.global_rank == 0:
+                print(f"Loaded pretrained model from {self.pretrain_model_path}: {msg}")
+
+        # torch.compile with optimized settings
+        compile_mode = "max-autotune"  # Use max-autotune for best performance
+        if self.distill:
+            self.teacher_denoiser = torch.compile(
+                self.teacher_denoiser, mode=compile_mode
+            )
+        self.denoiser = torch.compile(self.denoiser, mode=compile_mode)
+        self.ema_denoiser = torch.compile(self.ema_denoiser, mode=compile_mode)
 
     def init_vision_model(
         self,
@@ -170,8 +177,8 @@ class LightningModel(pl.LightningModule):
         ]
         # optimizer: torch.optim.Optimizer = self.optimizer([*params_trainer, *params_denoiser])
         optimizer: torch.optim.Optimizer = self.optimizer(param_groups)
-        lr_scheduler = transformers.get_constant_schedule_with_warmup(
-            optimizer, num_warmup_steps=6000
+        lr_scheduler = transformers.get_cosine_schedule_with_warmup(
+            optimizer, num_warmup_steps=6000, num_training_steps=200000
         )
         return dict(
             optimizer=optimizer,
@@ -209,6 +216,12 @@ class LightningModel(pl.LightningModule):
         # This replaces the external text/class condition
         vit_embeds = self.denoiser.extract_feature(img)
         condition = self.denoiser.forward_condition(img, vit_embeds=vit_embeds)
+
+        # Replicate latent x to improve training efficiency
+        # Since condition extraction is more expensive, we reuse the same condition
+        # with multiple copies of x to increase training samples
+        x = x.repeat(self.diffusion_batch_mul, 1, 1, 1)
+        condition = condition.repeat(self.diffusion_batch_mul, 1, 1)
 
         # Run diffusion training with extracted condition
         # No uncondition needed for reconstruction task
