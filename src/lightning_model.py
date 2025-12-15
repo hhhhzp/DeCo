@@ -175,8 +175,8 @@ class LightningModel(pl.LightningModule):
         ]
         # optimizer: torch.optim.Optimizer = self.optimizer([*params_trainer, *params_denoiser])
         optimizer: torch.optim.Optimizer = self.optimizer(param_groups)
-        lr_scheduler = transformers.get_cosine_schedule_with_warmup(
-            optimizer, num_warmup_steps=6000, num_training_steps=self.trainer.max_steps
+        lr_scheduler = get_constant_schedule_with_warmup(
+            optimizer, num_warmup_steps=1000
         )
         return dict(
             optimizer=optimizer,
