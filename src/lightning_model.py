@@ -320,21 +320,37 @@ class LightningModel(pl.LightningModule):
         samples = self.predict_step(batch, batch_idx)
         return samples
 
+    def load_state_dict(self, state_dict, strict=True):
+        """Override load_state_dict to handle _orig_mod prefix compatibility"""
+        # Clean the incoming state_dict by removing _orig_mod prefix
+        cleaned_state_dict = {}
+        for key, value in state_dict.items():
+            clean_key = key.replace('_orig_mod.', '')
+            cleaned_state_dict[clean_key] = value
+
+        # Use the cleaned state_dict for loading
+        return super().load_state_dict(cleaned_state_dict, strict=strict)
+
     def state_dict(self, *args, destination=None, prefix="", keep_vars=False):
+        """Override state_dict to remove _orig_mod prefix from torch.compile"""
         if destination is None:
             destination = {}
         self._save_to_state_dict(destination, prefix, keep_vars)
-        self.denoiser.state_dict(
-            destination=destination, prefix=prefix + "denoiser.", keep_vars=keep_vars
-        )
-        self.ema_denoiser.state_dict(
-            destination=destination,
-            prefix=prefix + "ema_denoiser.",
-            keep_vars=keep_vars,
-        )
-        self.diffusion_trainer.state_dict(
-            destination=destination,
-            prefix=prefix + "diffusion_trainer.",
-            keep_vars=keep_vars,
-        )
+
+        # Get state dicts from submodules
+        denoiser_state = self.denoiser.state_dict(keep_vars=keep_vars)
+        ema_denoiser_state = self.ema_denoiser.state_dict(keep_vars=keep_vars)
+        diffusion_trainer_state = self.diffusion_trainer.state_dict(keep_vars=keep_vars)
+
+        # Remove _orig_mod prefix added by torch.compile
+        def clean_state_dict(state_dict, module_prefix):
+            for key, value in state_dict.items():
+                # Remove _orig_mod. prefix if present
+                clean_key = key.replace('_orig_mod.', '')
+                destination[prefix + module_prefix + clean_key] = value
+
+        clean_state_dict(denoiser_state, "denoiser.")
+        clean_state_dict(ema_denoiser_state, "ema_denoiser.")
+        clean_state_dict(diffusion_trainer_state, "diffusion_trainer.")
+
         return destination
