@@ -38,6 +38,7 @@ trainer:
          save_compressed: true
   plugins:
     - src.plugins.bd_env.BDEnvironment
+
 model:
   class_path: src.lightning_model_ae.LightningModelVAE
   init_args:
@@ -51,6 +52,8 @@ model:
         select_layer: -1  # Use last layer of vision model
         latent_channel: 32  # Latent channel dimension
         load_pretrained_encoder: true  # Load pretrained InternVL weights
+
+    # VAE-GAN Trainer with loss module
     vae_trainer:
       class_path: src.diffusion.vae_gan.training_ae.VAEGANTrainer
       init_args:
@@ -72,24 +75,33 @@ model:
             teacher_model_path: "/apdcephfs/share_300000800/datamultimodal/models/InternVL3-2B"
             select_layer: -1
             downsample_ratio: 0.5
+
+    # EMA tracker for stable evaluation
     ema_tracker:
       class_path: src.callbacks.simple_ema.SimpleEMA
       init_args:
         decay: 0.9999
+
+    # Optimizer for encoder (generator)
     optimizer:
       class_path: torch.optim.AdamW
       init_args:
         lr: 1e-4
         weight_decay: 0.0
         betas: [0.9, 0.95]
+
+    # Optimizer for discriminator
     discriminator_optimizer:
       class_path: torch.optim.AdamW
       init_args:
         lr: 1e-4
         weight_decay: 0.0
         betas: [0.9, 0.95]
+
+    # Evaluation settings
     eval_original_model: false  # Use EMA model for evaluation
     pretrain_model_path: null  # Path to pretrained checkpoint (optional)
+
 data:
   train_dataset:
     class_path: src.data.dataset.imagenet.PixHFDataset
@@ -97,6 +109,7 @@ data:
       root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k
       resolution: 224  # Input resolution
       split: train
+  
   eval_dataset:
     class_path: src.data.dataset.imagenet.PixHFDataset
     init_args:
@@ -104,6 +117,7 @@ data:
       resolution: 224
       split: validation
       max_num_samples: 1000  # Limit validation samples for faster evaluation
+  
   # Data loading settings
   train_batch_size: 16  # Batch size per GPU
   train_num_workers: 8
