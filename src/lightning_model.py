@@ -68,7 +68,7 @@ class LightningModel(pl.LightningModule):
     def configure_model(self) -> None:
         self.trainer.strategy.barrier()
         # 然后初始化vision model（如果预训练权重中不包含vision model部分）
-        self.init_vision_model()
+        # self.init_vision_model()
 
         # Initialize teacher model if distillation is enabled
         if self.distill:
