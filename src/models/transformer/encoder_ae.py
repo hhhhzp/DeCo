@@ -181,7 +181,7 @@ class VAEModel(nn.Module):
         :return: reconstructed image [B, C, H, W] in range [-1, 1]
         """
         # Decode using AutoencoderDC
-        reconstructed_pixels = self.decoder.decode(latent).sample
+        reconstructed_pixels = self.decoder(latent)
 
         # Scale spatial dimensions to 14/16 of original size
         scale_factor = 14.0 / 16.0
