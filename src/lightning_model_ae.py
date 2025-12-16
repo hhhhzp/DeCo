@@ -48,7 +48,7 @@ class LightningModelVAE(pl.LightningModule):
         self.ema_vae_model = copy.deepcopy(self.vae_model)
 
         # Create vae_trainer with loss_module
-        self.vae_trainer = VAEGANTrainer(loss_module=loss_module)
+        self.vae_trainer = VAEGANTrainer(loss_module=loss_module, null_condition_p=0)
 
         self.ema_tracker = ema_tracker
         self.optimizer = optimizer
