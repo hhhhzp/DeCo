@@ -206,7 +206,8 @@ class LightningModelVAE(pl.LightningModule):
         metadata['global_step'] = self.global_step
 
         # ========== Train Generator (Encoder) ==========
-        opt_encoder.zero_grad()
+        # Toggle to encoder optimizer to tell DDP which parameters to track
+        self.toggle_optimizer(opt_encoder)
 
         # Forward pass through VAE model to get reconstructions and features
         # IMPORTANT: Get both in one forward pass to avoid DDP marking
@@ -235,6 +236,10 @@ class LightningModelVAE(pl.LightningModule):
         torch.nn.utils.clip_grad_norm_(self.vae_model.parameters(), max_norm=1.0)
         torch.nn.utils.clip_grad_norm_(self.vae_trainer.parameters(), max_norm=1.0)
         opt_encoder.step()
+        opt_encoder.zero_grad()
+
+        # Untoggle encoder optimizer
+        self.untoggle_optimizer(opt_encoder)
 
         # Update learning rate
         sch_encoder = self.lr_schedulers()[0]
@@ -249,7 +254,8 @@ class LightningModelVAE(pl.LightningModule):
         if self.vae_trainer.loss_module.should_discriminator_be_trained(
             self.global_step
         ):
-            opt_discriminator.zero_grad()
+            # Toggle to discriminator optimizer
+            self.toggle_optimizer(opt_discriminator)
 
             # Use cached reconstructions to avoid re-running vae_model
             # This prevents DDP from marking parameters as ready twice
@@ -268,6 +274,10 @@ class LightningModelVAE(pl.LightningModule):
                 self.vae_trainer.loss_module.discriminator.parameters(), max_norm=1.0
             )
             opt_discriminator.step()
+            opt_discriminator.zero_grad()
+
+            # Untoggle discriminator optimizer
+            self.untoggle_optimizer(opt_discriminator)
 
             # Update learning rate
             sch_discriminator = self.lr_schedulers()[1]
