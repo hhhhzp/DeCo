@@ -79,7 +79,9 @@ class LightningModelVAE(pl.LightningModule):
 
         # Disable grad for EMA model
         no_grad(self.ema_vae_model)
-        # no_grad(self.vae_model.decoder)
+
+        # Disable grad for frozen decoder (not trained, only used for reconstruction)
+        no_grad(self.vae_model.decoder)
 
         # Disable grad for frozen components in loss_module
         # These are not trainable and should not be tracked by DDP
@@ -206,6 +208,13 @@ class LightningModelVAE(pl.LightningModule):
         metadata = metadata or {}
         metadata['global_step'] = self.global_step
 
+        # Check if discriminator should be trained (for weight update decision)
+        train_discriminator = (
+            self.vae_trainer.loss_module.should_discriminator_be_trained(
+                self.global_step
+            )
+        )
+
         # ========== Train Generator (Encoder) ==========
         # Toggle to encoder optimizer to tell DDP which parameters to track
         self.toggle_optimizer(opt_encoder)
@@ -250,41 +259,43 @@ class LightningModelVAE(pl.LightningModule):
         output_dict.update(loss_dict)
 
         # ========== Train Discriminator ==========
-        # Only train discriminator after warmup steps
-        if self.vae_trainer.loss_module.should_discriminator_be_trained(
-            self.global_step
-        ):
-            # Toggle to discriminator optimizer
-            self.toggle_optimizer(opt_discriminator)
+        # Always compute discriminator loss to ensure all parameters are used in DDP
+        # This avoids "parameters not used in producing the loss" error
+        # Toggle to discriminator optimizer
+        self.toggle_optimizer(opt_discriminator)
 
-            # Use cached reconstructions to avoid re-running vae_model
-            # This prevents DDP from marking parameters as ready twice
-            discriminator_loss, disc_loss_dict = self.vae_trainer.loss_module(
-                inputs=img,
-                reconstructions=reconstructed_pixels.detach(),  # Detach to avoid gradient flow
-                extra_result_dict={},
-                global_step=self.global_step,
-                mode="discriminator",
-            )
+        # Use cached reconstructions to avoid re-running vae_model
+        # This prevents DDP from marking parameters as ready twice
+        discriminator_loss, disc_loss_dict = self.vae_trainer.loss_module(
+            inputs=img,
+            reconstructions=reconstructed_pixels.detach(),  # Detach to avoid gradient flow
+            extra_result_dict={},
+            global_step=self.global_step,
+            mode="discriminator",
+        )
 
-            # Backward and optimize
-            self.manual_backward(discriminator_loss)
+        # Backward and optimize (only update weights after warmup)
+        self.manual_backward(discriminator_loss)
+
+        if train_discriminator:
+            # Only update discriminator weights after warmup steps
             # Manual gradient clipping for discriminator
             torch.nn.utils.clip_grad_norm_(
                 self.vae_trainer.loss_module.discriminator.parameters(), max_norm=1.0
             )
             opt_discriminator.step()
-            opt_discriminator.zero_grad()
 
-            # Untoggle discriminator optimizer
-            self.untoggle_optimizer(opt_discriminator)
+        opt_discriminator.zero_grad()
 
-            # Update learning rate
-            sch_discriminator = self.lr_schedulers()[1]
-            sch_discriminator.step()
+        # Untoggle discriminator optimizer
+        self.untoggle_optimizer(opt_discriminator)
 
-            # Merge discriminator losses into main loss dict
-            output_dict.update(disc_loss_dict)
+        # Update learning rate
+        sch_discriminator = self.lr_schedulers()[1]
+        sch_discriminator.step()
+
+        # Merge discriminator losses into main loss dict
+        output_dict.update(disc_loss_dict)
 
         # Log learning rates
         output_dict["lr_encoder"] = opt_encoder.param_groups[0]['lr']
