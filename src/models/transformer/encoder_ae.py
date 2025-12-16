@@ -74,8 +74,8 @@ class VAEModel(nn.Module):
         # self.scaling_factor = self.decoder.config.scaling_factor
 
         # Freeze decoder
-        for param in self.decoder.parameters():
-            param.requires_grad = False
+        # for param in self.decoder.parameters():
+        #     param.requires_grad = False
 
     def init_vision_model(self, pretrained_model_path: str):
         """
