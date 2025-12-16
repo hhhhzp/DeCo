@@ -5,7 +5,7 @@ tags:
 torch_hub_dir: ~/.cache/torch/hub
 huggingface_cache_dir: null
 trainer:
-  default_root_dir: ./uni_edit_stage3_cosine
+  default_root_dir: ./uni_edit_stage2_cosine
   accelerator: auto
   strategy: auto
   devices: auto
@@ -16,7 +16,7 @@ trainer:
   logger:
       class_path: lightning.pytorch.loggers.WandbLogger
       init_args:
-        save_dir: ./uni_edit_stage3_cosine
+        save_dir: ./uni_edit_stage2_cosine
         name: *exp
   num_sanity_val_steps: 0
   max_steps: 200000
@@ -83,7 +83,7 @@ model:
       w_scheduler: src.diffusion.flow_matching.scheduling.LinearScheduler
       guidance_fn: src.diffusion.base.guidance.simple_guidance_fn
       step_fn: src.diffusion.flow_matching.sampling.ode_step_fn
-      timeshift: 1.0
+      timeshift: 3.0
   ema_tracker:
     class_path: src.callbacks.simple_ema.SimpleEMA
     init_args:
@@ -96,26 +96,26 @@ model:
       betas: [0.9, 0.95]
   eval_original_model: true
   distill: true
+  pretrain_model_path: uni_edit_stage3_cosine/exp_DeCo_256_large/epoch=9-step=25000.ckpt
   diffusion_batch_mul: 4  # Replicate latent 4x to improve training efficiency
 data:
   train_dataset:
     class_path: src.data.dataset.imagenet.PixHFDataset
     init_args:
       root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k  # /path/to/ImageNet/train/
-      resolution: 448
+      resolution: 224
       split: train
   eval_dataset:
     class_path: src.data.dataset.imagenet.PixHFDataset
     init_args:
       root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k  # /path/to/ImageNet/train/
-      resolution: 448
+      resolution: 224
       split: validation
-      max_num_samples: 1000
   pred_dataset:
     class_path: src.data.dataset.imagenet.PixHFDataset
     init_args:
       root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k  # /path/to/ImageNet/train/
-      resolution: 448
+      resolution: 224
       split: validation
       max_num_samples: 1000
   # Optimized data loading settings

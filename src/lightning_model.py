@@ -88,8 +88,6 @@ class LightningModel(pl.LightningModule):
         # no_grad(self.diffusion_sampler)
         no_grad(self.ema_denoiser)
 
-        # torch.compile with optimized settings
-        # compile_mode = "max-autotune"  # Use max-autotune for best performance
         if self.distill:
             self.teacher_denoiser = torch.compile(self.teacher_denoiser)
         self.denoiser = torch.compile(self.denoiser)
