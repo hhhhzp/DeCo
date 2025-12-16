@@ -65,7 +65,7 @@ class LightningModelVAE(pl.LightningModule):
                 print(f"Loaded pretrained model from {self.pretrain_model_path}: {msg}")
 
         # Disable grad for frozen decoder (not trained, only used for reconstruction)
-        no_grad(self.vae_model.decoder)
+        # no_grad(self.vae_model.decoder)
 
         # Disable grad for frozen components in loss_module
         # These are not trainable and should not be tracked by DDP
