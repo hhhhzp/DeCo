@@ -215,42 +215,6 @@ class LightningModelVAE(pl.LightningModule):
         # Backward and optimize
         self.manual_backward(total_loss)
 
-        # Debug: Find unused parameters (only on first step and rank 0)
-        if self.global_step == 0 and self.global_rank == 0:
-            print("\n" + "=" * 80)
-            print(
-                "CHECKING FOR UNUSED PARAMETERS (no gradient after generator backward)"
-            )
-            print("=" * 80)
-
-            # Check VAE model
-            print("\n[VAE Model - Parameters without gradient]")
-            vae_unused = []
-            for name, param in self.vae_model.named_parameters():
-                if param.requires_grad and param.grad is None:
-                    vae_unused.append(name)
-                    print(f"  ✗ UNUSED: {name}")
-            if not vae_unused:
-                print("  (All trainable parameters have gradients)")
-
-            # Check loss module (excluding discriminator for generator phase)
-            print(
-                "\n[Loss Module - Parameters without gradient (excluding discriminator)]"
-            )
-            loss_unused = []
-            for name, param in self.loss_module.named_parameters():
-                if (
-                    param.requires_grad
-                    and 'discriminator' not in name
-                    and param.grad is None
-                ):
-                    loss_unused.append(name)
-                    print(f"  ✗ UNUSED: {name}")
-            if not loss_unused:
-                print("  (All trainable parameters have gradients)")
-
-            print("=" * 80 + "\n")
-
         # Manual gradient clipping for encoder
         torch.nn.utils.clip_grad_norm_(self.vae_model.parameters(), max_norm=1.0)
         opt_encoder.step()
