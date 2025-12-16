@@ -119,18 +119,22 @@ class LightningModelVAE(pl.LightningModule):
             checkpoint = torch.load(self.pretrain_model_path, map_location='cpu')
             state_dict = checkpoint['state_dict']
 
-            # Remove DDP 'module.' prefix if present
+            # Clean up DDP and torch.compile prefixes while preserving module structure
+            # Expected format: vae_model.module._orig_mod.xxx or loss_module.module._orig_mod.xxx
+            # Target format: vae_model.xxx or loss_module.xxx
             new_state_dict = {}
             for key, value in state_dict.items():
-                # Remove 'module.' prefix from DDP
-                new_key = key.replace('module.', '') if 'module.' in key else key
-                # Remove '_orig_mod.' prefix from torch.compile
-                new_key = new_key.replace('_orig_mod.', '')
+                new_key = key
+                # Remove 'module._orig_mod.' pattern (DDP + torch.compile)
+                new_key = new_key.replace('.module._orig_mod.', '.')
+                # Also handle cases with only one of the prefixes
+                new_key = new_key.replace('.module.', '.')
+                new_key = new_key.replace('._orig_mod.', '.')
                 new_state_dict[new_key] = value
 
             msg = self.load_state_dict(new_state_dict, strict=False)
             if self.global_rank == 0:
-                print(f"Loaded pretrained model from {self.pretrain_model_path}")
+                print(f"\nLoaded pretrained model from {self.pretrain_model_path}")
                 print(f"Loading status: {msg}")
 
         # Compile models for efficiency AFTER loading pretrained weights
