@@ -183,7 +183,6 @@ class LightningModelVAE(pl.LightningModule):
         train_discriminator = self.loss_module.should_discriminator_be_trained(
             self.global_step
         )
-        self.loss_module.discriminator.requires_grad_(False)
 
         # Forward pass through VAE model to get reconstructions and features
         reconstructed_pixels, student_features = self.vae_model(
@@ -198,6 +197,8 @@ class LightningModelVAE(pl.LightningModule):
         ######################
         # Optimize Generator #
         ######################
+        self.toggle_optimizer(opt_generator)
+
         # Compute generator loss (reconstruction + perceptual + GAN)
         total_loss, loss_dict = self.loss_module(
             inputs=img,
@@ -208,18 +209,14 @@ class LightningModelVAE(pl.LightningModule):
         )
 
         # Backward and optimize generator (encoder)
-        opt_generator.zero_grad()
         self.manual_backward(total_loss)
         self.clip_gradients(
             opt_generator, gradient_clip_val=1.0, gradient_clip_algorithm="norm"
         )
         opt_generator.step()
+        opt_generator.zero_grad()
+        self.untoggle_optimizer(opt_generator)
 
-        # Update learning rates
-        sch_encoder, sch_discriminator = self.lr_schedulers()
-        sch_encoder.step()
-        if train_discriminator:
-            sch_discriminator.step()
         # Prepare output dict
         output_dict = {"loss": total_loss}
         output_dict.update(loss_dict)
@@ -228,8 +225,9 @@ class LightningModelVAE(pl.LightningModule):
         # Optimize Discriminator #
         ##########################
         if train_discriminator:
+            self.toggle_optimizer(opt_discriminator)
+
             # Compute discriminator loss with detached reconstructions
-            self.loss_module.discriminator.requires_grad_(True)
             discriminator_loss, disc_loss_dict = self.loss_module(
                 inputs=img,
                 reconstructions=reconstructed_pixels.detach(),  # Detach to avoid gradient flow to generator
@@ -239,14 +237,21 @@ class LightningModelVAE(pl.LightningModule):
             )
 
             # Backward and optimize discriminator
-            opt_discriminator.zero_grad()
             self.manual_backward(discriminator_loss)
             self.clip_gradients(
                 opt_discriminator, gradient_clip_val=1.0, gradient_clip_algorithm="norm"
             )
             opt_discriminator.step()
-            self.loss_module.discriminator.requires_grad_(False)
+            opt_discriminator.zero_grad()
+            self.untoggle_optimizer(opt_discriminator)
+
             output_dict.update(disc_loss_dict)
+
+        # Update learning rates
+        sch_encoder, sch_discriminator = self.lr_schedulers()
+        sch_encoder.step()
+        if train_discriminator:
+            sch_discriminator.step()
 
         # Log learning rates
         output_dict["lr_encoder"] = opt_generator.param_groups[0]['lr']
