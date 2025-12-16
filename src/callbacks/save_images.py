@@ -11,7 +11,6 @@ from lightning.pytorch.utilities.types import STEP_OUTPUT
 from lightning_utilities.core.rank_zero import rank_zero_info
 
 
-
 class SaveImagesHook(Callback):
     def __init__(self, save_dir="val", save_compressed=False):
         self.save_dir = save_dir
@@ -29,7 +28,13 @@ class SaveImagesHook(Callback):
         rank_zero_info(f"Save images to {self.target_dir}")
         self._saved_num = 0
 
-    def save_image(self, trainer, pl_module, images, metadatas,):
+    def save_image(
+        self,
+        trainer,
+        pl_module,
+        images,
+        metadatas,
+    ):
         images = images.permute(0, 2, 3, 1).cpu().numpy()
         for sample, metadata in zip(images, metadatas):
             save_fn = metadata.pop("save_fn", None)
@@ -62,8 +67,12 @@ class SaveImagesHook(Callback):
         self.executor_pool = None
         self.samples = []
 
-    def on_validation_epoch_start(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
-        target_dir = os.path.join(trainer.default_root_dir, self.save_dir, f"iter_{trainer.global_step}")
+    def on_validation_epoch_start(
+        self, trainer: "pl.Trainer", pl_module: "pl.LightningModule"
+    ) -> None:
+        target_dir = os.path.join(
+            trainer.default_root_dir, self.save_dir, f"iter_{trainer.global_step}"
+        )
         self.save_start(target_dir)
 
     def on_validation_batch_end(
@@ -77,10 +86,14 @@ class SaveImagesHook(Callback):
     ) -> None:
         return self.process_batch(trainer, pl_module, outputs, batch)
 
-    def on_validation_epoch_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
+    def on_validation_epoch_end(
+        self, trainer: "pl.Trainer", pl_module: "pl.LightningModule"
+    ) -> None:
         self.save_end()
 
-    def on_predict_epoch_start(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
+    def on_predict_epoch_start(
+        self, trainer: "pl.Trainer", pl_module: "pl.LightningModule"
+    ) -> None:
         target_dir = os.path.join(trainer.default_root_dir, self.save_dir, "predict")
         self.save_start(target_dir)
 
@@ -95,7 +108,9 @@ class SaveImagesHook(Callback):
     ) -> None:
         return self.process_batch(trainer, pl_module, samples, batch)
 
-    def on_predict_epoch_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
+    def on_predict_epoch_end(
+        self, trainer: "pl.Trainer", pl_module: "pl.LightningModule"
+    ) -> None:
         self.save_end()
 
     def state_dict(self) -> Dict[str, Any]:

@@ -140,7 +140,7 @@ class LightningModelVAE(pl.LightningModule):
         params_encoder = filter_nograd_tensors(vae_model.parameters())
         optimizer_encoder = self.optimizer([{"params": params_encoder}])
         lr_scheduler_encoder = get_constant_schedule_with_warmup(
-            optimizer_encoder, num_warmup_steps=1000
+            optimizer_encoder, num_warmup_steps=6000
         )
 
         # Optimizer for discriminator
@@ -151,7 +151,7 @@ class LightningModelVAE(pl.LightningModule):
             [{"params": params_discriminator}]
         )
         lr_scheduler_discriminator = get_constant_schedule_with_warmup(
-            optimizer_discriminator, num_warmup_steps=1000
+            optimizer_discriminator, num_warmup_steps=6000
         )
 
         return [
@@ -274,7 +274,7 @@ class LightningModelVAE(pl.LightningModule):
 
         with torch.no_grad():
             # Encode to latent and decode to reconstruct
-            samples = self.vae_model(img)
+            samples = self.vae_model(img).float()
 
             # Log first 6 images comparison
             if self._logged_images_count < 6:
@@ -309,7 +309,7 @@ class LightningModelVAE(pl.LightningModule):
 
                 self._logged_images_count += num_to_log
 
-        return samples
+        return samples.float()
 
     def validation_step(self, batch, batch_idx):
         samples = self.predict_step(batch, batch_idx)
