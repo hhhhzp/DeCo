@@ -9,8 +9,6 @@ trainer:
   accelerator: auto
   strategy:
     class_path: src.strategies.multi_model_ddp.MultiModelDDPStrategy
-    init_args:
-      find_unused_parameters: false
   devices: auto
   num_nodes: 1
   precision: bf16

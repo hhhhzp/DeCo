@@ -52,35 +52,17 @@ class MultiModelDDPStrategy(DDPStrategy):
         )
 
         with ctx:
-            # Check if this is a VAE training module with separate generator/discriminator
-            if hasattr(self.model, 'vae_model') and hasattr(self.model, 'loss_module'):
-                # Wrap VAE model (generator/encoder) in DDP
-                if not isinstance(self.model.vae_model, DDP):
-                    rank_zero_info("[MultiModelDDPStrategy] Wrapping vae_model in DDP")
-                    self.model.vae_model = DDP(
-                        self.model.vae_model,
-                        device_ids=device_ids,
-                        find_unused_parameters=False,  # VAE encoder should use all parameters
-                        **self._ddp_kwargs,
-                    )
-
-                # Wrap loss_module (contains discriminator and perceptual_loss) in DDP
-                if not isinstance(self.model.loss_module, DDP):
-                    rank_zero_info(
-                        "[MultiModelDDPStrategy] Wrapping loss_module in DDP"
-                    )
-                    self.model.loss_module = DDP(
-                        self.model.loss_module,
-                        device_ids=device_ids,
-                        find_unused_parameters=False,  # All components should be used
-                        **self._ddp_kwargs,
-                    )
-            else:
-                # Fallback: wrap the entire model if it doesn't match expected structure
-                rank_zero_info(
-                    "[MultiModelDDPStrategy] Model structure not recognized, wrapping entire model"
-                )
-                self.model = self._setup_model(self.model)
-
-        # Register DDP hooks
-        self._register_ddp_hooks()
+            rank_zero_info("[MultiModelDDPStrategy] Wrapping vae_model in DDP")
+            self.model.vae_model = DDP(
+                self.model.vae_model,
+                device_ids=device_ids,
+                find_unused_parameters=False,  # VAE encoder should use all parameters
+                **self._ddp_kwargs,
+            )
+            rank_zero_info("[MultiModelDDPStrategy] Wrapping loss_module in DDP")
+            self.model.loss_module = DDP(
+                self.model.loss_module,
+                device_ids=device_ids,
+                find_unused_parameters=False,  # All components should be used
+                **self._ddp_kwargs,
+            )
