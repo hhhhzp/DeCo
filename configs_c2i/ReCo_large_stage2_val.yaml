@@ -83,7 +83,7 @@ model:
       w_scheduler: src.diffusion.flow_matching.scheduling.LinearScheduler
       guidance_fn: src.diffusion.base.guidance.simple_guidance_fn
       step_fn: src.diffusion.flow_matching.sampling.ode_step_fn
-      timeshift: 3.0
+      timeshift: 1.0
   ema_tracker:
     class_path: src.callbacks.simple_ema.SimpleEMA
     init_args:
@@ -111,6 +111,7 @@ data:
       root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k  # /path/to/ImageNet/train/
       resolution: 448
       split: validation
+      max_num_samples: 1000
   pred_dataset:
     class_path: src.data.dataset.imagenet.PixHFDataset
     init_args:
