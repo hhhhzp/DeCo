@@ -199,6 +199,38 @@ class LightningModelVAE(pl.LightningModule):
         ######################
         self.toggle_optimizer(opt_encoder)
 
+        # DEBUG: Check discriminator gradient status after toggle_optimizer
+        if batch_idx == 0 and self.global_rank == 0:
+            print("\n" + "=" * 80)
+            print("DEBUG: After toggle_optimizer(opt_encoder)")
+            print("=" * 80)
+            disc_params_with_grad = 0
+            disc_params_without_grad = 0
+            for name, param in self.loss_module.discriminator.named_parameters():
+                if param.requires_grad:
+                    disc_params_with_grad += 1
+                else:
+                    disc_params_without_grad += 1
+            print(
+                f"Discriminator params with requires_grad=True: {disc_params_with_grad}"
+            )
+            print(
+                f"Discriminator params with requires_grad=False: {disc_params_without_grad}"
+            )
+
+            encoder_params_with_grad = 0
+            encoder_params_without_grad = 0
+            for name, param in self.vae_model.named_parameters():
+                if param.requires_grad:
+                    encoder_params_with_grad += 1
+                else:
+                    encoder_params_without_grad += 1
+            print(f"Encoder params with requires_grad=True: {encoder_params_with_grad}")
+            print(
+                f"Encoder params with requires_grad=False: {encoder_params_without_grad}"
+            )
+            print("=" * 80 + "\n")
+
         # Compute generator loss (reconstruction + perceptual + GAN)
         total_loss, loss_dict = self.loss_module(
             inputs=img,
@@ -220,6 +252,26 @@ class LightningModelVAE(pl.LightningModule):
         if train_discriminator:
             self.toggle_optimizer(opt_discriminator)
 
+            # DEBUG: Check discriminator gradient status after toggle_optimizer
+            if batch_idx == 0 and self.global_rank == 0:
+                print("\n" + "=" * 80)
+                print("DEBUG: After toggle_optimizer(opt_discriminator)")
+                print("=" * 80)
+                disc_params_with_grad = 0
+                disc_params_without_grad = 0
+                for name, param in self.loss_module.discriminator.named_parameters():
+                    if param.requires_grad:
+                        disc_params_with_grad += 1
+                    else:
+                        disc_params_without_grad += 1
+                print(
+                    f"Discriminator params with requires_grad=True: {disc_params_with_grad}"
+                )
+                print(
+                    f"Discriminator params with requires_grad=False: {disc_params_without_grad}"
+                )
+                print("=" * 80 + "\n")
+
             # Compute discriminator loss with detached reconstructions
             discriminator_loss, disc_loss_dict = self.loss_module(
                 inputs=img,
@@ -231,6 +283,31 @@ class LightningModelVAE(pl.LightningModule):
 
             # Backward and optimize discriminator
             self.manual_backward(discriminator_loss)
+
+            # DEBUG: Check if discriminator actually got gradients after backward
+            if batch_idx == 0 and self.global_rank == 0:
+                print("\n" + "=" * 80)
+                print("DEBUG: After manual_backward(discriminator_loss)")
+                print("=" * 80)
+                disc_params_with_actual_grad = 0
+                disc_params_without_actual_grad = 0
+                for name, param in self.loss_module.discriminator.named_parameters():
+                    if param.grad is not None:
+                        disc_params_with_actual_grad += 1
+                    else:
+                        disc_params_without_actual_grad += 1
+                        if param.requires_grad:
+                            print(
+                                f"  WARNING: {name} has requires_grad=True but grad is None!"
+                            )
+                print(
+                    f"Discriminator params with actual gradients: {disc_params_with_actual_grad}"
+                )
+                print(
+                    f"Discriminator params without gradients: {disc_params_without_actual_grad}"
+                )
+                print("=" * 80 + "\n")
+
             opt_discriminator.step()
             opt_discriminator.zero_grad()
             self.untoggle_optimizer(opt_discriminator)
