@@ -90,6 +90,57 @@ class LightningModelVAE(pl.LightningModule):
         if self.vae_trainer.loss_module.teacher_mlp1 is not None:
             no_grad(self.vae_trainer.loss_module.teacher_mlp1)
 
+        # Print trainable parameters
+        if self.global_rank == 0:
+            print("\n" + "=" * 80)
+            print("TRAINABLE PARAMETERS SUMMARY")
+            print("=" * 80)
+
+            # Collect all trainable parameters
+            trainable_params = set()
+            total_trainable = 0
+
+            # Check VAE model parameters
+            print("\n[VAE Model - Encoder]")
+            for name, param in self.vae_model.named_parameters():
+                if param.requires_grad:
+                    param_id = id(param)
+                    if param_id not in trainable_params:
+                        trainable_params.add(param_id)
+                        total_trainable += param.numel()
+                        print(f"  ✓ {name}: {param.shape} ({param.numel():,} params)")
+
+            # Check discriminator parameters
+            print("\n[Discriminator]")
+            for (
+                name,
+                param,
+            ) in self.vae_trainer.loss_module.discriminator.named_parameters():
+                if param.requires_grad:
+                    param_id = id(param)
+                    if param_id not in trainable_params:
+                        trainable_params.add(param_id)
+                        total_trainable += param.numel()
+                        print(f"  ✓ {name}: {param.shape} ({param.numel():,} params)")
+
+            # Check other loss module parameters
+            print("\n[Loss Module - Other Trainable Components]")
+            has_other_trainable = False
+            for name, param in self.vae_trainer.loss_module.named_parameters():
+                if param.requires_grad and 'discriminator' not in name:
+                    param_id = id(param)
+                    if param_id not in trainable_params:
+                        trainable_params.add(param_id)
+                        total_trainable += param.numel()
+                        print(f"  ✓ {name}: {param.shape} ({param.numel():,} params)")
+                        has_other_trainable = True
+            if not has_other_trainable:
+                print("  (None)")
+
+            print("\n" + "=" * 80)
+            print(f"TOTAL TRAINABLE PARAMETERS: {total_trainable:,}")
+            print("=" * 80 + "\n")
+
         # Compile models for efficiency
         self.vae_model = torch.compile(self.vae_model)
         self.ema_vae_model = torch.compile(self.ema_vae_model)
