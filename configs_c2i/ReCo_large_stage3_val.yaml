@@ -108,15 +108,8 @@ data:
     class_path: src.data.dataset.imagenet.PixHFDataset
     init_args:
       root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k  # /path/to/ImageNet/train/
-      resolution: 448
+      resolution: 256
       split: validation
-  pred_dataset:
-    class_path: src.data.dataset.imagenet.PixHFDataset
-    init_args:
-      root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k  # /path/to/ImageNet/train/
-      resolution: 448
-      split: validation
-      max_num_samples: 1000
   # Optimized data loading settings
   train_batch_size: 16  # Increased from 16 (adjust based on GPU memory)
   train_num_workers: 8  # Increased from 8 for better CPU utilization
