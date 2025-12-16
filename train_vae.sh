@@ -23,4 +23,4 @@ export NODE_RANK=${NODE_RANK:-0}
 python main.py fit -c configs/vae_training.yaml \
     --trainer.num_nodes=1 \
     --trainer.devices=8 \
-    --trainer.strategy ddp_find_unused_parameters_true
+    --trainer.strategy ddp
