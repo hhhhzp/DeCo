@@ -271,22 +271,22 @@ class LightningModelVAE(pl.LightningModule):
         # Always compute discriminator loss to ensure all parameters are used in DDP
         # This avoids "parameters not used in producing the loss" error
         # Toggle to discriminator optimizer
-        self.toggle_optimizer(opt_discriminator)
-
-        # Use cached reconstructions to avoid re-running vae_model
-        # This prevents DDP from marking parameters as ready twice
-        discriminator_loss, disc_loss_dict = self.loss_module(
-            inputs=img,
-            reconstructions=reconstructed_pixels.detach(),  # Detach to avoid gradient flow
-            extra_result_dict={},
-            global_step=self.global_step,
-            mode="discriminator",
-        )
-
-        # Backward and optimize (only update weights after warmup)
-        self.manual_backward(discriminator_loss)
-
         if train_discriminator:
+            self.toggle_optimizer(opt_discriminator)
+
+            # Use cached reconstructions to avoid re-running vae_model
+            # This prevents DDP from marking parameters as ready twice
+            discriminator_loss, disc_loss_dict = self.loss_module(
+                inputs=img,
+                reconstructions=reconstructed_pixels.detach(),  # Detach to avoid gradient flow
+                extra_result_dict={},
+                global_step=self.global_step,
+                mode="discriminator",
+            )
+
+            # Backward and optimize (only update weights after warmup)
+            self.manual_backward(discriminator_loss)
+
             # Only update discriminator weights after warmup steps
             # Manual gradient clipping for discriminator
             torch.nn.utils.clip_grad_norm_(
@@ -294,21 +294,21 @@ class LightningModelVAE(pl.LightningModule):
             )
             opt_discriminator.step()
 
-        opt_discriminator.zero_grad()
+            opt_discriminator.zero_grad()
 
-        # Untoggle discriminator optimizer
-        self.untoggle_optimizer(opt_discriminator)
+            # Untoggle discriminator optimizer
+            self.untoggle_optimizer(opt_discriminator)
 
-        # Update learning rate
-        sch_discriminator = self.lr_schedulers()[1]
-        sch_discriminator.step()
+            # Update learning rate
+            sch_discriminator = self.lr_schedulers()[1]
+            sch_discriminator.step()
 
-        # Merge discriminator losses into main loss dict
-        output_dict.update(disc_loss_dict)
+            # Merge discriminator losses into main loss dict
+            output_dict.update(disc_loss_dict)
 
-        # Log learning rates
-        output_dict["lr_encoder"] = opt_encoder.param_groups[0]['lr']
-        output_dict["lr_discriminator"] = opt_discriminator.param_groups[0]['lr']
+            # Log learning rates
+            output_dict["lr_encoder"] = opt_encoder.param_groups[0]['lr']
+            output_dict["lr_discriminator"] = opt_discriminator.param_groups[0]['lr']
 
         # Log all losses
         self.log_dict(output_dict, prog_bar=True, on_step=True, sync_dist=False)
