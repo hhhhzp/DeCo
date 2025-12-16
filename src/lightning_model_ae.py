@@ -210,19 +210,29 @@ class LightningModelVAE(pl.LightningModule):
         # ========== Train Generator (Encoder) ==========
         opt_encoder.zero_grad()
 
-        # Forward pass through VAE model
-        loss_dict = self.vae_trainer(
-            self.vae_model,
-            None,  # decoder is inside vae_model
-            None,  # solver not used
-            img,
-            condition=None,
-            uncondition=None,
-            metadata=metadata,
+        # Forward pass through VAE model to get reconstructions
+        # We need to cache the reconstructions for discriminator training
+        # to avoid calling vae_model twice in one iteration (which causes DDP issues)
+        student_features = self.vae_model.extract_feature(img)
+        predicted_latents = self.vae_model.encode_latent(img, features=student_features)
+        reconstructed_pixels = self.vae_model.decode_latent(predicted_latents)
+
+        # Prepare extra result dict with student features
+        extra_result_dict = {
+            "student_features": student_features,
+        }
+
+        # Compute generator loss (reconstruction + perceptual + GAN)
+        total_loss, loss_dict = self.vae_trainer.loss_module(
+            inputs=img,
+            reconstructions=reconstructed_pixels,
+            extra_result_dict=extra_result_dict,
+            global_step=self.global_step,
+            mode="generator",
         )
 
         # Backward and optimize
-        self.manual_backward(loss_dict["loss"])
+        self.manual_backward(total_loss)
         # Manual gradient clipping for encoder
         torch.nn.utils.clip_grad_norm_(self.vae_model.parameters(), max_norm=1.0)
         torch.nn.utils.clip_grad_norm_(self.vae_trainer.parameters(), max_norm=1.0)
@@ -232,6 +242,10 @@ class LightningModelVAE(pl.LightningModule):
         sch_encoder = self.lr_schedulers()[0]
         sch_encoder.step()
 
+        # Convert loss_dict to regular dict with "loss" key for compatibility
+        output_dict = {"loss": total_loss}
+        output_dict.update(loss_dict)
+
         # ========== Train Discriminator ==========
         # Only train discriminator after warmup steps
         if self.vae_trainer.loss_module.should_discriminator_be_trained(
@@ -239,16 +253,18 @@ class LightningModelVAE(pl.LightningModule):
         ):
             opt_discriminator.zero_grad()
 
-            # Discriminator forward pass
-            disc_loss_dict = self.vae_trainer.discriminator_step(
-                self.vae_model,
-                None,  # decoder is inside vae_model
-                img,
-                metadata=metadata,
+            # Use cached reconstructions to avoid re-running vae_model
+            # This prevents DDP from marking parameters as ready twice
+            discriminator_loss, disc_loss_dict = self.vae_trainer.loss_module(
+                inputs=img,
+                reconstructions=reconstructed_pixels.detach(),  # Detach to avoid gradient flow
+                extra_result_dict={},
+                global_step=self.global_step,
+                mode="discriminator",
             )
 
             # Backward and optimize
-            self.manual_backward(disc_loss_dict["discriminator_loss"])
+            self.manual_backward(discriminator_loss)
             # Manual gradient clipping for discriminator
             torch.nn.utils.clip_grad_norm_(
                 self.vae_trainer.loss_module.discriminator.parameters(), max_norm=1.0
@@ -260,16 +276,16 @@ class LightningModelVAE(pl.LightningModule):
             sch_discriminator.step()
 
             # Merge discriminator losses into main loss dict
-            loss_dict.update(disc_loss_dict)
+            output_dict.update(disc_loss_dict)
 
         # Log learning rates
-        loss_dict["lr_encoder"] = opt_encoder.param_groups[0]['lr']
-        loss_dict["lr_discriminator"] = opt_discriminator.param_groups[0]['lr']
+        output_dict["lr_encoder"] = opt_encoder.param_groups[0]['lr']
+        output_dict["lr_discriminator"] = opt_discriminator.param_groups[0]['lr']
 
         # Log all losses
-        self.log_dict(loss_dict, prog_bar=True, on_step=True, sync_dist=False)
+        self.log_dict(output_dict, prog_bar=True, on_step=True, sync_dist=False)
 
-        return loss_dict["loss"]
+        return output_dict["loss"]
 
     def predict_step(self, batch, batch_idx):
         img, _, metadata = batch
