@@ -183,6 +183,7 @@ class LightningModelVAE(pl.LightningModule):
         train_discriminator = self.loss_module.should_discriminator_be_trained(
             self.global_step
         )
+        self.loss_module.discriminator.requires_grad_(False)
 
         # Forward pass through VAE model to get reconstructions and features
         reconstructed_pixels, student_features = self.vae_model(
@@ -199,6 +200,7 @@ class LightningModelVAE(pl.LightningModule):
         ##########################
         if train_discriminator:
             # Compute discriminator loss with detached reconstructions
+            self.loss_module.discriminator.requires_grad_(True)
             discriminator_loss, disc_loss_dict = self.loss_module(
                 inputs=img,
                 reconstructions=reconstructed_pixels.detach(),  # Detach to avoid gradient flow to generator
@@ -214,6 +216,7 @@ class LightningModelVAE(pl.LightningModule):
                 opt_discriminator, gradient_clip_val=1.0, gradient_clip_algorithm="norm"
             )
             opt_discriminator.step()
+            self.loss_module.discriminator.requires_grad_(False)
 
         ######################
         # Optimize Generator #
