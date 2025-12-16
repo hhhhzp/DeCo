@@ -82,6 +82,14 @@ class LightningModelVAE(pl.LightningModule):
         no_grad(self.vae_model.decoder)
         no_grad(self.ema_vae_model)
 
+        # Disable grad for frozen components in loss_module
+        # These are not trainable and should not be tracked by DDP
+        no_grad(self.vae_trainer.loss_module.perceptual_loss)
+        if self.vae_trainer.loss_module.teacher_vision_model is not None:
+            no_grad(self.vae_trainer.loss_module.teacher_vision_model)
+        if self.vae_trainer.loss_module.teacher_mlp1 is not None:
+            no_grad(self.vae_trainer.loss_module.teacher_mlp1)
+
         # Compile models for efficiency
         self.vae_model = torch.compile(self.vae_model)
         self.ema_vae_model = torch.compile(self.ema_vae_model)
