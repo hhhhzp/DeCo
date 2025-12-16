@@ -14,6 +14,7 @@ from src.models.modules.perceptual_loss import PerceptualLoss
 from src.models.modules.discriminator import NLayerDiscriminator
 from src.models.transformer.configuration_internvl_chat import InternVLChatConfig
 from src.models.transformer.modeling_intern_vit import InternVisionModel
+from src.utils.no_grad import no_grad
 
 
 def hinge_d_loss(logits_real: torch.Tensor, logits_fake: torch.Tensor) -> torch.Tensor:
@@ -97,7 +98,7 @@ class VAEReconstructionLoss(nn.Module):
 
         self.discriminator = NLayerDiscriminator()
         self.perceptual_loss = PerceptualLoss(perceptual_loss).eval()
-
+        no_grad(self.perceptual_loss)
         self.reconstruction_loss = reconstruction_loss
         self.reconstruction_weight = reconstruction_weight
         self.perceptual_weight = perceptual_weight
@@ -157,7 +158,7 @@ class VAEReconstructionLoss(nn.Module):
         model = AutoModel.from_pretrained(
             pretrained_model_path,
             config=config,
-            torch_dtype=torch.bfloat16,
+            dtype=torch.bfloat16,
             trust_remote_code=True,
         )
 
@@ -176,6 +177,8 @@ class VAEReconstructionLoss(nn.Module):
         self.teacher_mlp1.eval()
 
         print("Teacher model loaded and frozen successfully!")
+        no_grad(self.teacher_vision_model)
+        no_grad(self.teacher_mlp1)
 
     def pixel_shuffle(self, x, scale_factor=0.5):
         """Pixel shuffle downsampling"""

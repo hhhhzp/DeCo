@@ -94,7 +94,7 @@ class VAEModel(nn.Module):
         model = AutoModel.from_pretrained(
             pretrained_model_path,
             config=config,
-            torch_dtype=torch.bfloat16,
+            dtype=torch.bfloat16,
             trust_remote_code=True,
         )
 
