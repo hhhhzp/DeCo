@@ -5,7 +5,7 @@ tags:
 torch_hub_dir: ~/.cache/torch/hub
 huggingface_cache_dir: null
 trainer:
-  default_root_dir: ./uni_edit_stage2_cosine
+  default_root_dir: ./uni_edit_stage3_cosine
   accelerator: auto
   strategy: auto
   devices: auto
@@ -16,7 +16,7 @@ trainer:
   logger:
       class_path: lightning.pytorch.loggers.WandbLogger
       init_args:
-        save_dir: ./uni_edit_stage2_cosine
+        save_dir: ./uni_edit_stage3_cosine
         name: *exp
   num_sanity_val_steps: 0
   max_steps: 200000
@@ -102,20 +102,20 @@ data:
     class_path: src.data.dataset.imagenet.PixHFDataset
     init_args:
       root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k  # /path/to/ImageNet/train/
-      resolution: 224
+      resolution: 448
       split: train
   eval_dataset:
     class_path: src.data.dataset.imagenet.PixHFDataset
     init_args:
       root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k  # /path/to/ImageNet/train/
-      resolution: 224
+      resolution: 448
       split: validation
       max_num_samples: 1000
   pred_dataset:
     class_path: src.data.dataset.imagenet.PixHFDataset
     init_args:
       root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k  # /path/to/ImageNet/train/
-      resolution: 224
+      resolution: 448
       split: validation
       max_num_samples: 1000
   # Optimized data loading settings
