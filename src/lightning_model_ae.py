@@ -261,7 +261,7 @@ class LightningModelVAE(pl.LightningModule):
             # This prevents DDP from marking parameters as ready twice
             discriminator_loss, disc_loss_dict = self.vae_trainer.loss_module(
                 inputs=img,
-                reconstructions=reconstructed_pixels.detach(),  # Detach to avoid gradient flow
+                reconstructions=reconstructed_pixels,  # Detach to avoid gradient flow
                 extra_result_dict={},
                 global_step=self.global_step,
                 mode="discriminator",
