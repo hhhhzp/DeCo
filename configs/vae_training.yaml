@@ -7,7 +7,10 @@ huggingface_cache_dir: null
 trainer:
   default_root_dir: ./vae_training_workdir
   accelerator: auto
-  strategy: auto
+  strategy:
+    class_path: src.strategies.multi_model_ddp.MultiModelDDPStrategy
+    init_args:
+      find_unused_parameters: false
   devices: auto
   num_nodes: 1
   precision: bf16
