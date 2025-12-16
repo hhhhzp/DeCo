@@ -213,7 +213,7 @@ class LightningModelVAE(pl.LightningModule):
         )
 
         # Backward and optimize
-        self.manual_backward(total_loss)
+        self.manual_backward(total_loss, retain_graph=True)
 
         # Manual gradient clipping for encoder
         torch.nn.utils.clip_grad_norm_(self.vae_model.parameters(), max_norm=1.0)
