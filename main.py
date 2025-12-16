@@ -7,7 +7,7 @@ from src.utils.patch_bugs import *
 from lightning import Trainer, LightningModule
 
 from src.lightning_data import DataModule
-from src.lightning_model_ae import LightningModel
+from src.lightning_model_ae import LightningModelVAE
 from lightning.pytorch.cli import (
     LightningCLI,
     LightningArgumentParser,
@@ -108,7 +108,7 @@ class ReWriteRootDirCli(LightningCLI):
 if __name__ == "__main__":
 
     cli = ReWriteRootDirCli(
-        LightningModel,
+        LightningModelVAE,
         DataModule,
         auto_configure_optimizers=False,
         save_config_callback=ReWriteRootSaveConfigCallback,
