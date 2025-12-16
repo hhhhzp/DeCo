@@ -63,7 +63,7 @@ model:
       logvar_init: 0.0
       distillation_weight: 1.0
       distillation_loss_type: "mse"
-      teacher_model_path: null
+      teacher_model_path: "/apdcephfs/share_300000800/datamultimodal/models/InternVL3-2B"
       select_layer: -1
       downsample_ratio: 0.5
   optimizer:
