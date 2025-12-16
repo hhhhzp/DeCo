@@ -588,7 +588,6 @@ class PixNerDiT(nn.Module):
 
         y = self.learnable_tokens.expand(B, -1, -1)
 
-        # 优化: 先投影/激活再广播，减少计算量 (Global Mean -> Proj -> Expand)
         cond = nn.functional.silu(self.condition_proj(latent.mean(dim=1, keepdim=True)))
         cond = cond.expand(-1, latent.shape[1], -1)
 
