@@ -397,7 +397,7 @@ class VAEReconstructionLoss(nn.Module):
 
         # Discriminator parameters are already trainable by default
         # No need to manually set requires_grad=True
-        real_images = inputs_01.detach().requires_grad_(True)
+        real_images = inputs_01  # .detach().requires_grad_(True)
         logits_real = self.discriminator(real_images)
         logits_fake = self.discriminator(reconstructions_01.detach())
 
