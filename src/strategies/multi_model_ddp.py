@@ -57,12 +57,10 @@ class MultiModelDDPStrategy(DDPStrategy):
                 self.model.vae_model,
                 device_ids=device_ids,
                 find_unused_parameters=False,  # VAE encoder should use all parameters
-                **self._ddp_kwargs,
             )
             rank_zero_info("[MultiModelDDPStrategy] Wrapping loss_module in DDP")
             self.model.loss_module = DDP(
                 self.model.loss_module,
                 device_ids=device_ids,
                 find_unused_parameters=False,  # All components should be used
-                **self._ddp_kwargs,
             )
