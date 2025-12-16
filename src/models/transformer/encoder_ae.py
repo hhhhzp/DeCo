@@ -198,12 +198,18 @@ class VAEModel(nn.Module):
 
         return reconstructed_pixels
 
-    def forward(self, x):
+    def forward(self, x, return_features=False):
         """
         Full forward pass: encode then decode.
         :param x: input image [B, C, H, W] in range [-1, 1]
+        :param return_features: if True, return (reconstructed, features)
         :return: reconstructed image [B, C, H, W] in range [-1, 1]
+                 or (reconstructed, features) if return_features=True
         """
-        latent = self.encode_latent(x)
+        features = self.extract_feature(x)
+        latent = self.encode_latent(x, features=features)
         reconstructed = self.decode_latent(latent)
+
+        if return_features:
+            return reconstructed, features
         return reconstructed

@@ -210,14 +210,14 @@ class LightningModelVAE(pl.LightningModule):
         # ========== Train Generator (Encoder) ==========
         opt_encoder.zero_grad()
 
-        # Forward pass through VAE model to get reconstructions
-        # We need to cache the reconstructions for discriminator training
-        # to avoid calling vae_model twice in one iteration (which causes DDP issues)
-        student_features = self.vae_model.extract_feature(img)
-        predicted_latents = self.vae_model.encode_latent(img, features=student_features)
-        reconstructed_pixels = self.vae_model.decode_latent(predicted_latents)
+        # Forward pass through VAE model to get reconstructions and features
+        # IMPORTANT: Get both in one forward pass to avoid DDP marking
+        # vision_model parameters as ready twice
+        reconstructed_pixels, student_features = self.vae_model(
+            img, return_features=True
+        )
 
-        # Prepare extra result dict with student features
+        # Pass student features to loss module for distillation
         extra_result_dict = {
             "student_features": student_features,
         }
