@@ -7,7 +7,7 @@ huggingface_cache_dir: null
 trainer:
   default_root_dir: ./vae_training_workdir
   accelerator: auto
-  strategy: "deepspeed_stage_1"
+  strategy: auto
   devices: auto
   num_nodes: 1
   precision: bf16
