@@ -65,7 +65,7 @@ class LightningModelVAE(pl.LightningModule):
                 print(f"Loaded pretrained model from {self.pretrain_model_path}: {msg}")
 
         # Disable grad for frozen decoder (not trained, only used for reconstruction)
-        # no_grad(self.vae_model.decoder)
+        no_grad(self.vae_model.decoder)
 
         # Disable grad for frozen components in loss_module
         # These are not trainable and should not be tracked by DDP
@@ -214,9 +214,9 @@ class LightningModelVAE(pl.LightningModule):
             opt_discriminator.zero_grad()
             self.manual_backward(discriminator_loss)
             # clip gradients using Lightning's built-in method
-            self.clip_gradients(
-                opt_discriminator, gradient_clip_val=1.0, gradient_clip_algorithm="norm"
-            )
+            # self.clip_gradients(
+            #     opt_discriminator, gradient_clip_val=1.0, gradient_clip_algorithm="norm"
+            # )
             opt_discriminator.step()
 
         ######################
@@ -235,9 +235,9 @@ class LightningModelVAE(pl.LightningModule):
         opt_encoder.zero_grad()
         self.manual_backward(total_loss)
         # clip gradients using Lightning's built-in method
-        self.clip_gradients(
-            opt_encoder, gradient_clip_val=1.0, gradient_clip_algorithm="norm"
-        )
+        # self.clip_gradients(
+        #     opt_encoder, gradient_clip_val=1.0, gradient_clip_algorithm="norm"
+        # )
         opt_encoder.step()
 
         # Update learning rates
