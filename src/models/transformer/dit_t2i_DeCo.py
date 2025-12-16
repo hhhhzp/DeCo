@@ -472,8 +472,8 @@ class PixNerDiT(nn.Module):
         )
 
         # Patch size for DiT processing
-        # self.patch_size = 2 * vision_config.patch_size
-        self.patch_size = vision_config.patch_size
+        self.patch_size = 2 * vision_config.patch_size
+
         # Learnable tokens for DiT (replacing text condition)
         num_learnable_tokens = 64  # Can be adjusted
         self.learnable_tokens = nn.Parameter(
@@ -574,45 +574,6 @@ class PixNerDiT(nn.Module):
         vit_embeds = self.mlp1(vit_embeds)
         return vit_embeds
 
-    def _interpolate_dit_embeddings(self, s, current_grid_size, target_grid_size):
-        """
-        即插即用的 DiT embedding 插值函数。
-        如果 current_grid_size == target_grid_size，直接返回原始 s，保持完全向后兼容。
-        否则，执行双线性插值调整分辨率。
-
-        Args:
-            s: [B, N, C] DiT embeddings after s_embedder
-            current_grid_size: 当前 grid 的尺寸 (假设正方形)
-            target_grid_size: 目标 grid 的尺寸
-
-        Returns:
-            插值后的 embeddings [B, N_new, C]
-        """
-        # 如果尺寸一致，直接返回，保持原始行为
-        if current_grid_size == target_grid_size:
-            return s
-
-        # 执行插值
-        B, N, C = s.shape
-        # [B, N, C] -> [B, C, H, W]
-        s = s.transpose(1, 2).reshape(B, C, current_grid_size, current_grid_size)
-
-        # 双线性插值
-        s = (
-            F.interpolate(
-                s,
-                size=(target_grid_size, target_grid_size),
-                mode='bilinear',
-                align_corners=False,
-            )
-            + s
-        ) / 2
-
-        # [B, C, H_new, W_new] -> [B, N_new, C]
-        s = s.flatten(2).transpose(1, 2)
-
-        return s
-
     def forward_condition(self, x, vit_embeds=None):
         B = x.shape[0]
 
@@ -622,6 +583,8 @@ class PixNerDiT(nn.Module):
         else:
             latent = self.latent_projector(vit_embeds)
         latent = F.layer_norm(latent, normalized_shape=latent.shape[2:], eps=1e-6)
+        grid_size = int(latent.shape[1] ** 0.5)
+        xpos = self.fetch_pos(grid_size, grid_size, x.device)
 
         y = self.learnable_tokens.expand(B, -1, -1)
 
@@ -631,17 +594,6 @@ class PixNerDiT(nn.Module):
 
         # 4. DiT Block 迭代
         s = self.s_embedder(latent)
-
-        # 计算当前和目标 grid size
-        current_grid_size = int(latent.shape[1] ** 0.5)  # 基于 latent 的 grid size
-        H_in, W_in = x.shape[2], x.shape[3]
-        target_grid_size = H_in // self.patch_size  # 基于新 patch_size 的 grid size
-
-        # 即插即用的插值：如果尺寸不一致才执行插值
-        s = self._interpolate_dit_embeddings(s, current_grid_size, target_grid_size)
-
-        # 使用目标 grid size 计算位置编码
-        xpos = self.fetch_pos(target_grid_size, target_grid_size, x.device)
         for block in self.blocks:
             s = block(s, y, cond, xpos)
 
