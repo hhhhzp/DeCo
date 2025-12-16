@@ -172,13 +172,6 @@ class LightningModelVAE(pl.LightningModule):
     def on_predict_start(self) -> None:
         self._logged_images_count = 0
 
-    def on_after_backward(self) -> None:
-        print("on_after_backward enter")
-        for p in self.trainable_params:
-            if p.grad is None:
-                print(p)
-        print("on_after_backward exit")
-
     def training_step(self, batch, batch_idx):
         img, _, metadata = batch
 
