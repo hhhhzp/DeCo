@@ -86,6 +86,11 @@ class LightningModelVAE(pl.LightningModule):
         self.vae_model = torch.compile(self.vae_model)
         self.ema_vae_model = torch.compile(self.ema_vae_model)
 
+    def on_after_backward(self):
+        for name, param in self.named_parameters():
+            if param.grad is None:
+                print(name)
+
     def configure_callbacks(self) -> Union[Sequence[Callback], Callback]:
         return [self.ema_tracker]
 

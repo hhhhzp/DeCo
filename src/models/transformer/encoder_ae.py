@@ -70,8 +70,8 @@ class VAEModel(nn.Module):
             decoder_weight_path,
             subfolder=decoder_subfolder,
             torch_dtype=torch.bfloat16,
-        )
-        self.scaling_factor = self.decoder.config.scaling_factor
+        ).decoder
+        # self.scaling_factor = self.decoder.config.scaling_factor
 
         # Freeze decoder
         for param in self.decoder.parameters():
