@@ -57,13 +57,6 @@ class LightningModelVAE(pl.LightningModule):
     def configure_model(self) -> None:
         self.trainer.strategy.barrier()
 
-        # Load pretrained weights if specified
-        if self.pretrain_model_path is not None:
-            checkpoint = torch.load(self.pretrain_model_path, map_location='cpu')
-            msg = self.load_state_dict(checkpoint['state_dict'], strict=False)
-            if self.global_rank == 0:
-                print(f"Loaded pretrained model from {self.pretrain_model_path}: {msg}")
-
         # Disable grad for frozen components in loss_module
         # These are not trainable and should not be tracked by DDP
         no_grad(self.vae_model.vision_model)
@@ -121,11 +114,30 @@ class LightningModelVAE(pl.LightningModule):
             if not has_other_trainable:
                 print("  (None)")
 
-            print("\n" + "=" * 80)
-            print(f"TOTAL TRAINABLE PARAMETERS: {total_trainable:,}")
-            print("=" * 80 + "\n")
+        print("\n" + "=" * 80)
+        print(f"TOTAL TRAINABLE PARAMETERS: {total_trainable:,}")
+        print("=" * 80 + "\n")
 
-        # Compile models for efficiency
+        # Load pretrained weights BEFORE torch.compile to avoid _orig_mod prefix issues
+        if self.pretrain_model_path is not None:
+            checkpoint = torch.load(self.pretrain_model_path, map_location='cpu')
+            state_dict = checkpoint['state_dict']
+
+            # Remove DDP 'module.' prefix if present
+            new_state_dict = {}
+            for key, value in state_dict.items():
+                # Remove 'module.' prefix from DDP
+                new_key = key.replace('module.', '') if 'module.' in key else key
+                # Remove '_orig_mod.' prefix from torch.compile
+                new_key = new_key.replace('_orig_mod.', '')
+                new_state_dict[new_key] = value
+
+            msg = self.load_state_dict(new_state_dict, strict=False)
+            if self.global_rank == 0:
+                print(f"Loaded pretrained model from {self.pretrain_model_path}")
+                print(f"Loading status: {msg}")
+
+        # Compile models for efficiency AFTER loading pretrained weights
         self.vae_model = torch.compile(self.vae_model)
         self.loss_module = torch.compile(self.loss_module)
 
