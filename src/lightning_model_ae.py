@@ -187,13 +187,7 @@ class LightningModelVAE(pl.LightningModule):
             self.global_step
         )
 
-        # ========== Train Generator (Encoder) ==========
-        # Toggle to encoder optimizer to tell DDP which parameters to track
-        self.toggle_optimizer(opt_encoder)
-
         # Forward pass through VAE model to get reconstructions and features
-        # IMPORTANT: Get both in one forward pass to avoid DDP marking
-        # vision_model parameters as ready twice
         reconstructed_pixels, student_features = self.vae_model(
             img, return_features=True
         )
@@ -203,6 +197,31 @@ class LightningModelVAE(pl.LightningModule):
             "student_features": student_features,
         }
 
+        ##########################
+        # Optimize Discriminator #
+        ##########################
+        if train_discriminator:
+            # Compute discriminator loss with detached reconstructions
+            discriminator_loss, disc_loss_dict = self.loss_module(
+                inputs=img,
+                reconstructions=reconstructed_pixels.detach(),  # Detach to avoid gradient flow to generator
+                extra_result_dict={},
+                global_step=self.global_step,
+                mode="discriminator",
+            )
+
+            # Backward and optimize discriminator
+            opt_discriminator.zero_grad()
+            self.manual_backward(discriminator_loss)
+            # clip gradients using Lightning's built-in method
+            self.clip_gradients(
+                opt_discriminator, gradient_clip_val=1.0, gradient_clip_algorithm="norm"
+            )
+            opt_discriminator.step()
+
+        ######################
+        # Optimize Generator #
+        ######################
         # Compute generator loss (reconstruction + perceptual + GAN)
         total_loss, loss_dict = self.loss_module(
             inputs=img,
@@ -212,67 +231,30 @@ class LightningModelVAE(pl.LightningModule):
             mode="generator",
         )
 
-        # Backward and optimize
-        self.manual_backward(total_loss, retain_graph=True)
-
-        # Manual gradient clipping for encoder
-        torch.nn.utils.clip_grad_norm_(self.vae_model.parameters(), max_norm=1.0)
-        opt_encoder.step()
+        # Backward and optimize generator (encoder)
         opt_encoder.zero_grad()
+        self.manual_backward(total_loss)
+        # clip gradients using Lightning's built-in method
+        self.clip_gradients(
+            opt_encoder, gradient_clip_val=1.0, gradient_clip_algorithm="norm"
+        )
+        opt_encoder.step()
 
-        # Untoggle encoder optimizer
-        self.untoggle_optimizer(opt_encoder)
-
-        # Update learning rate
-        sch_encoder = self.lr_schedulers()[0]
+        # Update learning rates
+        sch_encoder, sch_discriminator = self.lr_schedulers()
         sch_encoder.step()
-
-        # Convert loss_dict to regular dict with "loss" key for compatibility
-        output_dict = {"loss": total_loss}
-        output_dict.update(loss_dict)
-
-        # ========== Train Discriminator ==========
-        # Always compute discriminator loss to ensure all parameters are used in DDP
-        # This avoids "parameters not used in producing the loss" error
-        # Toggle to discriminator optimizer
         if train_discriminator:
-            self.toggle_optimizer(opt_discriminator)
-
-            # Use cached reconstructions to avoid re-running vae_model
-            # This prevents DDP from marking parameters as ready twice
-            discriminator_loss, disc_loss_dict = self.loss_module(
-                inputs=img,
-                reconstructions=reconstructed_pixels.detach(),  # Detach to avoid gradient flow
-                extra_result_dict={},
-                global_step=self.global_step,
-                mode="discriminator",
-            )
-
-            # Backward and optimize (only update weights after warmup)
-            self.manual_backward(discriminator_loss)
-
-            # Only update discriminator weights after warmup steps
-            # Manual gradient clipping for discriminator
-            torch.nn.utils.clip_grad_norm_(
-                self.loss_module.discriminator.parameters(), max_norm=1.0
-            )
-            opt_discriminator.step()
-
-            opt_discriminator.zero_grad()
-
-            # Untoggle discriminator optimizer
-            self.untoggle_optimizer(opt_discriminator)
-
-            # Update learning rate
-            sch_discriminator = self.lr_schedulers()[1]
             sch_discriminator.step()
 
-            # Merge discriminator losses into main loss dict
+        # Prepare output dict
+        output_dict = {"loss": total_loss}
+        output_dict.update(loss_dict)
+        if train_discriminator:
             output_dict.update(disc_loss_dict)
 
-            # Log learning rates
-            output_dict["lr_encoder"] = opt_encoder.param_groups[0]['lr']
-            output_dict["lr_discriminator"] = opt_discriminator.param_groups[0]['lr']
+        # Log learning rates
+        output_dict["lr_encoder"] = opt_encoder.param_groups[0]['lr']
+        output_dict["lr_discriminator"] = opt_discriminator.param_groups[0]['lr']
 
         # Log all losses
         self.log_dict(output_dict, prog_bar=True, on_step=True, sync_dist=False)
