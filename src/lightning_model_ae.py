@@ -173,7 +173,7 @@ class LightningModelVAE(pl.LightningModule):
         img, _, metadata = batch
 
         # Get optimizers
-        opt_encoder, opt_discriminator = self.optimizers()
+        opt_generator, opt_discriminator = self.optimizers()
 
         # Add global step to metadata
         metadata = metadata or {}
@@ -228,12 +228,12 @@ class LightningModelVAE(pl.LightningModule):
         )
 
         # Backward and optimize generator (encoder)
-        opt_encoder.zero_grad()
+        opt_generator.zero_grad()
         self.manual_backward(total_loss)
         self.clip_gradients(
-            opt_encoder, gradient_clip_val=1.0, gradient_clip_algorithm="norm"
+            opt_generator, gradient_clip_val=1.0, gradient_clip_algorithm="norm"
         )
-        opt_encoder.step()
+        opt_generator.step()
 
         # Update learning rates
         sch_encoder, sch_discriminator = self.lr_schedulers()
@@ -247,7 +247,7 @@ class LightningModelVAE(pl.LightningModule):
             output_dict.update(disc_loss_dict)
 
         # Log learning rates
-        output_dict["lr_encoder"] = opt_encoder.param_groups[0]['lr']
+        output_dict["lr_encoder"] = opt_generator.param_groups[0]['lr']
         output_dict["lr_discriminator"] = opt_discriminator.param_groups[0]['lr']
 
         # Log all losses
