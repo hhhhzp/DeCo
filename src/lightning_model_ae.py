@@ -97,7 +97,7 @@ class LightningModelVAE(pl.LightningModule):
     def configure_optimizers(self) -> OptimizerLRScheduler:
         # Optimizer for encoder (generator)
         params_encoder = filter_nograd_tensors(self.vae_model.parameters())
-        optimizer_encoder = self.optimizer({"params": params_encoder})
+        optimizer_encoder = self.optimizer([{"params": params_encoder}])
         lr_scheduler_encoder = get_constant_schedule_with_warmup(
             optimizer_encoder, num_warmup_steps=1000
         )
