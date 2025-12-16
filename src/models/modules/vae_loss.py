@@ -290,9 +290,13 @@ class VAEReconstructionLoss(nn.Module):
         if self.distillation_weight > 0.0 and self.teacher_vision_model is not None:
             teacher_features = self.extract_teacher_features(inputs)
 
-        # Convert from [-1, 1] to [0, 1] for loss computation
-        inputs_01 = (inputs + 1) / 2
-        reconstructions_01 = (reconstructions + 1) / 2
+        # Convert inputs from [-1, 1] to [0, 1] for loss computation
+        from src.utils.image_utils import normalize_from_neg1_to_1, denormalize_imagenet
+
+        inputs_01 = normalize_from_neg1_to_1(inputs)
+
+        # Convert reconstructions from ImageNet normalization to [0, 1]
+        reconstructions_01 = denormalize_imagenet(reconstructions, clamp=True)
 
         # Compute reconstruction loss (MSE or L1)
         if self.reconstruction_loss == "l1":

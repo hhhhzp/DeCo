@@ -22,4 +22,5 @@ export NODE_RANK=${NODE_RANK:-0}
 
 python main.py fit -c configs/vae_training.yaml \
     --trainer.num_nodes=4 \
-    --trainer.devices=8
+    --trainer.devices=8 \
+    --ckpt_path=vae_training_workdir/exp_VAE_Encoder_Training/last.ckpt

@@ -50,13 +50,16 @@ class ComputeMetricsHook(Callback):
 
     def _normalize_images(self, images, device):
         """Normalize images to [0, 1] range"""
+        from src.utils.image_utils import normalize_from_neg1_to_1
+
         images = images.to(device)
         if images.dtype == torch.uint8:
             # uint8 类型: [0, 255] -> [0, 1]
             images = images.float() / 255.0
         else:
             # float 类型: 假设 [-1, 1] -> [0, 1]
-            images = torch.clamp((images + 1.0) / 2.0, 0.0, 1.0)
+            images = normalize_from_neg1_to_1(images)
+            images = torch.clamp(images, 0.0, 1.0)
         return images
 
     def _update_metrics(self, pl_module, outputs, batch):

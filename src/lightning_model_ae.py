@@ -276,13 +276,18 @@ class LightningModelVAE(pl.LightningModule):
             # Encode to latent and decode to reconstruct
             samples = self.vae_model(img).float()
 
+            # Denormalize reconstructions from ImageNet normalization to [0, 255] uint8
+            from src.utils.image_utils import denormalize_to_uint8
+
+            samples_uint8 = denormalize_to_uint8(samples, source_range="imagenet")
+
             # Log first 6 images comparison
             if self._logged_images_count < 6:
                 num_to_log = min(6 - self._logged_images_count, img.shape[0])
 
                 # Convert images from [-1, 1] to [0, 255] uint8
                 original_imgs = fp2uint8(img[:num_to_log])
-                reconstructed_imgs = fp2uint8(samples[:num_to_log])
+                reconstructed_imgs = samples_uint8[:num_to_log]
 
                 # Log each comparison image with wandb
                 import wandb
@@ -309,7 +314,7 @@ class LightningModelVAE(pl.LightningModule):
 
                 self._logged_images_count += num_to_log
 
-        return samples.float()
+        return samples_uint8
 
     def validation_step(self, batch, batch_idx):
         samples = self.predict_step(batch, batch_idx)
