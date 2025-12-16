@@ -11,8 +11,6 @@ trainer:
   devices: auto
   num_nodes: 1
   precision: bf16
-  gradient_clip_val: 1.0
-  gradient_clip_algorithm: norm
   logger:
       class_path: lightning.pytorch.loggers.WandbLogger
       init_args:

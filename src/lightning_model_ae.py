@@ -171,6 +171,9 @@ class LightningModelVAE(pl.LightningModule):
 
         # Backward and optimize
         self.manual_backward(loss_dict["loss"])
+        # Manual gradient clipping for encoder
+        torch.nn.utils.clip_grad_norm_(self.vae_model.parameters(), max_norm=1.0)
+        torch.nn.utils.clip_grad_norm_(self.vae_trainer.parameters(), max_norm=1.0)
         opt_encoder.step()
 
         # Update learning rate
@@ -194,6 +197,10 @@ class LightningModelVAE(pl.LightningModule):
 
             # Backward and optimize
             self.manual_backward(disc_loss_dict["discriminator_loss"])
+            # Manual gradient clipping for discriminator
+            torch.nn.utils.clip_grad_norm_(
+                self.vae_trainer.loss_module.discriminator.parameters(), max_norm=1.0
+            )
             opt_discriminator.step()
 
             # Update learning rate
