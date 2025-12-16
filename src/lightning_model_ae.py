@@ -1,6 +1,5 @@
 from typing import Callable, Iterable, Any, Optional, Union, Sequence, Mapping, Dict
 import os.path
-import copy
 import torch
 import torch.nn as nn
 import torchvision
@@ -16,12 +15,8 @@ from transformers import AutoModel, AutoConfig, get_constant_schedule_with_warmu
 from src.models.autoencoder.base import BaseAE, fp2uint8
 from src.models.transformer.encoder_ae import VAEModel
 from src.utils.model_loader import ModelLoader
-from src.callbacks.simple_ema import SimpleEMA
-from src.diffusion.vae_gan.training_ae import VAEGANTrainer
 from src.utils.no_grad import no_grad, filter_nograd_tensors
-from src.utils.copy import copy_params
 
-EMACallable = Callable[[nn.Module, nn.Module], SimpleEMA]
 OptimizerCallable = Callable[[Iterable], Optimizer]
 LRSchedulerCallable = Callable[[Optimizer], LRScheduler]
 
@@ -36,7 +31,6 @@ class LightningModelVAE(pl.LightningModule):
         self,
         vae_model: VAEModel,
         loss_module: nn.Module,
-        ema_tracker: SimpleEMA = None,
         optimizer: OptimizerCallable = None,
         lr_scheduler: LRSchedulerCallable = None,
         eval_original_model: bool = False,
@@ -45,12 +39,8 @@ class LightningModelVAE(pl.LightningModule):
     ):
         super().__init__()
         self.vae_model = vae_model
-        self.ema_vae_model = copy.deepcopy(self.vae_model)
+        self.loss_module = loss_module
 
-        # Create vae_trainer with loss_module
-        self.vae_trainer = VAEGANTrainer(loss_module=loss_module, null_condition_p=0)
-
-        self.ema_tracker = ema_tracker
         self.optimizer = optimizer
         self.discriminator_optimizer = discriminator_optimizer
         self.lr_scheduler = lr_scheduler
@@ -74,22 +64,16 @@ class LightningModelVAE(pl.LightningModule):
             if self.global_rank == 0:
                 print(f"Loaded pretrained model from {self.pretrain_model_path}: {msg}")
 
-        # Copy parameters to EMA model
-        copy_params(src_model=self.vae_model, dst_model=self.ema_vae_model)
-
-        # Disable grad for EMA model
-        no_grad(self.ema_vae_model)
-
         # Disable grad for frozen decoder (not trained, only used for reconstruction)
         no_grad(self.vae_model.decoder)
 
         # Disable grad for frozen components in loss_module
         # These are not trainable and should not be tracked by DDP
-        no_grad(self.vae_trainer.loss_module.perceptual_loss)
-        if self.vae_trainer.loss_module.teacher_vision_model is not None:
-            no_grad(self.vae_trainer.loss_module.teacher_vision_model)
-        if self.vae_trainer.loss_module.teacher_mlp1 is not None:
-            no_grad(self.vae_trainer.loss_module.teacher_mlp1)
+        no_grad(self.loss_module.perceptual_loss)
+        if self.loss_module.teacher_vision_model is not None:
+            no_grad(self.loss_module.teacher_vision_model)
+        if self.loss_module.teacher_mlp1 is not None:
+            no_grad(self.loss_module.teacher_mlp1)
 
         # Print trainable parameters
         if self.global_rank == 0:
@@ -116,7 +100,7 @@ class LightningModelVAE(pl.LightningModule):
             for (
                 name,
                 param,
-            ) in self.vae_trainer.loss_module.discriminator.named_parameters():
+            ) in self.loss_module.discriminator.named_parameters():
                 if param.requires_grad:
                     param_id = id(param)
                     if param_id not in trainable_params:
@@ -127,7 +111,7 @@ class LightningModelVAE(pl.LightningModule):
             # Check other loss module parameters
             print("\n[Loss Module - Other Trainable Components]")
             has_other_trainable = False
-            for name, param in self.vae_trainer.loss_module.named_parameters():
+            for name, param in self.loss_module.named_parameters():
                 if param.requires_grad and 'discriminator' not in name:
                     param_id = id(param)
                     if param_id not in trainable_params:
@@ -144,10 +128,6 @@ class LightningModelVAE(pl.LightningModule):
 
         # Compile models for efficiency
         self.vae_model = torch.compile(self.vae_model)
-        self.ema_vae_model = torch.compile(self.ema_vae_model)
-
-    def configure_callbacks(self) -> Union[Sequence[Callback], Callback]:
-        return [self.ema_tracker]
 
     def configure_optimizers(self) -> OptimizerLRScheduler:
         # Optimizer for encoder (generator)
@@ -158,7 +138,7 @@ class LightningModelVAE(pl.LightningModule):
         )
 
         # Optimizer for discriminator
-        discriminator = self.vae_trainer.loss_module.discriminator
+        discriminator = self.loss_module.discriminator
         params_discriminator = filter_nograd_tensors(discriminator.parameters())
         optimizer_discriminator = self.discriminator_optimizer(
             [{"params": params_discriminator}]
@@ -187,16 +167,10 @@ class LightningModelVAE(pl.LightningModule):
         ]
 
     def on_validation_start(self) -> None:
-        self.ema_vae_model.to(torch.float32)
         self._logged_images_count = 0
 
     def on_predict_start(self) -> None:
-        self.ema_vae_model.to(torch.float32)
         self._logged_images_count = 0
-
-    def on_train_start(self) -> None:
-        self.ema_vae_model.to(torch.float32)
-        self.ema_tracker.setup_models(net=self.vae_model, ema_net=self.ema_vae_model)
 
     def training_step(self, batch, batch_idx):
         img, _, metadata = batch
@@ -209,10 +183,8 @@ class LightningModelVAE(pl.LightningModule):
         metadata['global_step'] = self.global_step
 
         # Check if discriminator should be trained (for weight update decision)
-        train_discriminator = (
-            self.vae_trainer.loss_module.should_discriminator_be_trained(
-                self.global_step
-            )
+        train_discriminator = self.loss_module.should_discriminator_be_trained(
+            self.global_step
         )
 
         # ========== Train Generator (Encoder) ==========
@@ -232,7 +204,7 @@ class LightningModelVAE(pl.LightningModule):
         }
 
         # Compute generator loss (reconstruction + perceptual + GAN)
-        total_loss, loss_dict = self.vae_trainer.loss_module(
+        total_loss, loss_dict = self.loss_module(
             inputs=img,
             reconstructions=reconstructed_pixels,
             extra_result_dict=extra_result_dict,
@@ -266,7 +238,7 @@ class LightningModelVAE(pl.LightningModule):
 
         # Use cached reconstructions to avoid re-running vae_model
         # This prevents DDP from marking parameters as ready twice
-        discriminator_loss, disc_loss_dict = self.vae_trainer.loss_module(
+        discriminator_loss, disc_loss_dict = self.loss_module(
             inputs=img,
             reconstructions=reconstructed_pixels.detach(),  # Detach to avoid gradient flow
             extra_result_dict={},
@@ -281,7 +253,7 @@ class LightningModelVAE(pl.LightningModule):
             # Only update discriminator weights after warmup steps
             # Manual gradient clipping for discriminator
             torch.nn.utils.clip_grad_norm_(
-                self.vae_trainer.loss_module.discriminator.parameters(), max_norm=1.0
+                self.loss_module.discriminator.parameters(), max_norm=1.0
             )
             opt_discriminator.step()
 
@@ -309,12 +281,9 @@ class LightningModelVAE(pl.LightningModule):
     def predict_step(self, batch, batch_idx):
         img, _, metadata = batch
 
-        # Select model (original or EMA)
-        model = self.vae_model if self.eval_original_model else self.ema_vae_model
-
         with torch.no_grad():
             # Encode to latent and decode to reconstruct
-            samples = model(img)
+            samples = self.vae_model(img)
 
             # Log first 6 images comparison
             if self._logged_images_count < 6:
@@ -362,14 +331,9 @@ class LightningModelVAE(pl.LightningModule):
         self.vae_model.state_dict(
             destination=destination, prefix=prefix + "vae_model.", keep_vars=keep_vars
         )
-        self.ema_vae_model.state_dict(
+        self.loss_module.state_dict(
             destination=destination,
-            prefix=prefix + "ema_vae_model.",
-            keep_vars=keep_vars,
-        )
-        self.vae_trainer.state_dict(
-            destination=destination,
-            prefix=prefix + "vae_trainer.",
+            prefix=prefix + "loss_module.",
             keep_vars=keep_vars,
         )
         return destination
