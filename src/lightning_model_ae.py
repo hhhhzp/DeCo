@@ -77,9 +77,7 @@ class LightningModelVAE(pl.LightningModule):
         # Copy parameters to EMA model
         copy_params(src_model=self.vae_model, dst_model=self.ema_vae_model)
 
-        # Disable grad for decoder (already frozen in VAEModel.__init__)
-        # and EMA model
-        # no_grad(self.vae_model.decoder)
+        # Disable grad for EMA model
         no_grad(self.ema_vae_model)
 
         # Disable grad for frozen components in loss_module

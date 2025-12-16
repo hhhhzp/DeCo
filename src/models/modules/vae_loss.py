@@ -323,9 +323,8 @@ class VAEReconstructionLoss(nn.Module):
         d_weight = 1.0
 
         if discriminator_factor > 0.0 and self.discriminator_weight > 0.0:
-            # Disable discriminator gradients
-            for param in self.discriminator.parameters():
-                param.requires_grad = False
+            # Use discriminator without updating its parameters
+            # No need to set requires_grad=False, just don't backward through it
             logits_fake = self.discriminator(reconstructions_01)
             generator_loss = -torch.mean(logits_fake)
 
@@ -396,10 +395,8 @@ class VAEReconstructionLoss(nn.Module):
         inputs_01 = (inputs + 1) / 2
         reconstructions_01 = (reconstructions + 1) / 2
 
-        # Enable discriminator gradients
-        for param in self.discriminator.parameters():
-            param.requires_grad = True
-
+        # Discriminator parameters are already trainable by default
+        # No need to manually set requires_grad=True
         real_images = inputs_01.detach().requires_grad_(True)
         logits_real = self.discriminator(real_images)
         logits_fake = self.discriminator(reconstructions_01.detach())

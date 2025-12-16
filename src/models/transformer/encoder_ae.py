@@ -73,10 +73,6 @@ class VAEModel(nn.Module):
         ).decoder
         # self.scaling_factor = self.decoder.config.scaling_factor
 
-        # Freeze decoder
-        # for param in self.decoder.parameters():
-        #     param.requires_grad = False
-
     def init_vision_model(self, pretrained_model_path: str):
         """
         Load vision_model and mlp1 from pretrained InternVLChatModel.
