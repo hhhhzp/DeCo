@@ -189,8 +189,11 @@ class LightningModelVAE(pl.LightningModule):
         metadata = metadata or {}
         metadata['global_step'] = self.global_step
 
+        # Unwrap DDP module if needed
+        loss_module = self._get_module(self.loss_module)
+
         # Check if discriminator should be trained (for weight update decision)
-        train_discriminator = self.loss_module.should_discriminator_be_trained(
+        train_discriminator = loss_module.should_discriminator_be_trained(
             self.global_step
         )
 
@@ -208,7 +211,7 @@ class LightningModelVAE(pl.LightningModule):
         # Optimize Generator #
         ######################
         # Compute generator loss (reconstruction + perceptual + GAN)
-        total_loss, loss_dict = self.loss_module(
+        total_loss, loss_dict = loss_module(
             inputs=img,
             reconstructions=reconstructed_pixels,
             extra_result_dict=extra_result_dict,
@@ -233,7 +236,7 @@ class LightningModelVAE(pl.LightningModule):
         ##########################
         if train_discriminator:
             # Compute discriminator loss with detached reconstructions
-            discriminator_loss, disc_loss_dict = self.loss_module(
+            discriminator_loss, disc_loss_dict = loss_module(
                 inputs=img,
                 reconstructions=reconstructed_pixels.detach(),  # Detach to avoid gradient flow to generator
                 extra_result_dict={},
