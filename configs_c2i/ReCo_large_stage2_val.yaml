@@ -96,7 +96,6 @@ model:
       betas: [0.9, 0.95]
   eval_original_model: true
   distill: true
-  pretrain_model_path: ./universal_pix_workdirs/exp_DeCo_256_large/epoch=23-step=60000.ckpt
   diffusion_batch_mul: 4  # Replicate latent 4x to improve training efficiency
 data:
   train_dataset:
