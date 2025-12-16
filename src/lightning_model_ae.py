@@ -79,7 +79,7 @@ class LightningModelVAE(pl.LightningModule):
 
         # Disable grad for decoder (already frozen in VAEModel.__init__)
         # and EMA model
-        no_grad(self.vae_model.decoder)
+        # no_grad(self.vae_model.decoder)
         no_grad(self.ema_vae_model)
 
         # Disable grad for frozen components in loss_module
