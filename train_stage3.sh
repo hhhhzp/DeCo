@@ -26,4 +26,5 @@ export NODE_RANK=${NODE_RANK:-0}
 python main.py fit -c configs_c2i/ReCo_large_stage3.yaml \
     --trainer.num_nodes=4 \
     --trainer.devices=8 \
-    --trainer.strategy=ddp
+    --trainer.strategy=ddp \
+    --ckpt_path=uni_edit_stage3_cosine/exp_DeCo_256_large/epoch=11-step=28000.ckpt
