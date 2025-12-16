@@ -64,17 +64,6 @@ class LightningModelVAE(pl.LightningModule):
             if self.global_rank == 0:
                 print(f"Loaded pretrained model from {self.pretrain_model_path}: {msg}")
 
-        # Disable grad for frozen decoder (not trained, only used for reconstruction)
-        no_grad(self.vae_model.decoder)
-
-        # Disable grad for frozen components in loss_module
-        # These are not trainable and should not be tracked by DDP
-        no_grad(self.loss_module.perceptual_loss)
-        if self.loss_module.teacher_vision_model is not None:
-            no_grad(self.loss_module.teacher_vision_model)
-        if self.loss_module.teacher_mlp1 is not None:
-            no_grad(self.loss_module.teacher_mlp1)
-
         # Print trainable parameters
         if self.global_rank == 0:
             print("\n" + "=" * 80)
@@ -125,6 +114,14 @@ class LightningModelVAE(pl.LightningModule):
             print("\n" + "=" * 80)
             print(f"TOTAL TRAINABLE PARAMETERS: {total_trainable:,}")
             print("=" * 80 + "\n")
+
+        # Disable grad for frozen components in loss_module
+        # These are not trainable and should not be tracked by DDP
+        no_grad(self.loss_module.perceptual_loss)
+        if self.loss_module.teacher_vision_model is not None:
+            no_grad(self.loss_module.teacher_vision_model)
+        if self.loss_module.teacher_mlp1 is not None:
+            no_grad(self.loss_module.teacher_mlp1)
 
         # Compile models for efficiency
         # self.vae_model = torch.compile(self.vae_model)
@@ -197,31 +194,11 @@ class LightningModelVAE(pl.LightningModule):
             "student_features": student_features,
         }
 
-        ##########################
-        # Optimize Discriminator #
-        ##########################
-        if train_discriminator:
-            # Compute discriminator loss with detached reconstructions
-            discriminator_loss, disc_loss_dict = self.loss_module(
-                inputs=img,
-                reconstructions=reconstructed_pixels.detach(),  # Detach to avoid gradient flow to generator
-                extra_result_dict={},
-                global_step=self.global_step,
-                mode="discriminator",
-            )
-
-            # Backward and optimize discriminator
-            opt_discriminator.zero_grad()
-            self.manual_backward(discriminator_loss)
-            # clip gradients using Lightning's built-in method
-            # self.clip_gradients(
-            #     opt_discriminator, gradient_clip_val=1.0, gradient_clip_algorithm="norm"
-            # )
-            opt_discriminator.step()
-
         ######################
         # Optimize Generator #
         ######################
+        self.toggle_optimizer(opt_encoder)
+
         # Compute generator loss (reconstruction + perceptual + GAN)
         total_loss, loss_dict = self.loss_module(
             inputs=img,
@@ -232,13 +209,31 @@ class LightningModelVAE(pl.LightningModule):
         )
 
         # Backward and optimize generator (encoder)
-        opt_encoder.zero_grad()
         self.manual_backward(total_loss)
-        # clip gradients using Lightning's built-in method
-        # self.clip_gradients(
-        #     opt_encoder, gradient_clip_val=1.0, gradient_clip_algorithm="norm"
-        # )
         opt_encoder.step()
+        opt_encoder.zero_grad()
+        self.untoggle_optimizer(opt_encoder)
+
+        ##########################
+        # Optimize Discriminator #
+        ##########################
+        if train_discriminator:
+            self.toggle_optimizer(opt_discriminator)
+
+            # Compute discriminator loss with detached reconstructions
+            discriminator_loss, disc_loss_dict = self.loss_module(
+                inputs=img,
+                reconstructions=reconstructed_pixels.detach(),  # Detach to avoid gradient flow to generator
+                extra_result_dict={},
+                global_step=self.global_step,
+                mode="discriminator",
+            )
+
+            # Backward and optimize discriminator
+            self.manual_backward(discriminator_loss)
+            opt_discriminator.step()
+            opt_discriminator.zero_grad()
+            self.untoggle_optimizer(opt_discriminator)
 
         # Update learning rates
         sch_encoder, sch_discriminator = self.lr_schedulers()
