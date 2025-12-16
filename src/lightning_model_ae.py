@@ -126,16 +126,26 @@ class LightningModelVAE(pl.LightningModule):
         # Compile models for efficiency
         self.vae_model = torch.compile(self.vae_model)
 
+    def _get_module(self, module):
+        """Helper to unwrap DDP module if needed."""
+        from torch.nn.parallel import DistributedDataParallel as DDP
+
+        if isinstance(module, DDP):
+            return module.module
+        return module
+
     def configure_optimizers(self) -> OptimizerLRScheduler:
         # Optimizer for encoder (generator)
-        params_encoder = filter_nograd_tensors(self.vae_model.parameters())
+        vae_model = self._get_module(self.vae_model)
+        params_encoder = filter_nograd_tensors(vae_model.parameters())
         optimizer_encoder = self.optimizer([{"params": params_encoder}])
         lr_scheduler_encoder = get_constant_schedule_with_warmup(
             optimizer_encoder, num_warmup_steps=1000
         )
 
         # Optimizer for discriminator
-        discriminator = self.loss_module.discriminator
+        loss_module = self._get_module(self.loss_module)
+        discriminator = loss_module.discriminator
         params_discriminator = filter_nograd_tensors(discriminator.parameters())
         optimizer_discriminator = self.discriminator_optimizer(
             [{"params": params_discriminator}]

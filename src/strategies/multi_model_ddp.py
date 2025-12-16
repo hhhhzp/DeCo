@@ -23,7 +23,14 @@ class MultiModelDDPStrategy(DDPStrategy):
     causes DDP to lose track of which parameters should receive gradients.
 
     Instead of wrapping the entire LightningModule, we wrap only the sub-models
-    that need to be trained (vae_model and discriminator).
+    that need to be trained (vae_model and loss_module).
+
+    **Important**: After DDP wrapping, access sub-modules using:
+        - `self._get_module(self.vae_model)` to get the unwrapped vae_model
+        - `self._get_module(self.loss_module)` to get the unwrapped loss_module
+
+    The LightningModule should implement a `_get_module()` helper method to
+    safely unwrap DDP modules when needed (e.g., in configure_optimizers).
     """
 
     def configure_ddp(self) -> None:
