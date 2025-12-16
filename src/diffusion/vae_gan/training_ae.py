@@ -40,7 +40,7 @@ class VAEGANTrainer(BaseTrainer):
         student_features = vae_model.extract_feature(x)
 
         # Encode image to latent space
-        predicted_latents = vae_model.encode_latent(x)
+        predicted_latents = vae_model.encode_latent(x, features=student_features)
 
         # Decode latent to reconstruct image
         reconstructed_pixels = vae_model.decode_latent(predicted_latents)

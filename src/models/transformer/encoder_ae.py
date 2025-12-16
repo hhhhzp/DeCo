@@ -150,14 +150,15 @@ class VAEModel(nn.Module):
         vit_embeds = mlp1(vit_embeds)
         return vit_embeds
 
-    def encode_latent(self, x):
+    def encode_latent(self, x, features=None):
         """
         Encode image to latent representation.
         :param x: input image [B, C, H, W] in range [-1, 1]
         :return: latent [B, latent_channel, H', W']
         """
         # Extract features [B, N, hidden_size]
-        features = self.extract_feature(x)
+        if features is None:
+            features = self.extract_feature(x)
 
         # Project to latent space [B, N, latent_channel]
         latent = self.latent_projector(features)
