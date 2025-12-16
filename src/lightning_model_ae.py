@@ -79,7 +79,7 @@ class LightningModelVAE(pl.LightningModule):
 
         # Disable grad for EMA model
         no_grad(self.ema_vae_model)
-        no_grad(self.vae_model.decoder)
+        # no_grad(self.vae_model.decoder)
 
         # Disable grad for frozen components in loss_module
         # These are not trainable and should not be tracked by DDP
