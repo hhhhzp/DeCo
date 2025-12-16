@@ -64,3 +64,4 @@ class MultiModelDDPStrategy(DDPStrategy):
                 device_ids=device_ids,
                 find_unused_parameters=False,  # All components should be used
             )
+        return self.model
