@@ -235,7 +235,6 @@ class LightningModelVAE(pl.LightningModule):
         self.manual_backward(total_loss)
         # Manual gradient clipping for encoder
         torch.nn.utils.clip_grad_norm_(self.vae_model.parameters(), max_norm=1.0)
-        torch.nn.utils.clip_grad_norm_(self.vae_trainer.parameters(), max_norm=1.0)
         opt_encoder.step()
         opt_encoder.zero_grad()
 
