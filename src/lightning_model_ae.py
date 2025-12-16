@@ -35,7 +35,7 @@ class LightningModelVAE(pl.LightningModule):
     def __init__(
         self,
         vae_model: VAEModel,
-        vae_trainer: VAEGANTrainer,
+        loss_module: nn.Module,
         ema_tracker: SimpleEMA = None,
         optimizer: OptimizerCallable = None,
         lr_scheduler: LRSchedulerCallable = None,
@@ -46,7 +46,10 @@ class LightningModelVAE(pl.LightningModule):
         super().__init__()
         self.vae_model = vae_model
         self.ema_vae_model = copy.deepcopy(self.vae_model)
-        self.vae_trainer = vae_trainer
+
+        # Create vae_trainer with loss_module
+        self.vae_trainer = VAEGANTrainer(loss_module=loss_module)
+
         self.ema_tracker = ema_tracker
         self.optimizer = optimizer
         self.discriminator_optimizer = discriminator_optimizer
