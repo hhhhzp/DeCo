@@ -1,0 +1,135 @@
+# lightning.pytorch==2.4.0
+seed_everything: true
+tags:
+  exp: &exp VAE_Encoder_Training
+torch_hub_dir: ~/.cache/torch/hub
+huggingface_cache_dir: null
+trainer:
+  default_root_dir: ./vae_training_workdir
+  accelerator: auto
+  strategy: auto
+  devices: auto
+  num_nodes: 1
+  precision: bf16
+  gradient_clip_val: 1.0
+  gradient_clip_algorithm: norm
+  logger:
+      class_path: lightning.pytorch.loggers.WandbLogger
+      init_args:
+        save_dir: ./vae_training_workdir
+        name: *exp
+  num_sanity_val_steps: 0
+  max_steps: 200000  # Train for 1M steps (discriminator starts at 500k)
+  val_check_interval: 1000
+  check_val_every_n_epoch: null
+  log_every_n_steps: 50
+  deterministic: null
+  inference_mode: true
+  use_distributed_sampler: true
+  callbacks:
+    - class_path: src.callbacks.model_checkpoint.CheckpointHook
+      init_args:
+        every_n_train_steps: 5000
+        save_top_k: -1
+        save_last: true
+    - class_path: src.callbacks.save_images.SaveImagesHook
+      init_args:
+         save_dir: vae_reconstructions
+         save_compressed: true
+  plugins:
+    - src.plugins.bd_env.BDEnvironment
+
+model:
+  class_path: src.lightning_model_ae.LightningModelVAE
+  init_args:
+    # Integrated VAE Model (encoder + decoder)
+    vae_model:
+      class_path: src.models.transformer.encoder_ae.VAEModel
+      init_args:
+        encoder_config_path: "/apdcephfs/share_300000800/datamultimodal/models/InternVL3-2B"
+        decoder_weight_path: "/apdcephfs/share_300000800/datamultimodal/models/Sana_600M_512px_diffusers"  # Path to SANA model
+        decoder_subfolder: "vae"
+        select_layer: -1  # Use last layer of vision model
+        latent_channel: 32  # Latent channel dimension
+        load_pretrained_encoder: true  # Load pretrained InternVL weights
+
+    # VAE-GAN Trainer
+    vae_trainer:
+      class_path: src.diffusion.vae_gan.training_ae.VAEGANTrainer
+      init_args:
+        loss_module:
+          class_path: src.models.modules.vae_loss.VAEReconstructionLoss
+          init_args:
+            # Discriminator settings
+            discriminator_start: 0  # Start discriminator training at 500k steps
+            discriminator_factor: 1.0
+            discriminator_weight: 0.1
+            lecam_regularization_weight: 0.001
+            
+            # Perceptual loss settings
+            perceptual_loss: "lpips-convnext_s-1.0-0.1"  # LPIPS with ConvNeXt-S
+            perceptual_weight: 1.1
+            
+            # Reconstruction loss settings
+            reconstruction_loss: "l2"  # MSE loss
+            reconstruction_weight: 1.0
+            
+            # KL divergence (not used for now)
+            kl_weight: 0.0
+            logvar_init: 0.0
+            
+            # Distillation loss settings
+            distillation_weight: 1.0  # Weight for distillation loss
+            distillation_loss_type: "mse"  # "mse" or "cosine"
+            teacher_model_path: "/apdcephfs/share_300000800/datamultimodal/models/InternVL3-2B"  # Path to teacher model
+            select_layer: -1  # Use last layer of vision model
+            downsample_ratio: 0.5  # Pixel shuffle downsample ratio
+
+    # EMA tracker for stable evaluation
+    ema_tracker:
+      class_path: src.callbacks.simple_ema.SimpleEMA
+      init_args:
+        decay: 0.9999
+
+    # Optimizer for encoder (generator)
+    optimizer:
+      class_path: torch.optim.AdamW
+      init_args:
+        lr: 1e-4
+        weight_decay: 0.0
+        betas: [0.9, 0.95]
+
+    # Optimizer for discriminator
+    discriminator_optimizer:
+      class_path: torch.optim.AdamW
+      init_args:
+        lr: 1e-4
+        weight_decay: 0.0
+        betas: [0.9, 0.95]
+
+    # Evaluation settings
+    eval_original_model: false  # Use EMA model for evaluation
+    pretrain_model_path: null  # Path to pretrained checkpoint (optional)
+
+data:
+  train_dataset:
+    class_path: src.data.dataset.imagenet.PixHFDataset
+    init_args:
+      root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k
+      resolution: 224  # Input resolution
+      split: train
+  
+  eval_dataset:
+    class_path: src.data.dataset.imagenet.PixHFDataset
+    init_args:
+      root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k
+      resolution: 224
+      split: validation
+      max_num_samples: 1000  # Limit validation samples for faster evaluation
+  
+  # Data loading settings
+  train_batch_size: 16  # Batch size per GPU
+  train_num_workers: 8
+  train_prefetch_factor: 4
+  pred_batch_size: 32
+  pred_num_workers: 4
