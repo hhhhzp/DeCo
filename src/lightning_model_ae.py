@@ -124,7 +124,7 @@ class LightningModelVAE(pl.LightningModule):
             no_grad(self.loss_module.teacher_mlp1)
 
         # Compile models for efficiency
-        # self.vae_model = torch.compile(self.vae_model)
+        self.vae_model = torch.compile(self.vae_model)
 
     def configure_optimizers(self) -> OptimizerLRScheduler:
         # Optimizer for encoder (generator)
