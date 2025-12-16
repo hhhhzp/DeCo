@@ -114,10 +114,6 @@ class LightningModelVAE(pl.LightningModule):
             if not has_other_trainable:
                 print("  (None)")
 
-        print("\n" + "=" * 80)
-        print(f"TOTAL TRAINABLE PARAMETERS: {total_trainable:,}")
-        print("=" * 80 + "\n")
-
         # Load pretrained weights BEFORE torch.compile to avoid _orig_mod prefix issues
         if self.pretrain_model_path is not None:
             checkpoint = torch.load(self.pretrain_model_path, map_location='cpu')
