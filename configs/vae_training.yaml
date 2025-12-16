@@ -53,7 +53,7 @@ model:
         latent_channel: 32  # Latent channel dimension
         load_pretrained_encoder: true  # Load pretrained InternVL weights
 
-    # VAE-GAN Trainer
+    # VAE-GAN Trainer with loss module
     vae_trainer:
       class_path: src.diffusion.vae_gan.training_ae.VAEGANTrainer
       init_args:
