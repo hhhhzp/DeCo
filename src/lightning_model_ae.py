@@ -195,29 +195,6 @@ class LightningModelVAE(pl.LightningModule):
             "student_features": student_features,
         }
 
-        ##########################
-        # Optimize Discriminator #
-        ##########################
-        if train_discriminator:
-            # Compute discriminator loss with detached reconstructions
-            self.loss_module.discriminator.requires_grad_(True)
-            discriminator_loss, disc_loss_dict = self.loss_module(
-                inputs=img,
-                reconstructions=reconstructed_pixels.detach(),  # Detach to avoid gradient flow to generator
-                extra_result_dict={},
-                global_step=self.global_step,
-                mode="discriminator",
-            )
-
-            # Backward and optimize discriminator
-            opt_discriminator.zero_grad()
-            self.manual_backward(discriminator_loss)
-            self.clip_gradients(
-                opt_discriminator, gradient_clip_val=1.0, gradient_clip_algorithm="norm"
-            )
-            opt_discriminator.step()
-            self.loss_module.discriminator.requires_grad_(False)
-
         ######################
         # Optimize Generator #
         ######################
@@ -246,7 +223,29 @@ class LightningModelVAE(pl.LightningModule):
         # Prepare output dict
         output_dict = {"loss": total_loss}
         output_dict.update(loss_dict)
+
+        ##########################
+        # Optimize Discriminator #
+        ##########################
         if train_discriminator:
+            # Compute discriminator loss with detached reconstructions
+            self.loss_module.discriminator.requires_grad_(True)
+            discriminator_loss, disc_loss_dict = self.loss_module(
+                inputs=img,
+                reconstructions=reconstructed_pixels.detach(),  # Detach to avoid gradient flow to generator
+                extra_result_dict={},
+                global_step=self.global_step,
+                mode="discriminator",
+            )
+
+            # Backward and optimize discriminator
+            opt_discriminator.zero_grad()
+            self.manual_backward(discriminator_loss)
+            self.clip_gradients(
+                opt_discriminator, gradient_clip_val=1.0, gradient_clip_algorithm="norm"
+            )
+            opt_discriminator.step()
+            self.loss_module.discriminator.requires_grad_(False)
             output_dict.update(disc_loss_dict)
 
         # Log learning rates
