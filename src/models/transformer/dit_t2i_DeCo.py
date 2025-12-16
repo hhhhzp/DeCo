@@ -598,15 +598,12 @@ class PixNerDiT(nn.Module):
         s = s.transpose(1, 2).reshape(B, C, current_grid_size, current_grid_size)
 
         # 双线性插值
-        s = (
-            F.interpolate(
-                s,
-                size=(target_grid_size, target_grid_size),
-                mode='bilinear',
-                align_corners=False,
-            )
-            + s
-        ) / 2
+        s = F.interpolate(
+            s,
+            size=(target_grid_size, target_grid_size),
+            mode='bilinear',
+            align_corners=False,
+        )
 
         # [B, C, H_new, W_new] -> [B, N_new, C]
         s = s.flatten(2).transpose(1, 2)
