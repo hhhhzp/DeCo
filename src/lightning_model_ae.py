@@ -64,6 +64,16 @@ class LightningModelVAE(pl.LightningModule):
             if self.global_rank == 0:
                 print(f"Loaded pretrained model from {self.pretrain_model_path}: {msg}")
 
+        # Disable grad for frozen components in loss_module
+        # These are not trainable and should not be tracked by DDP
+        no_grad(self.vae_model.vision_model)
+        no_grad(self.vae_model.mlp1)
+        no_grad(self.loss_module.perceptual_loss)
+        if self.loss_module.teacher_vision_model is not None:
+            no_grad(self.loss_module.teacher_vision_model)
+        if self.loss_module.teacher_mlp1 is not None:
+            no_grad(self.loss_module.teacher_mlp1)
+
         # Print trainable parameters
         if self.global_rank == 0:
             print("\n" + "=" * 80)
@@ -114,16 +124,6 @@ class LightningModelVAE(pl.LightningModule):
             print("\n" + "=" * 80)
             print(f"TOTAL TRAINABLE PARAMETERS: {total_trainable:,}")
             print("=" * 80 + "\n")
-
-        # Disable grad for frozen components in loss_module
-        # These are not trainable and should not be tracked by DDP
-        no_grad(self.vae_model.vision_model)
-        no_grad(self.vae_model.mlp1)
-        no_grad(self.loss_module.perceptual_loss)
-        if self.loss_module.teacher_vision_model is not None:
-            no_grad(self.loss_module.teacher_vision_model)
-        if self.loss_module.teacher_mlp1 is not None:
-            no_grad(self.loss_module.teacher_mlp1)
 
         # Compile models for efficiency
         self.vae_model = torch.compile(self.vae_model)
