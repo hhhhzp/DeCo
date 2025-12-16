@@ -194,84 +194,10 @@ class LightningModelVAE(pl.LightningModule):
             "student_features": student_features,
         }
 
-        ######################
-        # Optimize Generator #
-        ######################
-        self.toggle_optimizer(opt_encoder)
-
-        # DEBUG: Check discriminator gradient status after toggle_optimizer
-        if batch_idx == 0 and self.global_rank == 0:
-            print("\n" + "=" * 80)
-            print("DEBUG: After toggle_optimizer(opt_encoder)")
-            print("=" * 80)
-            disc_params_with_grad = 0
-            disc_params_without_grad = 0
-            for name, param in self.loss_module.discriminator.named_parameters():
-                if param.requires_grad:
-                    disc_params_with_grad += 1
-                else:
-                    disc_params_without_grad += 1
-            print(
-                f"Discriminator params with requires_grad=True: {disc_params_with_grad}"
-            )
-            print(
-                f"Discriminator params with requires_grad=False: {disc_params_without_grad}"
-            )
-
-            encoder_params_with_grad = 0
-            encoder_params_without_grad = 0
-            for name, param in self.vae_model.named_parameters():
-                if param.requires_grad:
-                    encoder_params_with_grad += 1
-                else:
-                    encoder_params_without_grad += 1
-            print(f"Encoder params with requires_grad=True: {encoder_params_with_grad}")
-            print(
-                f"Encoder params with requires_grad=False: {encoder_params_without_grad}"
-            )
-            print("=" * 80 + "\n")
-
-        # Compute generator loss (reconstruction + perceptual + GAN)
-        total_loss, loss_dict = self.loss_module(
-            inputs=img,
-            reconstructions=reconstructed_pixels,
-            extra_result_dict=extra_result_dict,
-            global_step=self.global_step,
-            mode="generator",
-        )
-
-        # Backward and optimize generator (encoder)
-        self.manual_backward(total_loss)
-        opt_encoder.step()
-        opt_encoder.zero_grad()
-        self.untoggle_optimizer(opt_encoder)
-
         ##########################
         # Optimize Discriminator #
         ##########################
         if train_discriminator:
-            self.toggle_optimizer(opt_discriminator)
-
-            # DEBUG: Check discriminator gradient status after toggle_optimizer
-            if batch_idx == 0 and self.global_rank == 0:
-                print("\n" + "=" * 80)
-                print("DEBUG: After toggle_optimizer(opt_discriminator)")
-                print("=" * 80)
-                disc_params_with_grad = 0
-                disc_params_without_grad = 0
-                for name, param in self.loss_module.discriminator.named_parameters():
-                    if param.requires_grad:
-                        disc_params_with_grad += 1
-                    else:
-                        disc_params_without_grad += 1
-                print(
-                    f"Discriminator params with requires_grad=True: {disc_params_with_grad}"
-                )
-                print(
-                    f"Discriminator params with requires_grad=False: {disc_params_without_grad}"
-                )
-                print("=" * 80 + "\n")
-
             # Compute discriminator loss with detached reconstructions
             discriminator_loss, disc_loss_dict = self.loss_module(
                 inputs=img,
@@ -282,42 +208,38 @@ class LightningModelVAE(pl.LightningModule):
             )
 
             # Backward and optimize discriminator
-            self.manual_backward(discriminator_loss)
-
-            # DEBUG: Check if discriminator actually got gradients after backward
-            if batch_idx == 0 and self.global_rank == 0:
-                print("\n" + "=" * 80)
-                print("DEBUG: After manual_backward(discriminator_loss)")
-                print("=" * 80)
-                disc_params_with_actual_grad = 0
-                disc_params_without_actual_grad = 0
-                for name, param in self.loss_module.discriminator.named_parameters():
-                    if param.grad is not None:
-                        disc_params_with_actual_grad += 1
-                    else:
-                        disc_params_without_actual_grad += 1
-                        if param.requires_grad:
-                            print(
-                                f"  WARNING: {name} has requires_grad=True but grad is None!"
-                            )
-                print(
-                    f"Discriminator params with actual gradients: {disc_params_with_actual_grad}"
-                )
-                print(
-                    f"Discriminator params without gradients: {disc_params_without_actual_grad}"
-                )
-                print("=" * 80 + "\n")
-
-            opt_discriminator.step()
             opt_discriminator.zero_grad()
-            self.untoggle_optimizer(opt_discriminator)
+            self.manual_backward(discriminator_loss)
+            self.clip_gradients(
+                opt_discriminator, gradient_clip_val=1.0, gradient_clip_algorithm="norm"
+            )
+            opt_discriminator.step()
+
+        ######################
+        # Optimize Generator #
+        ######################
+        # Compute generator loss (reconstruction + perceptual + GAN)
+        total_loss, loss_dict = self.loss_module(
+            inputs=img,
+            reconstructions=reconstructed_pixels,
+            extra_result_dict=extra_result_dict,
+            global_step=self.global_step,
+            mode="generator",
+        )
+
+        # Backward and optimize generator (encoder)
+        opt_encoder.zero_grad()
+        self.manual_backward(total_loss)
+        self.clip_gradients(
+            opt_encoder, gradient_clip_val=1.0, gradient_clip_algorithm="norm"
+        )
+        opt_encoder.step()
 
         # Update learning rates
         sch_encoder, sch_discriminator = self.lr_schedulers()
         sch_encoder.step()
         if train_discriminator:
             sch_discriminator.step()
-
         # Prepare output dict
         output_dict = {"loss": total_loss}
         output_dict.update(loss_dict)
