@@ -55,7 +55,7 @@ model:
   loss_module:
     class_path: src.models.modules.vae_loss.VAEReconstructionLoss
     init_args:
-      discriminator_start: -1
+      discriminator_start: 10000000
       discriminator_factor: 1.0
       discriminator_weight: 0.1
       lecam_regularization_weight: 0.001
@@ -67,7 +67,7 @@ model:
       logvar_init: 0.0
       distillation_weight: 1.0
       distillation_loss_type: "mse"
-      teacher_model_path: "/apdcephfs/share_300000800/datamultimodal/models/InternVL3-2B"
+      teacher_model_path: null
       select_layer: -1
       downsample_ratio: 0.5
   optimizer:
