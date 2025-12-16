@@ -103,7 +103,7 @@ class LightningModelVAE(pl.LightningModule):
             {"params": params_encoder},
             {"params": params_trainer},
         ]
-
+        print(f"Number of parameters in encoder: {param_groups_encoder}")
         optimizer_encoder = self.optimizer(param_groups_encoder)
         lr_scheduler_encoder = get_constant_schedule_with_warmup(
             optimizer_encoder, num_warmup_steps=1000
