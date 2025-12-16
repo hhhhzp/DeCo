@@ -1,4 +1,4 @@
-export NCCL_IB_DISABLE=1
+#export NCCL_IB_DISABLE=1
 export NCCL_IB_TIMEOUT=3600 
 export TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=3600 
 export NCCL_LAUNCH_MODE=PARALLEL 
@@ -21,5 +21,5 @@ export NGPUS_PER_NODE=8
 export NODE_RANK=${NODE_RANK:-0}
 
 python main.py fit -c configs/vae_training.yaml \
-    --trainer.num_nodes=4 \
+    --trainer.num_nodes=3 \
     --trainer.devices=8
