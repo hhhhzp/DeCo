@@ -19,7 +19,7 @@ trainer:
         name: *exp
   num_sanity_val_steps: 0
   max_steps: 200000  # Train for 1M steps (discriminator starts at 500k)
-  val_check_interval: 2000
+  val_check_interval: 1
   check_val_every_n_epoch: null
   log_every_n_steps: 50
   deterministic: null
