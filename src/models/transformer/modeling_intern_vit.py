@@ -175,7 +175,7 @@ class InternVisionEmbeddings(nn.Module):
         self.embed_dim = config.hidden_size
         self.image_size = config.image_size
         self.patch_size = config.patch_size
-        self.num_learnable_tokens = config.get('num_learnable_tokens', 0)
+        self.num_learnable_tokens = getattr(config, 'num_learnable_tokens', 0)
 
         self.class_embedding = nn.Parameter(
             torch.randn(1, 1, self.embed_dim),
