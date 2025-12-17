@@ -17,6 +17,80 @@ from src.models.transformer.modeling_intern_vit import InternVisionModel
 from src.utils.no_grad import no_grad
 
 
+def rotate_image_batch(images: torch.Tensor, k: int) -> torch.Tensor:
+    """
+    Rotate images by k*90 degrees counterclockwise.
+
+    Args:
+        images: [B, C, H, W] tensor
+        k: rotation factor (0: 0°, 1: 90°, 2: 180°, 3: 270°)
+
+    Returns:
+        Rotated images [B, C, H, W]
+    """
+    if k == 0:
+        return images
+    elif k == 1:  # 90° counterclockwise
+        return torch.rot90(images, k=1, dims=[2, 3])
+    elif k == 2:  # 180°
+        return torch.rot90(images, k=2, dims=[2, 3])
+    elif k == 3:  # 270° counterclockwise (90° clockwise)
+        return torch.rot90(images, k=3, dims=[2, 3])
+    else:
+        raise ValueError(f"Invalid rotation factor k={k}, must be 0, 1, 2, or 3")
+
+
+def rotate_features_back(
+    features: torch.Tensor, k: int, h: int, w: int
+) -> torch.Tensor:
+    """
+    Rotate features back to 0° orientation.
+
+    Args:
+        features: [B, N, C] tensor where N = h*w
+        k: original rotation factor (will rotate back by -k*90°)
+        h: feature map height
+        w: feature map width
+
+    Returns:
+        Rotated features [B, N, C]
+    """
+    if k == 0:
+        return features
+
+    B, N, C = features.shape
+    # Reshape to spatial format
+    features_spatial = features.reshape(B, h, w, C).permute(0, 3, 1, 2)  # [B, C, h, w]
+
+    # Rotate back (clockwise if original was counterclockwise)
+    if k == 1:  # Was 90° CCW, rotate 90° CW (270° CCW)
+        features_spatial = torch.rot90(features_spatial, k=3, dims=[2, 3])
+    elif k == 2:  # Was 180°, rotate 180° back
+        features_spatial = torch.rot90(features_spatial, k=2, dims=[2, 3])
+    elif k == 3:  # Was 270° CCW, rotate 90° CCW
+        features_spatial = torch.rot90(features_spatial, k=1, dims=[2, 3])
+
+    # Reshape back to sequence format
+    features_back = features_spatial.permute(0, 2, 3, 1).reshape(B, N, C)
+    return features_back
+
+
+def create_rotated_batch(pixel_values: torch.Tensor) -> torch.Tensor:
+    """
+    Create a batch with 4 rotations (0°, 90°, 180°, 270°) for each image.
+
+    Args:
+        pixel_values: [B, C, H, W] tensor
+
+    Returns:
+        Rotated batch [B*4, C, H, W] where each group of 4 contains rotations of one image
+    """
+    rotations = []
+    for k in range(4):
+        rotations.append(rotate_image_batch(pixel_values, k))
+    return torch.cat(rotations, dim=0)
+
+
 def hinge_d_loss(logits_real: torch.Tensor, logits_fake: torch.Tensor) -> torch.Tensor:
     """Hinge loss for discriminator."""
     loss_real = torch.mean(F.relu(1.0 - logits_real))
@@ -64,6 +138,7 @@ class VAEReconstructionLoss(nn.Module):
         teacher_model_path: str = None,
         select_layer: int = -1,
         downsample_ratio: float = 0.5,
+        use_rotation_aug: bool = False,
     ):
         """
         Args:
@@ -82,6 +157,7 @@ class VAEReconstructionLoss(nn.Module):
             teacher_model_path: Path to pretrained teacher model (InternVL)
             select_layer: Which layer to use from vision model (-1 for last)
             downsample_ratio: Downsample ratio for pixel shuffle
+            use_rotation_aug: Whether to use rotation augmentation (0°, 90°, 180°, 270°)
         """
         super().__init__()
 
@@ -121,6 +197,7 @@ class VAEReconstructionLoss(nn.Module):
 
         self.distillation_weight = distillation_weight
         self.distillation_loss_type = distillation_loss_type
+        self.use_rotation_aug = use_rotation_aug
 
     def init_teacher_model(self, pretrained_model_path: str):
         """
@@ -191,46 +268,126 @@ class VAEReconstructionLoss(nn.Module):
         x = x.permute(0, 2, 1, 3).contiguous()
         return x
 
-    def extract_teacher_features(self, pixel_values):
+    def extract_teacher_features(self, pixel_values, use_rotation_aug=False):
         """
         Extract features from frozen teacher model.
-        :param pixel_values: input image [B, C, H, W] in range [-1, 1]
-        :return: teacher features [B, num_patches, hidden_size]
+
+        Args:
+            pixel_values: input image [B, C, H, W] in range [-1, 1]
+            use_rotation_aug: if True, apply rotation augmentation (0°, 90°, 180°, 270°)
+                             and average features after rotating back
+
+        Returns:
+            teacher features [B, num_patches, hidden_size]
         """
         if self.teacher_vision_model is None or self.teacher_mlp1 is None:
             return None
 
-        with torch.no_grad():
-            # Normalize to ImageNet stats
-            pixel_values = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(
-                pixel_values * 0.5 + 0.5
-            )
+        with torch.inference_mode():
+            if use_rotation_aug:
+                # Create rotated versions: [B*4, C, H, W]
+                B = pixel_values.shape[0]
+                pixel_values_rotated = create_rotated_batch(pixel_values)
 
-            # Extract vision features
-            if self.select_layer == -1:
-                vit_embeds = self.teacher_vision_model(
-                    pixel_values=pixel_values,
-                    output_hidden_states=False,
-                    return_dict=True,
-                ).last_hidden_state
+                # Normalize to ImageNet stats
+                pixel_values_rotated = Normalize(
+                    IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
+                )(pixel_values_rotated * 0.5 + 0.5)
+
+                # Extract vision features for all rotations in one forward pass
+                if self.select_layer == -1:
+                    vit_embeds = self.teacher_vision_model(
+                        pixel_values=pixel_values_rotated,
+                        output_hidden_states=False,
+                        return_dict=True,
+                    ).last_hidden_state
+                else:
+                    vit_embeds = self.teacher_vision_model(
+                        pixel_values=pixel_values_rotated,
+                        output_hidden_states=True,
+                        return_dict=True,
+                    ).hidden_states[self.select_layer]
+
+                vit_embeds = vit_embeds[:, 1:, :]  # Remove CLS token [B*4, N, C]
+
+                # Get spatial dimensions
+                h = w = int(vit_embeds.shape[1] ** 0.5)
+
+                # Reshape all features to spatial format at once [B*4, h, w, C]
+                vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], h, w, -1)
+
+                # Split into 4 groups and rotate back
+                vit_embeds_list = torch.chunk(vit_embeds, 4, dim=0)
+                rotated_back_list = []
+
+                for k, vit_embeds_k in enumerate(vit_embeds_list):
+                    if k == 0:
+                        # No rotation needed for 0°
+                        rotated_back_list.append(vit_embeds_k)
+                    else:
+                        # Rotate back: convert to [B, C, h, w] format
+                        vit_spatial = vit_embeds_k.permute(0, 3, 1, 2)
+
+                        # Rotate back (inverse rotation)
+                        if k == 1:  # Was 90° CCW, rotate 270° CCW (90° CW)
+                            vit_spatial = torch.rot90(vit_spatial, k=3, dims=[2, 3])
+                        elif k == 2:  # Was 180°, rotate 180° back
+                            vit_spatial = torch.rot90(vit_spatial, k=2, dims=[2, 3])
+                        elif k == 3:  # Was 270° CCW, rotate 90° CCW
+                            vit_spatial = torch.rot90(vit_spatial, k=1, dims=[2, 3])
+
+                        # Convert back to [B, h, w, C]
+                        vit_spatial = vit_spatial.permute(0, 2, 3, 1)
+                        rotated_back_list.append(vit_spatial)
+
+                # Stack and average rotated features [B, h, w, C]
+                vit_embeds = torch.stack(rotated_back_list, dim=0).mean(dim=0)
+
+                # Apply pixel shuffle (batched operation)
+                vit_embeds = self.pixel_shuffle(
+                    vit_embeds, scale_factor=self.downsample_ratio
+                )
+
+                # Reshape to sequence format [B, N', C]
+                vit_embeds = vit_embeds.reshape(
+                    vit_embeds.shape[0], -1, vit_embeds.shape[-1]
+                )
+
+                # Apply MLP (batched operation)
+                vit_embeds = self.teacher_mlp1(vit_embeds)
+
             else:
-                vit_embeds = self.teacher_vision_model(
-                    pixel_values=pixel_values,
-                    output_hidden_states=True,
-                    return_dict=True,
-                ).hidden_states[self.select_layer]
+                # Original implementation without rotation augmentation
+                # Normalize to ImageNet stats
+                pixel_values = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(
+                    pixel_values * 0.5 + 0.5
+                )
 
-            vit_embeds = vit_embeds[:, 1:, :]  # Remove CLS token
+                # Extract vision features
+                if self.select_layer == -1:
+                    vit_embeds = self.teacher_vision_model(
+                        pixel_values=pixel_values,
+                        output_hidden_states=False,
+                        return_dict=True,
+                    ).last_hidden_state
+                else:
+                    vit_embeds = self.teacher_vision_model(
+                        pixel_values=pixel_values,
+                        output_hidden_states=True,
+                        return_dict=True,
+                    ).hidden_states[self.select_layer]
 
-            h = w = int(vit_embeds.shape[1] ** 0.5)
-            vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], h, w, -1)
-            vit_embeds = self.pixel_shuffle(
-                vit_embeds, scale_factor=self.downsample_ratio
-            )
-            vit_embeds = vit_embeds.reshape(
-                vit_embeds.shape[0], -1, vit_embeds.shape[-1]
-            )
-            vit_embeds = self.teacher_mlp1(vit_embeds)
+                vit_embeds = vit_embeds[:, 1:, :]  # Remove CLS token
+
+                h = w = int(vit_embeds.shape[1] ** 0.5)
+                vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], h, w, -1)
+                vit_embeds = self.pixel_shuffle(
+                    vit_embeds, scale_factor=self.downsample_ratio
+                )
+                vit_embeds = vit_embeds.reshape(
+                    vit_embeds.shape[0], -1, vit_embeds.shape[-1]
+                )
+                vit_embeds = self.teacher_mlp1(vit_embeds)
 
         return vit_embeds
 
@@ -288,7 +445,9 @@ class VAEReconstructionLoss(nn.Module):
         # Extract teacher features using teacher model
         teacher_features = None
         if self.distillation_weight > 0.0 and self.teacher_vision_model is not None:
-            teacher_features = self.extract_teacher_features(inputs)
+            teacher_features = self.extract_teacher_features(
+                inputs, use_rotation_aug=self.use_rotation_aug
+            )
 
         # Convert inputs from [-1, 1] to [0, 1] for loss computation
         from src.utils.image_utils import normalize_from_neg1_to_1, denormalize_imagenet

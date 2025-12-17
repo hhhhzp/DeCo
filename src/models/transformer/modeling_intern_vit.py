@@ -169,13 +169,13 @@ NORM2FN = {
 
 
 class InternVisionEmbeddings(nn.Module):
-    def __init__(self, config: InternVisionConfig, num_learnable_tokens: int = 0):
+    def __init__(self, config: InternVisionConfig):
         super().__init__()
         self.config = config
         self.embed_dim = config.hidden_size
         self.image_size = config.image_size
         self.patch_size = config.patch_size
-        self.num_learnable_tokens = num_learnable_tokens
+        self.num_learnable_tokens = config.get('num_learnable_tokens', 0)
 
         self.class_embedding = nn.Parameter(
             torch.randn(1, 1, self.embed_dim),
@@ -559,6 +559,13 @@ class InternVisionModel(PreTrainedModel):
             return_dict=return_dict,
         )
         last_hidden_state = encoder_outputs.last_hidden_state
+
+        # Remove learnable query tokens from output if they exist
+        if self.config.num_learnable_tokens > 0:
+            last_hidden_state = last_hidden_state[
+                :, : -self.config.num_learnable_tokens, :
+            ]
+
         pooled_output = last_hidden_state[:, 0, :]
 
         if not return_dict:
