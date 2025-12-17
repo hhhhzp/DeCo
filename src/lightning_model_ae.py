@@ -340,6 +340,24 @@ class LightningModelVAE(pl.LightningModule):
         samples = self.predict_step(batch, batch_idx)
         return samples
 
+    def load_state_dict(self, state_dict, strict=True):
+        """
+        Override load_state_dict to handle DDP and torch.compile prefixes.
+        Cleans up 'module._orig_mod.' patterns from checkpoint keys.
+        """
+        # Clean up DDP and torch.compile prefixes while preserving module structure
+        # Expected format: vae_model.module._orig_mod.xxx or loss_module.module._orig_mod.xxx
+        # Target format: vae_model.xxx or loss_module.xxx
+        new_state_dict = {}
+        for key, value in state_dict.items():
+            new_key = key
+            # Also handle cases with only one of the prefixes
+            new_key = new_key.replace('.module.', '.')
+            new_state_dict[new_key] = value
+
+        # Call parent's load_state_dict with cleaned keys
+        return super().load_state_dict(new_state_dict, strict=strict)
+
     def state_dict(self, *args, destination=None, prefix="", keep_vars=False):
         if destination is None:
             destination = {}
