@@ -48,7 +48,7 @@ class LightningModelVAE(pl.LightningModule):
         self.eval_original_model = eval_original_model
         self.pretrain_model_path = pretrain_model_path
 
-        self._strict_loading = False
+        self._strict_loading = True
         self._logged_images_count = 0
 
         # Automatic optimization disabled for manual discriminator training
