@@ -91,14 +91,14 @@ data:
     class_path: src.data.dataset.imagenet.PixHFDataset
     init_args:
       root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k
-      resolution: 224  # Input resolution
+      resolution: 448  # Input resolution
       split: train
   
   eval_dataset:
     class_path: src.data.dataset.imagenet.PixHFDataset
     init_args:
       root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k
-      resolution: 224
+      resolution: 256
       split: validation
   
   # Data loading settings
