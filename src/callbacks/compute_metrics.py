@@ -24,7 +24,9 @@ class ComputeMetricsHook(Callback):
         # 初始化指标计算器，dist_sync_on_step=False 表示我们只在 epoch 结束时同步
         # data_range=1.0 对应 [0, 1] 的数据范围
         self.psnr = PeakSignalNoiseRatio(data_range=1.0)
-        self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0)
+        self.ssim = StructuralSimilarityIndexMeasure(
+            data_range=1.0, gaussian_kernel=False
+        )
 
         # FID 相关
         self.compute_fid = compute_fid
