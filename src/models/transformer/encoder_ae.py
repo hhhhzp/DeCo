@@ -38,6 +38,8 @@ class VAEModel(nn.Module):
         config = InternVLChatConfig.from_pretrained(encoder_config_path)
         vision_config = config.vision_config
         vision_config.drop_path_rate = 0.0
+        vision_config.attention_dropout = 0.0
+        vision_config.dropout = 0.0
         vision_config.num_learnable_tokens = 16
         self.vision_model = InternVisionModel(vision_config)
 
@@ -88,6 +90,8 @@ class VAEModel(nn.Module):
             pretrained_model_path, trust_remote_code=True
         )
         config.vision_config.drop_path_rate = 0.0
+        config.vision_config.attention_dropout = 0.0
+        config.vision_config.dropout = 0.0
         model = AutoModel.from_pretrained(
             pretrained_model_path,
             config=config,
