@@ -197,8 +197,9 @@ class LightningModelVAE(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         img, _, metadata = batch
 
-        # Get optimizers
+        # Get optimizers and schedulers
         opt_generator, opt_discriminator = self.optimizers()
+        sch_encoder, sch_discriminator = self.lr_schedulers()
 
         # Add global step to metadata
         metadata = metadata or {}
@@ -225,6 +226,8 @@ class LightningModelVAE(pl.LightningModule):
         ######################
         # Optimize Generator #
         ######################
+        self.toggle_optimizer(opt_generator)
+
         # Compute generator loss (reconstruction + perceptual + GAN)
         total_loss, loss_dict = loss_module(
             inputs=img,
@@ -235,12 +238,15 @@ class LightningModelVAE(pl.LightningModule):
         )
 
         # Backward and optimize generator (encoder)
-        opt_generator.zero_grad()
         self.manual_backward(total_loss)
         self.clip_gradients(
             opt_generator, gradient_clip_val=1.0, gradient_clip_algorithm="norm"
         )
         opt_generator.step()
+        opt_generator.zero_grad()
+        sch_encoder.step()
+
+        self.untoggle_optimizer(opt_generator)
 
         # Prepare output dict
         output_dict = {"loss": total_loss}
@@ -250,6 +256,8 @@ class LightningModelVAE(pl.LightningModule):
         # Optimize Discriminator #
         ##########################
         if train_discriminator:
+            self.toggle_optimizer(opt_discriminator)
+
             # Compute discriminator loss with detached reconstructions
             discriminator_loss, disc_loss_dict = loss_module(
                 inputs=img,
@@ -260,20 +268,17 @@ class LightningModelVAE(pl.LightningModule):
             )
 
             # Backward and optimize discriminator
-            opt_discriminator.zero_grad()
             self.manual_backward(discriminator_loss)
             self.clip_gradients(
                 opt_discriminator, gradient_clip_val=1.0, gradient_clip_algorithm="norm"
             )
             opt_discriminator.step()
+            opt_discriminator.zero_grad()
+            sch_discriminator.step()
+
+            self.untoggle_optimizer(opt_discriminator)
 
             output_dict.update(disc_loss_dict)
-
-        # Update learning rates
-        sch_encoder, sch_discriminator = self.lr_schedulers()
-        sch_encoder.step()
-        if train_discriminator:
-            sch_discriminator.step()
 
         # Log learning rates
         output_dict["lr_encoder"] = opt_generator.param_groups[0]['lr']

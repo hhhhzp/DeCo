@@ -569,8 +569,12 @@ class VAEReconstructionLoss(nn.Module):
         )
 
         # Convert from [-1, 1] to [0, 1]
-        inputs_01 = (inputs + 1) / 2
-        reconstructions_01 = (reconstructions + 1) / 2
+        from src.utils.image_utils import normalize_from_neg1_to_1, denormalize_imagenet
+
+        inputs_01 = normalize_from_neg1_to_1(inputs)
+
+        # Convert reconstructions from ImageNet normalization to [0, 1]
+        reconstructions_01 = denormalize_imagenet(reconstructions, clamp=True)
 
         # Discriminator parameters are already trainable by default
         # No need to manually set requires_grad=True
@@ -585,24 +589,28 @@ class VAEReconstructionLoss(nn.Module):
         # Optional LeCam regularization
         lecam_loss = torch.zeros((), device=inputs.device)
         if self.lecam_regularization_weight > 0.0:
+            # 计算 mean
+            curr_real_mean = torch.mean(logits_real)
+            curr_fake_mean = torch.mean(logits_fake)
+
             lecam_loss = (
                 compute_lecam_loss(
-                    torch.mean(logits_real),
-                    torch.mean(logits_fake),
+                    curr_real_mean,
+                    curr_fake_mean,
                     self.ema_real_logits_mean,
                     self.ema_fake_logits_mean,
                 )
                 * self.lecam_regularization_weight
             )
 
-            self.ema_real_logits_mean = (
-                self.ema_real_logits_mean * self.lecam_ema_decay
-                + torch.mean(logits_real).detach() * (1 - self.lecam_ema_decay)
-            )
-            self.ema_fake_logits_mean = (
-                self.ema_fake_logits_mean * self.lecam_ema_decay
-                + torch.mean(logits_fake).detach() * (1 - self.lecam_ema_decay)
-            )
+            # 关键修改：原地更新 Buffer
+            if self.training:  # 只在训练时更新 EMA
+                self.ema_real_logits_mean.mul_(self.lecam_ema_decay).add_(
+                    curr_real_mean.detach(), alpha=(1 - self.lecam_ema_decay)
+                )
+                self.ema_fake_logits_mean.mul_(self.lecam_ema_decay).add_(
+                    curr_fake_mean.detach(), alpha=(1 - self.lecam_ema_decay)
+                )
 
         discriminator_loss += lecam_loss
 
