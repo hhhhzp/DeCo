@@ -96,7 +96,7 @@ class VAEModel(nn.Module):
         )
 
         # Extract vision_model and mlp1
-        self.vision_model.load_state_dict(model.vision_model.state_dict())
+        self.vision_model.load_state_dict(model.vision_model.state_dict(), strict=False)
         self.mlp1.load_state_dict(model.mlp1.state_dict())
 
         print("Pretrained encoder weights loaded successfully!")
