@@ -98,7 +98,7 @@ data:
     class_path: src.data.dataset.imagenet.PixHFDataset
     init_args:
       root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k
-      resolution: 256
+      resolution: 448
       split: validation
   
   # Data loading settings
