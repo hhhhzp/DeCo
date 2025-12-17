@@ -38,7 +38,7 @@ class VAEModel(nn.Module):
         config = InternVLChatConfig.from_pretrained(encoder_config_path)
         vision_config = config.vision_config
         vision_config.drop_path_rate = 0.0
-        vision_config.num_learnable_tokens = 0
+        vision_config.num_learnable_tokens = 16
         self.vision_model = InternVisionModel(vision_config)
 
         vit_hidden_size = config.vision_config.hidden_size
