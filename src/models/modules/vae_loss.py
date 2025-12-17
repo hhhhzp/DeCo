@@ -495,21 +495,33 @@ class VAEReconstructionLoss(nn.Module):
 
         # Compute distillation loss
         distillation_loss = torch.zeros((), device=inputs.device)
+        cosine_loss = torch.zeros((), device=inputs.device)
+        mse_loss = torch.zeros((), device=inputs.device)
+
         if (
             self.distillation_weight > 0.0
             and student_features is not None
             and teacher_features is not None
         ):
             if self.distillation_loss_type == "mse":
-                distillation_loss = F.mse_loss(
+                mse_loss = F.mse_loss(
                     student_features, teacher_features, reduction="mean"
                 )
+                distillation_loss = mse_loss
             elif self.distillation_loss_type == "cosine":
                 # Cosine similarity loss (1 - cosine_similarity)
                 student_norm = F.normalize(student_features, p=2, dim=-1)
                 teacher_norm = F.normalize(teacher_features, p=2, dim=-1)
                 cosine_sim = (student_norm * teacher_norm).sum(dim=-1).mean()
-                distillation_loss = 1.0 - cosine_sim
+                cosine_loss = 1.0 - cosine_sim
+
+                # Also compute MSE loss
+                mse_loss = F.mse_loss(
+                    student_features, teacher_features, reduction="mean"
+                )
+
+                # Combine both losses
+                distillation_loss = cosine_loss + mse_loss
             else:
                 raise ValueError(
                     f"Unsupported distillation_loss_type {self.distillation_loss_type}"
@@ -537,6 +549,8 @@ class VAEReconstructionLoss(nn.Module):
             d_weight=d_weight,
             gan_loss=generator_loss.detach(),
             distillation_loss=distillation_loss.detach(),
+            distillation_cosine_loss=cosine_loss.detach(),
+            mse_loss=mse_loss.detach(),
         )
 
         return total_loss, loss_dict
