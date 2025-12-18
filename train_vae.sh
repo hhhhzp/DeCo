@@ -22,5 +22,4 @@ export NODE_RANK=${NODE_RANK:-0}
 
 python main.py fit -c configs/vae_training.yaml \
     --trainer.num_nodes=4 \
-    --trainer.devices=8 \
-    --ckpt_path=Sphere_vae_training_workdir/exp_Sphere_VAE_Stage1/epoch=0-step=14000.ckpt
+    --trainer.devices=8
