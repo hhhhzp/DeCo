@@ -436,6 +436,9 @@ class VAEReconstructionLoss(nn.Module):
         global_step: int,
     ) -> Tuple[torch.Tensor, Mapping[Text, torch.Tensor]]:
         """Generator training step."""
+        inputs = (inputs * 0.5) + 0.5
+        reconstructions = (reconstructions * 0.5) + 0.5
+
         inputs = inputs.contiguous()
         reconstructions = reconstructions.contiguous()
 
@@ -450,22 +453,18 @@ class VAEReconstructionLoss(nn.Module):
             )
 
         # Convert inputs from [-1, 1] to [0, 1] for loss computation
-        from src.utils.image_utils import normalize_from_neg1_to_1, denormalize_imagenet
+        # from src.utils.image_utils import normalize_from_neg1_to_1, denormalize_imagenet
 
-        inputs_01 = normalize_from_neg1_to_1(inputs)
+        # inputs = normalize_from_neg1_to_1(inputs)
 
-        # Convert reconstructions from ImageNet normalization to [0, 1]
-        reconstructions_01 = denormalize_imagenet(reconstructions, clamp=True)
+        # # Convert reconstructions from ImageNet normalization to [0, 1]
+        # reconstructions = denormalize_imagenet(reconstructions, clamp=True)
 
         # Compute reconstruction loss (MSE or L1)
         if self.reconstruction_loss == "l1":
-            reconstruction_loss = F.l1_loss(
-                inputs_01, reconstructions_01, reduction="mean"
-            )
+            reconstruction_loss = F.l1_loss(inputs, reconstructions, reduction="mean")
         elif self.reconstruction_loss == "l2":
-            reconstruction_loss = F.mse_loss(
-                inputs_01, reconstructions_01, reduction="mean"
-            )
+            reconstruction_loss = F.mse_loss(inputs, reconstructions, reduction="mean")
         else:
             raise ValueError(
                 f"Unsupported reconstruction_loss {self.reconstruction_loss}"
@@ -474,7 +473,7 @@ class VAEReconstructionLoss(nn.Module):
         reconstruction_loss *= self.reconstruction_weight
 
         # Compute perceptual loss (LPIPS)
-        perceptual_loss = self.perceptual_loss(inputs_01, reconstructions_01).mean()
+        perceptual_loss = self.perceptual_loss(inputs, reconstructions).mean()
 
         # Compute GAN loss
         generator_loss = torch.zeros((), device=inputs.device)
@@ -488,7 +487,7 @@ class VAEReconstructionLoss(nn.Module):
         if discriminator_factor > 0.0 and self.discriminator_weight > 0.0:
             # Use discriminator without updating its parameters
             # No need to set requires_grad=False, just don't backward through it
-            logits_fake = self.discriminator(reconstructions_01)
+            logits_fake = self.discriminator(reconstructions)
             generator_loss = -torch.mean(logits_fake)
 
         d_weight *= self.discriminator_weight
@@ -567,20 +566,23 @@ class VAEReconstructionLoss(nn.Module):
             if self.should_discriminator_be_trained(global_step)
             else 0
         )
-
+        inputs = (inputs * 0.5) + 0.5
+        reconstructions = (reconstructions * 0.5) + 0.5
         # Convert from [-1, 1] to [0, 1]
-        from src.utils.image_utils import normalize_from_neg1_to_1, denormalize_imagenet
+        # from src.utils.image_utils import normalize_from_neg1_to_1, denormalize_imagenet
 
-        inputs_01 = normalize_from_neg1_to_1(inputs)
+        # inputs_01 = normalize_from_neg1_to_1(inputs)
 
-        # Convert reconstructions from ImageNet normalization to [0, 1]
-        reconstructions_01 = denormalize_imagenet(reconstructions, clamp=True)
+        # # Convert reconstructions from ImageNet normalization to [0, 1]
+        # reconstructions_01 = denormalize_imagenet(reconstructions, clamp=True)
 
         # Discriminator parameters are already trainable by default
         # No need to manually set requires_grad=True
-        real_images = inputs_01  # .detach().requires_grad_(True)
-        logits_real = self.discriminator(real_images)
-        logits_fake = self.discriminator(reconstructions_01.detach())
+        # real_images = inputs_01  # .detach().requires_grad_(True)
+        # logits_real = self.discriminator(real_images)
+        # logits_fake = self.discriminator(reconstructions_01.detach())
+        logits_real = self.discriminator(inputs)
+        logits_fake = self.discriminator(reconstructions.detach())
 
         discriminator_loss = discriminator_factor * hinge_d_loss(
             logits_real=logits_real, logits_fake=logits_fake

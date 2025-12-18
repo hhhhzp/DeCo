@@ -213,9 +213,10 @@ class LightningModelVAE(pl.LightningModule):
             self.global_step
         )
 
-        # Forward pass through VAE model to get reconstructions and features
-        reconstructed_pixels, student_features = self.vae_model(
-            img, return_features=True
+        # Forward pass: encode -> sample -> decode
+        # Use stochastic sampling (use_mode=False) for training
+        reconstructed_pixels, student_features, kl_loss = self.vae_model(
+            img, return_features=True, return_kl_loss=True, use_mode=False
         )
 
         # Pass student features to loss module for distillation
@@ -236,6 +237,10 @@ class LightningModelVAE(pl.LightningModule):
             global_step=self.global_step,
             mode="generator",
         )
+
+        # Add KL loss for Power Spherical regularization
+        total_loss = total_loss + 4e-3 * kl_loss
+        loss_dict["kl_loss"] = kl_loss
 
         # Backward and optimize generator (encoder)
         self.manual_backward(total_loss)
@@ -294,7 +299,8 @@ class LightningModelVAE(pl.LightningModule):
 
         with torch.no_grad():
             # Encode to latent and decode to reconstruct
-            samples = self.vae_model(img).float()
+            # Use deterministic mode (use_mode=True) for inference
+            samples = self.vae_model(img, use_mode=True).float()
 
             # Denormalize reconstructions from ImageNet normalization to [0, 255] uint8
             from src.utils.image_utils import denormalize_to_uint8
