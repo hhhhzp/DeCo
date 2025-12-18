@@ -1,7 +1,7 @@
 # lightning.pytorch==2.4.0
 seed_everything: true
 tags:
-  exp: &exp VAE_Encoder_Training
+  exp: &exp Sphere_VAE_Stage1
 torch_hub_dir: ~/.cache/torch/hub
 huggingface_cache_dir: null
 trainer:
@@ -87,11 +87,13 @@ model:
 
 data:
   train_dataset:
-    class_path: src.data.dataset.imagenet.PixHFDataset
+    class_path: src.data.dataset.imagenet.PixMultiJSONLDataset
     init_args:
-      root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k
+      config_path: scripts/total_images.json
       resolution: 224  # Input resolution
-      split: train
+      random_crop: false
+      random_flip: false
+      max_num_samples: null
   
   eval_dataset:
     class_path: src.data.dataset.imagenet.PixHFDataset

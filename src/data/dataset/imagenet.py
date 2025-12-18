@@ -195,3 +195,282 @@ class PixHFDataset(Dataset):
             "class": target,
         }
         return normalized_image, target, metadata
+
+
+import json
+import os
+
+
+class PixJSONLDataset(Dataset):
+    def __init__(
+        self,
+        root,
+        annotation,
+        resolution=256,
+        random_crop=False,
+        random_flip=False,
+        max_num_samples=None,
+    ):
+        """
+        Dataset for JSONL format data.
+
+        Args:
+            root: Root directory containing the images
+            annotation: Path to the JSONL annotation file
+            resolution: Image resolution
+            random_crop: Whether to use random crop
+            random_flip: Whether to use random horizontal flip
+            max_num_samples: Maximum number of samples to use (for subset evaluation)
+        """
+        super().__init__()
+
+        self.root = root
+        self.resolution = resolution
+
+        # Load JSONL annotations
+        self.samples = []
+        with open(annotation, 'r', encoding='utf-8') as f:
+            for line in f:
+                item = json.loads(line.strip())
+                if 'target_image' in item:
+                    self.samples.append(item)
+
+        # Handle max_num_samples
+        if max_num_samples is not None and max_num_samples < len(self.samples):
+            np.random.seed(42)
+            selected_indices = np.random.choice(
+                len(self.samples),
+                size=min(max_num_samples, len(self.samples)),
+                replace=False,
+            ).tolist()
+            self.samples = [self.samples[i] for i in selected_indices]
+
+        # Setup transforms
+        if random_crop:
+            self.transform = transforms.Compose(
+                [
+                    transforms.Resize(resolution),
+                    transforms.RandomCrop(resolution),
+                    transforms.RandomHorizontalFlip(),
+                ]
+            )
+        else:
+            if random_flip is False:
+                self.transform = partial(center_crop_fn, image_size=resolution)
+            else:
+                self.transform = transforms.Compose(
+                    [
+                        transforms.Lambda(
+                            partial(center_crop_fn, image_size=resolution)
+                        ),
+                        transforms.RandomHorizontalFlip(),
+                    ]
+                )
+
+        self.normalize = transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx: int):
+        max_retries = 5  # 最大重试次数
+
+        for attempt in range(max_retries):
+            try:
+                # 如果是重试，随机选择另一个索引
+                if attempt > 0:
+                    idx = np.random.randint(0, len(self.samples))
+
+                # 1. Get sample metadata
+                item = self.samples[idx]
+
+                # 2. Construct image path
+                image_rel_path = item['target_image']
+                image_path = os.path.join(self.root, image_rel_path)
+
+                # 3. Load and process image
+                raw_image = Image.open(image_path).convert('RGB')
+
+                # 4. Apply transforms
+                raw_image = self.transform(raw_image)
+
+                # 5. Convert to tensor
+                raw_image = to_tensor(raw_image)
+
+                # 6. Normalize
+                normalized_image = self.normalize(raw_image)
+
+                # 7. Set target to 0 (as requested)
+                target = 0
+
+                # 8. Construct metadata
+                metadata = {
+                    "raw_image": raw_image,  # Unnormalized tensor (0-1)
+                    "class": target,
+                }
+
+                return normalized_image, target, metadata
+
+            except Exception as e:
+                # 如果是最后一次尝试，抛出异常
+                if attempt == max_retries - 1:
+                    raise RuntimeError(
+                        f"Failed to load image after {max_retries} attempts. Last error: {e}"
+                    )
+                # 否则继续重试
+                continue
+
+
+class PixMultiJSONLDataset(Dataset):
+    """
+    Dataset that loads multiple JSONL datasets from a JSON config file.
+    Supports merging multiple datasets with repeat_time parameter.
+    """
+
+    def __init__(
+        self,
+        config_path,
+        resolution=256,
+        random_crop=False,
+        random_flip=False,
+        max_num_samples=None,
+    ):
+        """
+        Args:
+            config_path: Path to JSON config file (e.g., scripts/total_images.json)
+            resolution: Image resolution
+            random_crop: Whether to use random crop
+            random_flip: Whether to use random horizontal flip
+            max_num_samples: Maximum number of samples to use (applied after merging)
+        """
+        super().__init__()
+
+        self.resolution = resolution
+        self.config_path = config_path
+
+        # Load config file
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+
+        # Collect all samples from all datasets
+        self.samples = []
+        self.dataset_names = []
+
+        for dataset_name, dataset_config in config.items():
+            root = dataset_config['root']
+            annotation = dataset_config['annotation']
+            repeat_time = dataset_config.get('repeat_time', 1)
+
+            # Load samples from this dataset
+            dataset_samples = []
+            with open(annotation, 'r', encoding='utf-8') as f:
+                for line in f:
+                    item = json.loads(line.strip())
+                    if 'target_image' in item:
+                        # Add root path to each sample
+                        sample = {
+                            'root': root,
+                            'target_image': item['target_image'],
+                            'dataset_name': dataset_name,
+                        }
+                        dataset_samples.append(sample)
+
+            # Repeat samples according to repeat_time
+            for _ in range(repeat_time):
+                self.samples.extend(dataset_samples)
+
+            print(
+                f"Loaded {len(dataset_samples)} samples from {dataset_name} "
+                f"(repeated {repeat_time} times, total: {len(dataset_samples) * repeat_time})"
+            )
+
+        print(f"Total samples after merging: {len(self.samples)}")
+
+        # Handle max_num_samples
+        if max_num_samples is not None and max_num_samples < len(self.samples):
+            np.random.seed(42)
+            selected_indices = np.random.choice(
+                len(self.samples),
+                size=min(max_num_samples, len(self.samples)),
+                replace=False,
+            ).tolist()
+            self.samples = [self.samples[i] for i in selected_indices]
+            print(f"Subsampled to {len(self.samples)} samples")
+
+        # Setup transforms
+        if random_crop:
+            self.transform = transforms.Compose(
+                [
+                    transforms.Resize(resolution),
+                    transforms.RandomCrop(resolution),
+                    transforms.RandomHorizontalFlip(),
+                ]
+            )
+        else:
+            if random_flip is False:
+                self.transform = partial(center_crop_fn, image_size=resolution)
+            else:
+                self.transform = transforms.Compose(
+                    [
+                        transforms.Lambda(
+                            partial(center_crop_fn, image_size=resolution)
+                        ),
+                        transforms.RandomHorizontalFlip(),
+                    ]
+                )
+
+        self.normalize = transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx: int):
+        max_retries = 5  # 最大重试次数
+
+        for attempt in range(max_retries):
+            try:
+                # 如果是重试，随机选择另一个索引
+                if attempt > 0:
+                    idx = np.random.randint(0, len(self.samples))
+
+                # 1. Get sample metadata
+                item = self.samples[idx]
+                root = item['root']
+                image_rel_path = item['target_image']
+
+                # 2. Construct image path
+                image_path = os.path.join(root, image_rel_path)
+
+                # 3. Load and process image
+                raw_image = Image.open(image_path).convert('RGB')
+
+                # 4. Apply transforms
+                raw_image = self.transform(raw_image)
+
+                # 5. Convert to tensor
+                raw_image = to_tensor(raw_image)
+
+                # 6. Normalize
+                normalized_image = self.normalize(raw_image)
+
+                # 7. Set target to 0 (as requested)
+                target = 0
+
+                # 8. Construct metadata
+                metadata = {
+                    "raw_image": raw_image,  # Unnormalized tensor (0-1)
+                    "class": target,
+                    "dataset_name": item['dataset_name'],
+                }
+
+                return normalized_image, target, metadata
+
+            except Exception as e:
+                # 如果是最后一次尝试，抛出异常
+                if attempt == max_retries - 1:
+                    raise RuntimeError(
+                        f"Failed to load image after {max_retries} attempts. "
+                        f"Last error: {e}, Image path: {image_path if 'image_path' in locals() else 'unknown'}"
+                    )
+                # 否则继续重试
+                continue

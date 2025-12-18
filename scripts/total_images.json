@@ -1,0 +1,23 @@
+{
+  "journeydb": {
+    "root": "/apdcephfs/share_300000800/datamultimodal/zhenpeng_data/BLIP3o-Pretrain-JourneyDB",
+    "annotation": "/apdcephfs/share_300000800/datamultimodal/zhenpeng_data/BLIP3o-Pretrain-JourneyDB/meta_t2i.jsonl",
+    "data_augment": false,
+    "max_dynamic_patch": 12,
+    "repeat_time": 1
+  },
+  "blip_short": {
+    "root": "/apdcephfs/share_300000800/datamultimodal/zhenpeng_data/BLIP3o-Pretrain-Short-Caption",
+    "annotation": "/apdcephfs/share_300000800/datamultimodal/zhenpeng_data/BLIP3o-Pretrain-Short-Caption/meta_t2i.jsonl",
+    "data_augment": false,
+    "max_dynamic_patch": 12,
+    "repeat_time": 1
+  },
+  "blip_long": {
+    "root": "/apdcephfs/share_300000800/datamultimodal/zhenpeng_data/BLIP3o-Pretrain-Long-Caption",
+    "annotation": "/apdcephfs/share_300000800/datamultimodal/zhenpeng_data/BLIP3o-Pretrain-Long-Caption/metadata_t2i.jsonl",
+    "data_augment": false,
+    "max_dynamic_patch": 12,
+    "repeat_time": 1
+  }
+}
