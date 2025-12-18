@@ -10,8 +10,8 @@ export NCCL_SOCKET_IFNAME=bond1
 # export NCCL_DEBUG=INFO
 export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
 
-# export WANDB_RESUME=auto
-# export WANDB_RUN_ID=uzh3m4s6
+export WANDB_RESUME=auto
+export WANDB_RUN_ID=5xisdigq
 
 # multi-node training in lightning style, e.g., 4 nodes
 export MASTER_ADDR=29.111.44.218
@@ -22,4 +22,5 @@ export NODE_RANK=${NODE_RANK:-0}
 
 python main.py fit -c configs/vae_training.yaml \
     --trainer.num_nodes=4 \
-    --trainer.devices=8
+    --trainer.devices=8 \
+    --ckpt_path=Sphere_vae_training_workdir/exp_Sphere_VAE_Stage1/epoch=0-step=14000.ckpt
