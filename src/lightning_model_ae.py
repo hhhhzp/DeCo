@@ -162,7 +162,7 @@ class LightningModelVAE(pl.LightningModule):
         params_encoder = filter_nograd_tensors(vae_model.parameters())
         optimizer_encoder = self.optimizer([{"params": params_encoder}])
         lr_scheduler_encoder = get_constant_schedule_with_warmup(
-            optimizer_encoder, num_warmup_steps=6000
+            optimizer_encoder, num_warmup_steps=0
         )
 
         # Optimizer for discriminator
@@ -173,7 +173,7 @@ class LightningModelVAE(pl.LightningModule):
             [{"params": params_discriminator}]
         )
         lr_scheduler_discriminator = get_constant_schedule_with_warmup(
-            optimizer_discriminator, num_warmup_steps=6000
+            optimizer_discriminator, num_warmup_steps=0
         )
 
         return [
