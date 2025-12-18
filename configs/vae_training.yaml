@@ -88,13 +88,11 @@ model:
 
 data:
   train_dataset:
-    class_path: src.data.dataset.imagenet.PixMultiJSONLDataset
+    class_path: src.data.dataset.imagenet.PixHFDataset
     init_args:
-      config_path: scripts/total_images.json
-      resolution: 224  # Input resolution
-      random_crop: false
-      random_flip: false
-      max_num_samples: null
+      root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k
+      resolution: 448  # Input resolution
+      split: train
   
   eval_dataset:
     class_path: src.data.dataset.imagenet.PixHFDataset
