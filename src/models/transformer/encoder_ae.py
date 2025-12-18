@@ -170,7 +170,7 @@ class VAEModel(nn.Module):
         # Load decoder from pretrained path with subfolder
         self.decoder = AutoencoderDC.from_pretrained(
             decoder_weight_path,
-            subfolder=decoder_subfolder,
+            # subfolder=decoder_subfolder,
             torch_dtype=torch.bfloat16,
         ).decoder
         # self.scaling_factor = self.decoder.config.scaling_factor

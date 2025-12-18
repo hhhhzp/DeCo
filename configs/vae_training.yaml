@@ -1,7 +1,7 @@
 # lightning.pytorch==2.4.0
 seed_everything: true
 tags:
-  exp: &exp Sphere_VAE_Stage1
+  exp: &exp Sphere_VAE_1.1_Stage1
 torch_hub_dir: ~/.cache/torch/hub
 huggingface_cache_dir: null
 trainer:
@@ -47,7 +47,7 @@ model:
     class_path: src.models.transformer.encoder_ae.VAEModel
     init_args:
       encoder_config_path: "/apdcephfs/share_300000800/datamultimodal/models/InternVL3-2B"
-      decoder_weight_path: "/apdcephfs/share_300000800/datamultimodal/models/Sana_600M_512px_diffusers"
+      decoder_weight_path: "/apdcephfs/share_300000800/datamultimodal/models/dc-ae-f32c32-sana-1.1-diffusers"
       decoder_subfolder: "vae"
       select_layer: -1
       latent_channel: 32
