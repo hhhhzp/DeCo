@@ -5,18 +5,38 @@ Convert trained VAE checkpoint back to InternVL pretrained model format.
 This script extracts vision_model and mlp1 from a trained VAE checkpoint
 and merges them back into an InternVL pretrained model, then saves the result.
 
+The script also:
+- Copies the tokenizer from the original model
+- Registers the model with AutoModel for easy loading
+- Copies necessary model code files for trust_remote_code support
+
 Usage:
     python scripts/convert_vae_to_internvl.py \
         --vae_checkpoint path/to/trained_vae.ckpt \
         --original_model path/to/original_internvl_model \
         --output_path path/to/output_internvl_model
+        
+After conversion, you can load the model using:
+    from transformers import AutoModel, AutoTokenizer
+    
+    model = AutoModel.from_pretrained("path/to/output_internvl_model", trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained("path/to/output_internvl_model", trust_remote_code=True)
 """
 
 import argparse
 import os
+import sys
+import shutil
 import torch
-from transformers import AutoModel, AutoConfig
 from collections import OrderedDict
+from transformers import AutoTokenizer
+
+# Add project root to path to import custom models
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, project_root)
+
+from src.models.transformer.modeling_internvl_chat import InternVLChatModel
+from src.models.transformer.configuration_internvl_chat import InternVLChatConfig
 
 
 def extract_vae_weights(checkpoint_path):
@@ -78,15 +98,17 @@ def merge_weights_to_internvl(
     """
     print(f"\nLoading original InternVL model from {original_model_path}...")
 
-    # Load original model config and weights
-    config = AutoConfig.from_pretrained(original_model_path, trust_remote_code=True)
+    # Load original model config using custom class
+    config = InternVLChatConfig.from_pretrained(original_model_path)
 
-    model = AutoModel.from_pretrained(
+    # Load model directly using custom class (no AutoModel registration needed)
+    model = InternVLChatModel.from_pretrained(
         original_model_path,
         config=config,
         torch_dtype=torch.bfloat16,
-        trust_remote_code=True,
     )
+
+    print(f"✓ Loaded model type: {type(model).__name__}")
 
     print("Merging trained weights into model...")
 
@@ -121,12 +143,15 @@ def merge_weights_to_internvl(
         safe_serialization=True,  # Use safetensors format
     )
 
-    # Also save the config
-    config.save_pretrained(output_path)
+    # Add auto_map to config for AutoModel registration
+    config.auto_map = {
+        "AutoConfig": "configuration_internvl_chat.InternVLChatConfig",
+        "AutoModel": "modeling_internvl_chat.InternVLChatModel",
+        "AutoModelForCausalLM": "modeling_internvl_chat.InternVLChatModel",
+    }
 
-    print(f"✓ Successfully saved merged model to {output_path}")
-    print(f"  - Model weights: {output_path}/model.safetensors")
-    print(f"  - Config: {output_path}/config.json")
+    # Save the config with auto_map
+    config.save_pretrained(output_path)
 
 
 def main():

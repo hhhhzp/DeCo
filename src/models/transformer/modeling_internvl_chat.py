@@ -7,30 +7,17 @@
 import warnings
 from typing import List, Optional, Tuple, Union
 
-import torch.distributed as dist
 import torch.utils.checkpoint
 import transformers
-
-# from peft import LoraConfig, get_peft_model
 from torch import nn
 from torch.nn import CrossEntropyLoss
-from transformers import (
-    AutoModel,
-    GenerationConfig,
-    LlamaForCausalLM,
-    LlamaTokenizer,
-    Qwen2ForCausalLM,
-)
-
-# from internvl.model.uni_stream.modeling_qwen2 import Qwen2ForCausalLM
+from transformers import AutoModel, GenerationConfig, LlamaForCausalLM, Qwen2ForCausalLM
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import ModelOutput, logging
 
-# from internvl.model.qwen2.modeling_qwen2_unified_v1 import UnifiedForCausalLM
-
-
 from .configuration_internvl_chat import InternVLChatConfig
+from .conversation import get_conv_template
 from .modeling_intern_vit import InternVisionModel, has_flash_attn
 
 logger = logging.get_logger(__name__)
@@ -49,15 +36,9 @@ class InternVLChatModel(PreTrainedModel):
     config_class = InternVLChatConfig
     main_input_name = 'pixel_values'
     base_model_prefix = 'language_model'
-    _no_split_modules = [
-        'InternVisionModel',
-        'LlamaDecoderLayer',
-        'InternLM2DecoderLayer',
-        'Phi3DecoderLayer',
-        'Qwen2DecoderLayer',
-    ]
     _supports_flash_attn_2 = True
     supports_gradient_checkpointing = True
+    _no_split_modules = ['InternVisionModel', 'LlamaDecoderLayer', 'Qwen2DecoderLayer']
 
     def __init__(
         self,
@@ -79,17 +60,14 @@ class InternVLChatModel(PreTrainedModel):
         )
         self.downsample_ratio = config.downsample_ratio
         self.ps_version = config.ps_version
-        self.llm_arch_name = config.llm_config.architectures[0]
-        # Enable Flash Attention if supported, otherwise fall back to eager attention.
         use_flash_attn = use_flash_attn if has_flash_attn else False
         config.vision_config.use_flash_attn = True if use_flash_attn else False
-        config.llm_config.attn_implementation = (
+        config.llm_config._attn_implementation = (
             'flash_attention_2' if use_flash_attn else 'eager'
         )
 
         logger.info(f'num_image_token: {self.num_image_token}')
         logger.info(f'ps_version: {self.ps_version}')
-        print(config.llm_config.architectures[0])
         if vision_model is not None:
             self.vision_model = vision_model
         else:
@@ -100,15 +78,7 @@ class InternVLChatModel(PreTrainedModel):
             if config.llm_config.architectures[0] == 'LlamaForCausalLM':
                 self.language_model = LlamaForCausalLM(config.llm_config)
             elif config.llm_config.architectures[0] == 'Qwen2ForCausalLM':
-                # from internvl.model.qwen2_new.modeling_qwen2 import Qwen2ForCausalLM
-
                 self.language_model = Qwen2ForCausalLM(config.llm_config)
-            elif config.llm_config.architectures[0] == 'Qwen2ForUnifiedCausalLM':
-                from internvl.model.qwen2.modeling_qwen2 import Qwen2ForUnifiedCausalLM
-
-                self.language_model = Qwen2ForUnifiedCausalLM(config.llm_config)
-            elif config.llm_config.architectures[0] == 'UnifiedForCausalLM':
-                self.language_model = UnifiedForCausalLM(config.llm_config)
             else:
                 raise NotImplementedError(
                     f'{config.llm_config.architectures[0]} is not implemented.'
@@ -127,72 +97,8 @@ class InternVLChatModel(PreTrainedModel):
         )
 
         self.img_context_token_id = None
-        # self.conv_template = get_conv_template(self.template)
-        if hasattr(config, 'system_message'):
-            self.system_message = config.system_message
-        else:
-            self.system_message = self.conv_template.system_message
-        self.num_samples = 0
-
-        if config.use_backbone_lora:
-            self.wrap_backbone_lora(
-                r=config.use_backbone_lora, lora_alpha=2 * config.use_backbone_lora
-            )
-
-        if config.use_llm_lora:
-            self.wrap_llm_lora(
-                r=config.use_llm_lora, lora_alpha=2 * config.use_llm_lora
-            )
-
-    def wrap_backbone_lora(self, r=128, lora_alpha=256, lora_dropout=0.05):
-        lora_config = LoraConfig(
-            r=r,
-            target_modules=['attn.qkv', 'attn.proj', 'mlp.fc1', 'mlp.fc2'],
-            lora_alpha=lora_alpha,
-            lora_dropout=lora_dropout,
-        )
-        self.vision_model = get_peft_model(self.vision_model, lora_config)
-        self.vision_model.print_trainable_parameters()
-
-    def wrap_llm_lora(self, r=128, lora_alpha=256, lora_dropout=0.05):
-        # Determine the target modules based on the architecture of the language model
-        if self.llm_arch_name == 'InternLM2ForCausalLM':
-            target_modules = [
-                'attention.wqkv',
-                'attention.wo',
-                'feed_forward.w1',
-                'feed_forward.w2',
-                'feed_forward.w3',
-            ]
-        elif self.llm_arch_name == 'Phi3ForCausalLM':
-            target_modules = [
-                'mlp.down_proj',
-                'mlp.gate_up_proj',
-                'self_attn.o_proj',
-                'self_attn.qkv_proj',
-            ]
-        elif self.llm_arch_name in ['Qwen2ForCausalLM', 'LlamaForCausalLM']:
-            target_modules = [
-                'self_attn.q_proj',
-                'self_attn.k_proj',
-                'self_attn.v_proj',
-                'self_attn.o_proj',
-                'mlp.gate_proj',
-                'mlp.down_proj',
-                'mlp.up_proj',
-            ]
-        else:
-            raise NotImplemented
-        lora_config = LoraConfig(
-            r=r,
-            target_modules=target_modules,
-            lora_alpha=lora_alpha,
-            lora_dropout=lora_dropout,
-            task_type='CAUSAL_LM',
-        )
-        self.language_model = get_peft_model(self.language_model, lora_config)
-        self.language_model.enable_input_require_grads()
-        self.language_model.print_trainable_parameters()
+        self.conv_template = get_conv_template(self.template)
+        self.system_message = self.conv_template.system_message
 
     def forward(
         self,
@@ -207,9 +113,6 @@ class InternVLChatModel(PreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-        statistics: Optional[torch.LongTensor] = None,
-        loss_weight: Optional[List] = None,
-        loss_reduction_all_gather: Optional[bool] = False,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         return_dict = (
             return_dict if return_dict is not None else self.config.use_return_dict
@@ -229,14 +132,6 @@ class InternVLChatModel(PreTrainedModel):
             print(
                 f'dynamic ViT batch size: {vit_batch_size}, images per sample: {vit_batch_size / B}, dynamic token length: {N}'
             )
-            if statistics is not None:
-                num_samples, num_padding_tokens, num_padding_images = (
-                    statistics.tolist()
-                )
-                self.num_samples += num_samples
-                print(
-                    f'total_samples={self.num_samples}, {num_samples=}, {num_padding_tokens=}, {num_padding_images=}'
-                )
 
         input_ids = input_ids.reshape(B * N)
         selected = input_ids == self.img_context_token_id
@@ -244,16 +139,16 @@ class InternVLChatModel(PreTrainedModel):
             input_embeds[selected] = input_embeds[selected] * 0.0 + vit_embeds.reshape(
                 -1, C
             )
-            ignore_flag = False
         except Exception as e:
             vit_embeds = vit_embeds.reshape(-1, C)
             print(
                 f'warning: {e}, input_embeds[selected].shape={input_embeds[selected].shape}, '
                 f'vit_embeds.shape={vit_embeds.shape}'
             )
-            n_token = selected.sum()
-            input_embeds[selected] = input_embeds[selected] * 0.0 + vit_embeds[:n_token]
-            ignore_flag = True
+            n_token = min(selected.sum(), vit_embeds.size(0))
+            input_embeds[selected][:n_token] = (
+                input_embeds[selected][:n_token] * 0.0 + vit_embeds[:n_token]
+            )
 
         input_embeds = input_embeds.reshape(B, N, C)
 
@@ -270,33 +165,7 @@ class InternVLChatModel(PreTrainedModel):
         logits = outputs.logits
 
         loss = None
-        if labels is not None and loss_weight is not None:
-            loss_weight = torch.tensor(
-                loss_weight, dtype=torch.float32, device=labels.device
-            )
-            # Shift so that tokens < n predict n
-            shift_logits = logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
-            shift_weights = loss_weight[..., 1:].contiguous()
-            # Flatten the tokens
-            loss_fct = CrossEntropyLoss(reduction='none')
-            shift_logits = shift_logits.view(-1, self.language_model.config.vocab_size)
-            shift_labels = shift_labels.view(-1)
-            shift_weights = shift_weights.view(-1)
-            # Enable model parallelism
-            shift_labels = shift_labels.to(shift_logits.device)
-            shift_weights = shift_weights.to(shift_logits.device)
-            loss = loss_fct(shift_logits, shift_labels)
-
-            shift_weights_sum = shift_weights.sum()
-            if loss_reduction_all_gather:
-                dist.all_reduce(shift_weights_sum, op=dist.ReduceOp.AVG)
-
-            loss = loss * shift_weights
-            loss = loss.sum() / shift_weights_sum
-            if ignore_flag:
-                loss = loss * 0.0
-        elif labels is not None:
+        if labels is not None:
             # Shift so that tokens < n predict n
             shift_logits = logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
@@ -307,8 +176,6 @@ class InternVLChatModel(PreTrainedModel):
             # Enable model parallelism
             shift_labels = shift_labels.to(shift_logits.device)
             loss = loss_fct(shift_logits, shift_labels)
-            if ignore_flag:
-                loss = loss * 0.0
 
         if not return_dict:
             output = (logits,) + outputs[1:]
@@ -415,11 +282,8 @@ class InternVLChatModel(PreTrainedModel):
 
         tokenizer.padding_side = 'left'
         model_inputs = tokenizer(queries, return_tensors='pt', padding=True)
-        device = torch.device(
-            self.language_model.device if torch.cuda.is_available() else 'cpu'
-        )
-        input_ids = model_inputs['input_ids'].to(device)
-        attention_mask = model_inputs['attention_mask'].to(device)
+        input_ids = model_inputs['input_ids'].to(self.device)
+        attention_mask = model_inputs['attention_mask'].to(self.device)
         eos_token_id = tokenizer.convert_tokens_to_ids(template.sep.strip())
         generation_config['eos_token_id'] = eos_token_id
         generation_output = self.generate(
@@ -486,11 +350,8 @@ class InternVLChatModel(PreTrainedModel):
             query = query.replace('<image>', image_tokens, 1)
 
         model_inputs = tokenizer(query, return_tensors='pt')
-        device = torch.device(
-            self.language_model.device if torch.cuda.is_available() else 'cpu'
-        )
-        input_ids = model_inputs['input_ids'].to(device)
-        attention_mask = model_inputs['attention_mask'].to(device)
+        input_ids = model_inputs['input_ids'].to(self.device)
+        attention_mask = model_inputs['attention_mask'].to(self.device)
         generation_config['eos_token_id'] = eos_token_id
         generation_output = self.generate(
             pixel_values=pixel_values,
@@ -555,16 +416,6 @@ class InternVLChatModel(PreTrainedModel):
         )
 
         return outputs
-
-    @property
-    def lm_head(self):
-        return self.language_model.get_output_embeddings()
-
-    def get_input_embeddings(self):
-        return self.language_model.get_input_embeddings()
-
-    def get_output_embeddings(self):
-        return self.language_model.get_output_embeddings()
 
     @property
     def lm_head(self):
