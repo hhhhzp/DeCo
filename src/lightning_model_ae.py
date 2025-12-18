@@ -36,6 +36,7 @@ class LightningModelVAE(pl.LightningModule):
         eval_original_model: bool = False,
         pretrain_model_path: str = None,
         discriminator_optimizer: OptimizerCallable = None,
+        freeze_encoder: bool = False,
     ):
         super().__init__()
         self.vae_model = vae_model
@@ -47,6 +48,7 @@ class LightningModelVAE(pl.LightningModule):
 
         self.eval_original_model = eval_original_model
         self.pretrain_model_path = pretrain_model_path
+        self.freeze_encoder = freeze_encoder
 
         self._strict_loading = True
         self._logged_images_count = 0
@@ -59,8 +61,9 @@ class LightningModelVAE(pl.LightningModule):
 
         # Disable grad for frozen components in loss_module
         # These are not trainable and should not be tracked by DDP
-        # no_grad(self.vae_model.vision_model)
-        # no_grad(self.vae_model.mlp1)
+        if self.freeze_encoder:
+            no_grad(self.vae_model.vision_model)
+            no_grad(self.vae_model.mlp1)
         no_grad(self.loss_module.perceptual_loss)
         if self.loss_module.teacher_vision_model is not None:
             no_grad(self.loss_module.teacher_vision_model)
