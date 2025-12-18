@@ -31,7 +31,9 @@ class ComputeMetricsHook(Callback):
         self.fid_feature_dim = fid_feature_dim
         if compute_fid:
             # 使用 TorchMetrics 的 FID，它内部已经处理了 DDP 同步
-            self.fid = FrechetInceptionDistance(feature=fid_feature_dim, normalize=True)
+            self.fid = FrechetInceptionDistance(
+                feature=fid_feature_dim, normalize=True, antialias=False
+            )
 
         # 用于增量统计的变量
         self.reset_fid_stats()
