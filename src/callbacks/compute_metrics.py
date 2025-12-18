@@ -95,35 +95,48 @@ class ComputeMetricsHook(Callback):
             self.fid.update(reconstructed_uint8, real=False)
 
     def _log_and_reset(self, pl_module, prefix="val"):
-        # 计算本地平均值
-        local_psnr = np.mean(self.psnr_values) if self.psnr_values else 0.0
-        local_ssim = np.mean(self.ssim_values) if self.ssim_values else 0.0
+        # 计算本地总和（而不是平均值），以便进行加权平均
+        local_psnr_sum = np.sum(self.psnr_values) if self.psnr_values else 0.0
+        local_ssim_sum = np.sum(self.ssim_values) if self.ssim_values else 0.0
         local_count = len(self.psnr_values)
 
         # 转换为 tensor 以便跨进程同步
-        psnr_tensor = torch.tensor(local_psnr, device=pl_module.device)
-        ssim_tensor = torch.tensor(local_ssim, device=pl_module.device)
-        count_tensor = torch.tensor(local_count, device=pl_module.device)
+        psnr_sum_tensor = torch.tensor(local_psnr_sum, device=pl_module.device)
+        ssim_sum_tensor = torch.tensor(local_ssim_sum, device=pl_module.device)
+        count_tensor = torch.tensor(
+            local_count, device=pl_module.device, dtype=torch.float
+        )
 
         # 在多卡环境下同步所有进程的指标
         if torch.distributed.is_available() and torch.distributed.is_initialized():
-            # 收集所有进程的值
-            torch.distributed.all_reduce(psnr_tensor, op=torch.distributed.ReduceOp.SUM)
-            torch.distributed.all_reduce(ssim_tensor, op=torch.distributed.ReduceOp.SUM)
+            # 收集所有进程的总和和样本数
+            torch.distributed.all_reduce(
+                psnr_sum_tensor, op=torch.distributed.ReduceOp.SUM
+            )
+            torch.distributed.all_reduce(
+                ssim_sum_tensor, op=torch.distributed.ReduceOp.SUM
+            )
             torch.distributed.all_reduce(
                 count_tensor, op=torch.distributed.ReduceOp.SUM
             )
 
-            # 计算全局平均值
-            world_size = torch.distributed.get_world_size()
-            final_psnr = (psnr_tensor / world_size).item()
-            final_ssim = (ssim_tensor / world_size).item()
+            # 按总样本数计算加权平均值
             total_count = count_tensor.item()
+            if total_count > 0:
+                final_psnr = (psnr_sum_tensor / count_tensor).item()
+                final_ssim = (ssim_sum_tensor / count_tensor).item()
+            else:
+                final_psnr = 0.0
+                final_ssim = 0.0
         else:
             # 单卡情况
-            final_psnr = local_psnr
-            final_ssim = local_ssim
             total_count = local_count
+            if total_count > 0:
+                final_psnr = local_psnr_sum / total_count
+                final_ssim = local_ssim_sum / total_count
+            else:
+                final_psnr = 0.0
+                final_ssim = 0.0
 
         log_msg = f"[{prefix}] PSNR: {final_psnr:.4f} | SSIM: {final_ssim:.4f} | Samples: {total_count}"
 
