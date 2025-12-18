@@ -3,8 +3,7 @@ import torch.nn.functional as F
 import lightning.pytorch as pl
 from lightning.pytorch.callbacks import Callback
 from lightning.pytorch.utilities import rank_zero_info
-from skimage.metrics import peak_signal_noise_ratio as psnr_loss
-from skimage.metrics import structural_similarity as ssim_loss
+from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from torchmetrics.image.fid import FrechetInceptionDistance
 import numpy as np
 
@@ -22,9 +21,12 @@ class ComputeMetricsHook(Callback):
 
     def __init__(self, compute_fid=True, fid_feature_dim=2048):
         super().__init__()
-        # 使用 scikit-image 计算 PSNR 和 SSIM，需要手动累积结果
-        self.psnr_values = []
-        self.ssim_values = []
+        # 初始化指标计算器，dist_sync_on_step=False 表示我们只在 epoch 结束时同步
+        # data_range=1.0 对应 [0, 1] 的数据范围
+        self.psnr = PeakSignalNoiseRatio(data_range=1.0)
+        self.ssim = StructuralSimilarityIndexMeasure(
+            data_range=1.0, gaussian_kernel=False
+        )
 
         # FID 相关
         self.compute_fid = compute_fid
@@ -43,6 +45,8 @@ class ComputeMetricsHook(Callback):
     def setup(self, trainer, pl_module, stage=None):
         # 确保指标模块被移动到正确的设备上
         if hasattr(pl_module, "device"):
+            self.psnr = self.psnr.to(pl_module.device)
+            self.ssim = self.ssim.to(pl_module.device)
             if self.compute_fid:
                 self.fid = self.fid.to(pl_module.device)
 
@@ -68,18 +72,9 @@ class ComputeMetricsHook(Callback):
         reconstructed = self._normalize_images(outputs, pl_module.device)
         original_img = self._normalize_images(original_img, pl_module.device)
 
-        # 转换为 numpy 格式 [B, H, W, C]，范围 [0, 1]
-        rgb_restored = reconstructed.permute(0, 2, 3, 1).cpu().numpy()
-        rgb_gt = original_img.permute(0, 2, 3, 1).cpu().numpy()
-
-        # 逐图像计算 PSNR 和 SSIM
-        for rgb_real, rgb_fake in zip(rgb_gt, rgb_restored):
-            psnr = psnr_loss(rgb_fake, rgb_real, data_range=1.0)
-            ssim = ssim_loss(
-                rgb_fake, rgb_real, multichannel=True, data_range=1.0, channel_axis=-1
-            )
-            self.psnr_values.append(psnr)
-            self.ssim_values.append(ssim)
+        # 更新 PSNR 和 SSIM (此时不计算最终值，只累积统计量)
+        self.psnr.update(reconstructed, original_img)
+        self.ssim.update(reconstructed, original_img)
 
         # 更新 FID (如果启用)
         if self.compute_fid and self.fid_enabled:
@@ -93,37 +88,11 @@ class ComputeMetricsHook(Callback):
             self.fid.update(reconstructed_uint8, real=False)
 
     def _log_and_reset(self, pl_module, prefix="val"):
-        # 计算本地平均值
-        local_psnr = np.mean(self.psnr_values) if self.psnr_values else 0.0
-        local_ssim = np.mean(self.ssim_values) if self.ssim_values else 0.0
-        local_count = len(self.psnr_values)
+        # 计算最终指标 (自动处理 DDP 同步)
+        final_psnr = self.psnr.compute()
+        final_ssim = self.ssim.compute()
 
-        # 转换为 tensor 以便跨进程同步
-        psnr_tensor = torch.tensor(local_psnr, device=pl_module.device)
-        ssim_tensor = torch.tensor(local_ssim, device=pl_module.device)
-        count_tensor = torch.tensor(local_count, device=pl_module.device)
-
-        # 在多卡环境下同步所有进程的指标
-        if torch.distributed.is_available() and torch.distributed.is_initialized():
-            # 收集所有进程的值
-            torch.distributed.all_reduce(psnr_tensor, op=torch.distributed.ReduceOp.SUM)
-            torch.distributed.all_reduce(ssim_tensor, op=torch.distributed.ReduceOp.SUM)
-            torch.distributed.all_reduce(
-                count_tensor, op=torch.distributed.ReduceOp.SUM
-            )
-
-            # 计算全局平均值
-            world_size = torch.distributed.get_world_size()
-            final_psnr = (psnr_tensor / world_size).item()
-            final_ssim = (ssim_tensor / world_size).item()
-            total_count = count_tensor.item()
-        else:
-            # 单卡情况
-            final_psnr = local_psnr
-            final_ssim = local_ssim
-            total_count = local_count
-
-        log_msg = f"[{prefix}] PSNR: {final_psnr:.4f} | SSIM: {final_ssim:.4f} | Samples: {total_count}"
+        log_msg = f"[{prefix}] PSNR: {final_psnr:.4f} | SSIM: {final_ssim:.4f}"
 
         # 计算 FID (如果启用)
         if self.compute_fid and self.fid_enabled:
@@ -144,8 +113,8 @@ class ComputeMetricsHook(Callback):
         pl_module.log(f"{prefix}/ssim", final_ssim, sync_dist=True, rank_zero_only=True)
 
         # 重置状态以备下一个 epoch
-        self.psnr_values = []
-        self.ssim_values = []
+        self.psnr.reset()
+        self.ssim.reset()
         if self.compute_fid:
             self.fid.reset()
         self.reset_fid_stats()
