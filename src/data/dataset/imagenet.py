@@ -197,7 +197,7 @@ class PixHFDataset(Dataset):
         return normalized_image, target, metadata
 
 
-import json
+import orjson
 import os
 
 
@@ -227,13 +227,15 @@ class PixJSONLDataset(Dataset):
         self.root = root
         self.resolution = resolution
 
-        # Load JSONL annotations
+        # Load JSONL annotations with orjson for faster parsing
         self.samples = []
-        with open(annotation, 'r', encoding='utf-8') as f:
+        with open(annotation, 'rb') as f:
             for line in f:
-                item = json.loads(line.strip())
-                if 'target_image' in item:
-                    self.samples.append(item)
+                line = line.strip()
+                if line:
+                    item = orjson.loads(line)
+                    if 'target_image' in item:
+                        self.samples.append(item)
 
         # Handle max_num_samples
         if max_num_samples is not None and max_num_samples < len(self.samples):
@@ -348,9 +350,9 @@ class PixMultiJSONLDataset(Dataset):
         self.resolution = resolution
         self.config_path = config_path
 
-        # Load config file
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = json.load(f)
+        # Load config file with orjson for faster parsing
+        with open(config_path, 'rb') as f:
+            config = orjson.loads(f.read())
 
         # Collect all samples from all datasets
         self.samples = []
@@ -361,19 +363,21 @@ class PixMultiJSONLDataset(Dataset):
             annotation = dataset_config['annotation']
             repeat_time = dataset_config.get('repeat_time', 1)
 
-            # Load samples from this dataset
+            # Load samples from this dataset with orjson for faster parsing
             dataset_samples = []
-            with open(annotation, 'r', encoding='utf-8') as f:
+            with open(annotation, 'rb') as f:
                 for line in f:
-                    item = json.loads(line.strip())
-                    if 'target_image' in item:
-                        # Add root path to each sample
-                        sample = {
-                            'root': root,
-                            'target_image': item['target_image'],
-                            'dataset_name': dataset_name,
-                        }
-                        dataset_samples.append(sample)
+                    line = line.strip()
+                    if line:
+                        item = orjson.loads(line)
+                        if 'target_image' in item:
+                            # Add root path to each sample
+                            sample = {
+                                'root': root,
+                                'target_image': item['target_image'],
+                                'dataset_name': dataset_name,
+                            }
+                            dataset_samples.append(sample)
 
             # Repeat samples according to repeat_time
             for _ in range(repeat_time):

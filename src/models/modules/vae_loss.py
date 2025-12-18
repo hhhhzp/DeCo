@@ -436,11 +436,11 @@ class VAEReconstructionLoss(nn.Module):
         global_step: int,
     ) -> Tuple[torch.Tensor, Mapping[Text, torch.Tensor]]:
         """Generator training step."""
-        inputs = (inputs * 0.5) + 0.5
-        reconstructions = (reconstructions * 0.5) + 0.5
-
         inputs = inputs.contiguous()
         reconstructions = reconstructions.contiguous()
+
+        inputs = (inputs * 0.5) + 0.5
+        reconstructions = (reconstructions * 0.5) + 0.5
 
         # Extract student features from extra_result_dict
         student_features = extra_result_dict.get("student_features", None)
@@ -566,6 +566,9 @@ class VAEReconstructionLoss(nn.Module):
             if self.should_discriminator_be_trained(global_step)
             else 0
         )
+        inputs = inputs.contiguous()
+        reconstructions = reconstructions.contiguous()
+
         inputs = (inputs * 0.5) + 0.5
         reconstructions = (reconstructions * 0.5) + 0.5
         # Convert from [-1, 1] to [0, 1]
