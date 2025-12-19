@@ -209,7 +209,10 @@ class VAEReconstructionLoss(nn.Module):
         print(f"Loading teacher model from {pretrained_model_path}...")
 
         # Load pretrained InternVLChatModel config
-        config = AutoConfig.from_pretrained(pretrained_model_path)
+        config = AutoConfig.from_pretrained(
+            pretrained_model_path,
+            trust_remote_code=True,
+        )
         vision_config = config.vision_config
         vision_config.drop_path_rate = 0.0
 
@@ -217,10 +220,7 @@ class VAEReconstructionLoss(nn.Module):
         llm_hidden_size = config.llm_config.hidden_size
 
         # Create teacher vision model
-        self.teacher_vision_model = InternVisionModel(
-            vision_config,
-            trust_remote_code=True,
-        )
+        self.teacher_vision_model = InternVisionModel(vision_config)
 
         # Create teacher mlp1
         self.teacher_mlp1 = nn.Sequential(
