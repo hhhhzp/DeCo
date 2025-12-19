@@ -230,8 +230,8 @@ class VAEReconstructionLoss(nn.Module):
             param.requires_grad = False
 
         # Set to eval mode
-        # self.teacher_vision_model.eval()
-        # self.teacher_mlp1.eval()
+        self.teacher_vision_model.eval()
+        self.teacher_mlp1.eval()
 
         print("Teacher model loaded and frozen successfully!")
 
