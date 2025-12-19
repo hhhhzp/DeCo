@@ -217,7 +217,10 @@ class VAEReconstructionLoss(nn.Module):
         llm_hidden_size = config.llm_config.hidden_size
 
         # Create teacher vision model
-        self.teacher_vision_model = InternVisionModel(vision_config)
+        self.teacher_vision_model = InternVisionModel(
+            vision_config,
+            trust_remote_code=True,
+        )
 
         # Create teacher mlp1
         self.teacher_mlp1 = nn.Sequential(
