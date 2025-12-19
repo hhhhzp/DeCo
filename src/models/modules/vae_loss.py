@@ -264,7 +264,7 @@ class VAEReconstructionLoss(nn.Module):
         if self.teacher_vision_model is None or self.teacher_mlp1 is None:
             return None
 
-        with torch.inference_mode():
+        with torch.no_grad():
             if use_rotation_aug:
                 # Create rotated versions: [B*4, C, H, W]
                 B = pixel_values.shape[0]
