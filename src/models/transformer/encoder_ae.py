@@ -38,10 +38,7 @@ class DCDownsampleMLP(nn.Module):
 
         self.shortcut = shortcut
         self.out_channels = out_channels
-        self.factor = 2
-        # Calculate group size for channel grouping in shortcut
-        # Assumes in_channels * factor^2 is divisible by out_channels
-        self.group_size = in_channels * self.factor**2 // out_channels
+        self.group_size = 2
 
         # Channel projection layer (main path)
         self.channel_proj = nn.Linear(in_channels, out_channels)
