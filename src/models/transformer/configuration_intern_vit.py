@@ -83,7 +83,7 @@ class InternVisionConfig(PretrainedConfig):
         attention_dropout=0.0,
         initializer_range=0.02,
         initializer_factor=0.1,
-        num_learnable_tokens=16,
+        num_learnable_tokens=0,
         **kwargs,
     ):
         super().__init__(**kwargs)

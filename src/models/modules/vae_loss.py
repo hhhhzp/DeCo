@@ -209,12 +209,27 @@ class VAEReconstructionLoss(nn.Module):
         print(f"Loading teacher model from {pretrained_model_path}...")
 
         # Load pretrained InternVLChatModel config
-        config = AutoConfig.from_pretrained(
-            pretrained_model_path,
-            trust_remote_code=True,
-        )
+        config = InternVLChatConfig.from_pretrained(pretrained_model_path)
         vision_config = config.vision_config
         vision_config.drop_path_rate = 0.0
+
+        vit_hidden_size = config.vision_config.hidden_size
+        llm_hidden_size = config.llm_config.hidden_size
+
+        # Create teacher vision model
+        self.teacher_vision_model = InternVisionModel(vision_config)
+
+        # Create teacher mlp1
+        self.teacher_mlp1 = nn.Sequential(
+            nn.LayerNorm(vit_hidden_size * int(1 / self.downsample_ratio) ** 2),
+            nn.Linear(
+                vit_hidden_size * int(1 / self.downsample_ratio) ** 2,
+                llm_hidden_size,
+            ),
+            nn.GELU(),
+            nn.Linear(llm_hidden_size, llm_hidden_size),
+        )
+
         # Load pretrained weights
         model = AutoModel.from_pretrained(
             pretrained_model_path,
@@ -224,10 +239,19 @@ class VAEReconstructionLoss(nn.Module):
         )
 
         # Extract vision_model and mlp1 to teacher model
-        self.teacher_vision_model = model.vision_model
-        self.teacher_mlp1 = model.mlp1
-        no_grad(self.teacher_vision_model)
-        no_grad(self.teacher_mlp1)
+        self.teacher_vision_model.load_state_dict(model.vision_model.state_dict())
+        self.teacher_mlp1.load_state_dict(model.mlp1.state_dict())
+
+        # Freeze entire teacher model
+        for param in self.teacher_vision_model.parameters():
+            param.requires_grad = False
+        for param in self.teacher_mlp1.parameters():
+            param.requires_grad = False
+
+        # Set to eval mode
+        self.teacher_vision_model.eval()
+        self.teacher_mlp1.eval()
+
         print("Teacher model loaded and frozen successfully!")
 
     def pixel_shuffle(self, x, scale_factor=0.5):
