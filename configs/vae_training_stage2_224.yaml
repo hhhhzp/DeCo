@@ -24,7 +24,7 @@ trainer:
   log_every_n_steps: 50
   deterministic: null
   inference_mode: true
-  use_distributed_sampler: true
+  use_distributed_sampler: false
   callbacks:
     - class_path: src.callbacks.model_checkpoint.CheckpointHook
       init_args:
