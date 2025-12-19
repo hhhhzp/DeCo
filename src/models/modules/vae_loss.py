@@ -220,8 +220,8 @@ class VAEReconstructionLoss(nn.Module):
             trust_remote_code=True,
         )
         # Extract vision_model and mlp1 to teacher model
-        self.teacher_vision_model.load_state_dict(model.vision_model.state_dict())
-        self.teacher_mlp1.load_state_dict(model.mlp1.state_dict())
+        self.teacher_vision_model = model.vision_model
+        self.teacher_mlp1 = model.mlp1
 
         # Freeze entire teacher model
         for param in self.teacher_vision_model.parameters():
