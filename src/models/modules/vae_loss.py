@@ -207,37 +207,18 @@ class VAEReconstructionLoss(nn.Module):
             pretrained_model_path: Path to pretrained model
         """
         print(f"Loading teacher model from {pretrained_model_path}...")
-
-        # Load pretrained InternVLChatModel config
-        config = InternVLChatConfig.from_pretrained(pretrained_model_path)
-        vision_config = config.vision_config
-        vision_config.drop_path_rate = 0.0
-
-        vit_hidden_size = config.vision_config.hidden_size
-        llm_hidden_size = config.llm_config.hidden_size
-
-        # Create teacher vision model
-        self.teacher_vision_model = InternVisionModel(vision_config)
-
-        # Create teacher mlp1
-        self.teacher_mlp1 = nn.Sequential(
-            nn.LayerNorm(vit_hidden_size * int(1 / self.downsample_ratio) ** 2),
-            nn.Linear(
-                vit_hidden_size * int(1 / self.downsample_ratio) ** 2,
-                llm_hidden_size,
-            ),
-            nn.GELU(),
-            nn.Linear(llm_hidden_size, llm_hidden_size),
+        config = AutoConfig.from_pretrained(
+            pretrained_model_path, trust_remote_code=True
         )
-
-        # Load pretrained weights
+        config.vision_config.drop_path_rate = 0.0
+        config.vision_config.attention_dropout = 0.0
+        config.vision_config.dropout = 0.0
         model = AutoModel.from_pretrained(
             pretrained_model_path,
             config=config,
             dtype=torch.bfloat16,
             trust_remote_code=True,
         )
-
         # Extract vision_model and mlp1 to teacher model
         self.teacher_vision_model.load_state_dict(model.vision_model.state_dict())
         self.teacher_mlp1.load_state_dict(model.mlp1.state_dict())
