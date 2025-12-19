@@ -10,12 +10,79 @@ from diffusers.models import AutoencoderDC
 from src.models.transformer.configuration_internvl_chat import InternVLChatConfig
 from src.models.transformer.modeling_intern_vit import InternVisionModel
 from src.models.transformer.dit_t2i_DeCo import LatentConnectorModule
+from src.models.layers.rmsnorm import RMSNorm as Norm
 
 
 import math
 
 import torch
 from torch.distributions import Beta
+
+
+class DCDownsampleMLP(nn.Module):
+    """
+    MLP projection module with shortcut channel grouping (no spatial downsampling).
+
+    Key design:
+    - Input: [B, N, in_channels] where N = H*W (spatial tokens)
+    - Main path: Channel projection via Linear layer
+    - Shortcut path: Channel grouping and averaging (from DCDownBlock2d)
+    - MLP with residual connection: x + MLP(x), last layer initialized to 0
+    - Output: [B, N, out_channels] - same N as input, ensuring spatial correspondence
+
+    Note: Spatial downsampling is removed as it's already done in VAE model's feature extraction.
+          Only channel transformation via shortcut grouping is preserved.
+    """
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        shortcut: bool = True,
+    ) -> None:
+        super().__init__()
+
+        self.shortcut = shortcut
+        self.factor = 2
+        # Calculate group size for channel grouping in shortcut
+        # Assumes in_channels * factor^2 is divisible by out_channels
+        self.group_size = in_channels * self.factor**2 // out_channels
+
+        # Channel projection layer (main path)
+        self.channel_proj = nn.Linear(in_channels, out_channels)
+
+        # MLP with residual connection
+        self.mlp = nn.Sequential(
+            nn.LayerNorm(out_channels),
+            nn.Linear(out_channels, out_channels),
+            nn.GELU(),
+            nn.Linear(out_channels, out_channels),
+        )
+
+        # Initialize last layer to 0 for residual connection
+        nn.init.zeros_(self.mlp[-1].weight)
+        nn.init.zeros_(self.mlp[-1].bias)
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass with channel projection and shortcut grouping.
+        :param hidden_states: [B, N, in_channels] sequence format
+        :return: [B, N, out_channels] sequence format (N unchanged)
+        """
+        # Main path: Project channels [B, N, in_channels] -> [B, N, out_channels]
+        x = self.channel_proj(hidden_states)
+
+        # Shortcut path: Channel grouping and averaging
+        if self.shortcut:
+            # [B, N, in_channels] -> [B, N, out_channels, group_size] -> [B, N, out_channels]
+            y = hidden_states.unflatten(-1, (-1, self.group_size))
+            y = y.mean(dim=-1)
+            x = x + y
+
+        # Apply MLP with residual connection: x = x + MLP(x)
+        x = x + self.mlp(x)
+
+        return x
 
 
 def l2_norm(x: torch.Tensor, eps: float = 1e-7) -> torch.Tensor:
@@ -156,20 +223,22 @@ class VAEModel(nn.Module):
             nn.Linear(llm_hidden_size, llm_hidden_size),
         )
 
-        self.gen_mlp1 = nn.Sequential(
-            nn.LayerNorm(vit_hidden_size * int(1 / self.downsample_ratio) ** 2),
-            nn.Linear(
-                vit_hidden_size * int(1 / self.downsample_ratio) ** 2,
-                llm_hidden_size,
-            ),
-            nn.GELU(),
-            nn.Linear(llm_hidden_size, llm_hidden_size),
+        # gen_mlp1: MLP projection with residual connection (no downsampling)
+        # Input: vit_hidden_size * 4 channels -> channel projection -> 2*vit_hidden_size (output)
+        # Note: Output is 2*vit_hidden_size, NOT llm_hidden_size
+        # Spatial dimensions are preserved: [B, N, C] -> [B, N, 2*vit_hidden_size]
+        # MLP uses residual connection with last layer initialized to 0
+        # Downsampling is already done in extract_vision_features via pixel_shuffle
+        self.gen_mlp1 = DCDownsampleMLP(
+            in_channels=vit_hidden_size * int(1 / self.downsample_ratio) ** 2,
+            out_channels=2 * vit_hidden_size,
         )
 
         # Latent connector to convert vision features to latent space
         # Output latent_channel + 1 dimensions: latent_channel for mu, 1 for kappa
+        # Input: 2*vit_hidden_size (from gen_mlp1)
         self.latent_projector = LatentConnectorModule(
-            hidden_size=llm_hidden_size, out_channels=self.latent_channel + 1
+            hidden_size=2 * vit_hidden_size, out_channels=self.latent_channel + 1
         )
 
         # Load pretrained encoder weights if specified
@@ -211,9 +280,6 @@ class VAEModel(nn.Module):
         # Extract vision_model and mlp1
         self.vision_model = model.vision_model  # .state_dict(), strict=False)
         self.mlp1 = model.mlp1  # .state_dict())
-
-        # Copy mlp1 weights to gen_mlp1
-        self.copy_mlp1_to_gen_mlp1()
 
         print("Pretrained encoder weights loaded successfully!")
 
@@ -274,15 +340,19 @@ class VAEModel(nn.Module):
         """
         Extract features from vision model with pixel shuffle downsampling.
         :param pixel_values: input image [B, C, H, W]
-        :param use_gen_mlp: if True, use gen_mlp1; if False, use mlp1
+        :param use_gen_mlp: if True, use gen_mlp1 (output: 2*vit_hidden_size); if False, use mlp1 (output: llm_hidden_size)
         :param vision_features: pre-computed vision features (before MLP), if provided, skip vision model computation
-        :return: vit_embeds [B, num_patches, hidden_size]
+        :return: vit_embeds [B, N, hidden_size]
+                 - if use_gen_mlp=False: [B, N, llm_hidden_size]
+                 - if use_gen_mlp=True: [B, N, 2*vit_hidden_size]
+                 Both have the same N (spatial correspondence guaranteed)
         """
         # Extract vision features if not provided
         if vision_features is None:
             vision_features = self.extract_vision_features(pixel_values)
 
         # Apply MLP projection
+        # Both mlp1 and gen_mlp1 preserve spatial dimensions (N unchanged)
         mlp = self.gen_mlp1 if use_gen_mlp else self.mlp1
         vit_embeds = mlp(vision_features)
 

@@ -279,6 +279,16 @@ class LatentConnectorModule(nn.Module):
         )
         self.final_proj = nn.Linear(hidden_size, out_channels)
 
+        # 执行初始化
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        for block in self.mlp_blocks:
+            if hasattr(block, 'mlp') and isinstance(block.mlp[-1], nn.Linear):
+                nn.init.constant_(block.mlp[-1].weight, 0)
+                if block.mlp[-1].bias is not None:
+                    nn.init.constant_(block.mlp[-1].bias, 0)
+
     def forward(self, x):
         # x: [B, N, hidden_size]
         x = self.mlp_blocks(x)
