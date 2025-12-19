@@ -273,7 +273,7 @@ class LightningModelVAE(pl.LightningModule):
         )
 
         # Add KL loss for Power Spherical regularization
-        total_loss = total_loss + 4e-3 * kl_loss
+        total_loss = total_loss + 1e-12 * kl_loss
         loss_dict["kl_loss"] = kl_loss
 
         # Backward and optimize generator (encoder)
