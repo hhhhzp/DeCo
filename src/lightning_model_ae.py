@@ -159,7 +159,7 @@ class LightningModelVAE(pl.LightningModule):
         # Compile models for efficiency AFTER loading pretrained weights
         self.vae_model = torch.compile(self.vae_model)
         self.ema_vae_model = torch.compile(self.ema_vae_model)
-        # self.loss_module = torch.compile(self.loss_module)
+        self.loss_module = torch.compile(self.loss_module)
 
     def _get_module(self, module):
         """Helper to unwrap DDP module if needed."""
