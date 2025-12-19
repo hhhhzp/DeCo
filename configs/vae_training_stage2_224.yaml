@@ -5,7 +5,7 @@ tags:
 torch_hub_dir: ~/.cache/torch/hub
 huggingface_cache_dir: null
 trainer:
-  default_root_dir: ./Sphere_vae_training_workdir
+  default_root_dir: ./test
   accelerator: auto
   strategy:
     class_path: src.strategies.multi_model_ddp.MultiModelDDPStrategy
