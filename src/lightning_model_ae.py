@@ -11,7 +11,12 @@ from lightning.pytorch.utilities.types import OptimizerLRScheduler, STEP_OUTPUT
 from torch.optim.lr_scheduler import LRScheduler
 from torch.optim import Optimizer
 from lightning.pytorch.callbacks import Callback
-from transformers import AutoModel, AutoConfig, get_constant_schedule_with_warmup
+from transformers import (
+    AutoModel,
+    AutoConfig,
+    get_constant_schedule_with_warmup,
+    get_cosine_schedule_with_warmup,
+)
 
 from src.models.autoencoder.base import BaseAE, fp2uint8
 from src.models.transformer.encoder_ae import VAEModel
@@ -172,10 +177,28 @@ class LightningModelVAE(pl.LightningModule):
     def configure_optimizers(self) -> OptimizerLRScheduler:
         # Optimizer for encoder (generator)
         vae_model = self._get_module(self.vae_model)
-        params_encoder = filter_nograd_tensors(vae_model.parameters())
-        optimizer_encoder = self.optimizer([{"params": params_encoder}])
-        lr_scheduler_encoder = get_constant_schedule_with_warmup(
-            optimizer_encoder, num_warmup_steps=10000
+
+        # Separate parameters: vision_model and mlp1 use 0.1x learning rate
+        vision_mlp_params = []
+        other_params = []
+
+        for name, param in vae_model.named_parameters():
+            if param.requires_grad:
+                if 'vision_model' in name or 'mlp1' in name:
+                    vision_mlp_params.append(param)
+                else:
+                    other_params.append(param)
+
+        # Create parameter groups with different learning rates
+        param_groups = []
+        if len(vision_mlp_params) > 0:
+            param_groups.append({"params": vision_mlp_params, "lr_scale": 0.1})
+        if len(other_params) > 0:
+            param_groups.append({"params": other_params, "lr_scale": 1.0})
+
+        optimizer_encoder = self.optimizer(param_groups)
+        lr_scheduler_encoder = get_cosine_schedule_with_warmup(
+            optimizer_encoder, num_warmup_steps=10000, num_training_steps=200000
         )
 
         # Optimizer for discriminator
@@ -273,16 +296,16 @@ class LightningModelVAE(pl.LightningModule):
         )
 
         # Add KL loss for Power Spherical regularization
-        total_loss = total_loss + 1e-12 * kl_loss
+        total_loss = total_loss + 0.0 * kl_loss
         loss_dict["kl_loss"] = kl_loss
 
         # Backward and optimize generator (encoder)
+        opt_generator.zero_grad()
         self.manual_backward(total_loss)
         self.clip_gradients(
             opt_generator, gradient_clip_val=1.0, gradient_clip_algorithm="norm"
         )
         opt_generator.step()
-        opt_generator.zero_grad()
         sch_encoder.step()
 
         self.untoggle_optimizer(opt_generator)
@@ -307,20 +330,24 @@ class LightningModelVAE(pl.LightningModule):
             )
 
             # Backward and optimize discriminator
+            opt_discriminator.zero_grad()
             self.manual_backward(discriminator_loss)
             self.clip_gradients(
                 opt_discriminator, gradient_clip_val=1.0, gradient_clip_algorithm="norm"
             )
             opt_discriminator.step()
-            opt_discriminator.zero_grad()
             sch_discriminator.step()
 
             self.untoggle_optimizer(opt_discriminator)
 
             output_dict.update(disc_loss_dict)
 
-        # Log learning rates
-        output_dict["lr_encoder"] = opt_generator.param_groups[0]['lr']
+        # Log learning rates for different parameter groups
+        if len(opt_generator.param_groups) > 1:
+            output_dict["lr_encoder_vision_mlp"] = opt_generator.param_groups[0]['lr']
+            output_dict["lr_encoder_other"] = opt_generator.param_groups[1]['lr']
+        else:
+            output_dict["lr_encoder"] = opt_generator.param_groups[0]['lr']
         output_dict["lr_discriminator"] = opt_discriminator.param_groups[0]['lr']
 
         # Log all losses

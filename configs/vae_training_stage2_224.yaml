@@ -5,7 +5,7 @@ tags:
 torch_hub_dir: ~/.cache/torch/hub
 huggingface_cache_dir: null
 trainer:
-  default_root_dir: ./gen_mlp
+  default_root_dir: ./gen_mlp_non_kl
   accelerator: auto
   strategy:
     class_path: src.strategies.multi_model_ddp.MultiModelDDPStrategy
