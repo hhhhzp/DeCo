@@ -439,18 +439,20 @@ class VAEReconstructionLoss(nn.Module):
         inputs = inputs.contiguous()
         reconstructions = reconstructions.contiguous()
 
-        inputs = (inputs * 0.5) + 0.5
-        reconstructions = (reconstructions * 0.5) + 0.5
-
         # Extract student features from extra_result_dict
         student_features = extra_result_dict.get("student_features", None)
 
         # Extract teacher features using teacher model
+        # IMPORTANT: Pass inputs in [-1, 1] range to match student's input
         teacher_features = None
         if self.distillation_weight > 0.0 and self.teacher_vision_model is not None:
             teacher_features = self.extract_teacher_features(
                 inputs, use_rotation_aug=self.use_rotation_aug
             )
+
+        # Convert to [0, 1] range for reconstruction and perceptual loss
+        inputs = (inputs * 0.5) + 0.5
+        reconstructions = (reconstructions * 0.5) + 0.5
 
         # Convert inputs from [-1, 1] to [0, 1] for loss computation
         # from src.utils.image_utils import normalize_from_neg1_to_1, denormalize_imagenet
