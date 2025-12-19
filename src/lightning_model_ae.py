@@ -1,5 +1,6 @@
 from typing import Callable, Iterable, Any, Optional, Union, Sequence, Mapping, Dict
 import os.path
+import copy
 import torch
 import torch.nn as nn
 import torchvision
@@ -16,6 +17,8 @@ from src.models.autoencoder.base import BaseAE, fp2uint8
 from src.models.transformer.encoder_ae import VAEModel
 from src.utils.model_loader import ModelLoader
 from src.utils.no_grad import no_grad, filter_nograd_tensors
+from src.callbacks.simple_ema import SimpleEMA
+from src.utils.copy import copy_params
 
 # Log each comparison image with wandb
 import wandb
@@ -41,14 +44,17 @@ class LightningModelVAE(pl.LightningModule):
         pretrain_model_path: str = None,
         discriminator_optimizer: OptimizerCallable = None,
         freeze_encoder: bool = False,
+        ema_tracker: SimpleEMA = None,
     ):
         super().__init__()
         self.vae_model = vae_model
+        self.ema_vae_model = copy.deepcopy(self.vae_model)
         self.loss_module = loss_module
 
         self.optimizer = optimizer
         self.discriminator_optimizer = discriminator_optimizer
         self.lr_scheduler = lr_scheduler
+        self.ema_tracker = ema_tracker
 
         self.eval_original_model = eval_original_model
         self.pretrain_model_path = pretrain_model_path
@@ -63,6 +69,32 @@ class LightningModelVAE(pl.LightningModule):
     def configure_model(self) -> None:
         self.trainer.strategy.barrier()
 
+        # Load pretrained weights BEFORE torch.compile to avoid _orig_mod prefix issues
+        if self.pretrain_model_path is not None:
+            checkpoint = torch.load(self.pretrain_model_path, map_location='cpu')
+            state_dict = checkpoint['state_dict']
+
+            # Clean up DDP and torch.compile prefixes while preserving module structure
+            # Expected format: vae_model.module._orig_mod.xxx or loss_module.module._orig_mod.xxx
+            # Target format: vae_model.xxx or loss_module.xxx
+            new_state_dict = {}
+            for key, value in state_dict.items():
+                new_key = key
+                # Remove 'module._orig_mod.' pattern (DDP + torch.compile)
+                new_key = new_key.replace('.module._orig_mod.', '.')
+                # Also handle cases with only one of the prefixes
+                new_key = new_key.replace('.module.', '.')
+                new_key = new_key.replace('._orig_mod.', '.')
+                new_state_dict[new_key] = value
+
+            msg = self.load_state_dict(new_state_dict, strict=False)
+            if self.global_rank == 0:
+                print(f"\nLoaded pretrained model from {self.pretrain_model_path}")
+                print(f"Loading status: {msg}")
+
+        # Copy parameters from vae_model to ema_vae_model
+        copy_params(src_model=self.vae_model, dst_model=self.ema_vae_model)
+
         # Disable grad for frozen components in loss_module
         # These are not trainable and should not be tracked by DDP
         if self.freeze_encoder:
@@ -73,6 +105,9 @@ class LightningModelVAE(pl.LightningModule):
             no_grad(self.loss_module.teacher_vision_model)
         if self.loss_module.teacher_mlp1 is not None:
             no_grad(self.loss_module.teacher_mlp1)
+
+        # Disable grad for EMA model
+        no_grad(self.ema_vae_model)
 
         # Print trainable parameters
         if self.global_rank == 0:
@@ -121,31 +156,9 @@ class LightningModelVAE(pl.LightningModule):
             if not has_other_trainable:
                 print("  (None)")
 
-        # Load pretrained weights BEFORE torch.compile to avoid _orig_mod prefix issues
-        if self.pretrain_model_path is not None:
-            checkpoint = torch.load(self.pretrain_model_path, map_location='cpu')
-            state_dict = checkpoint['state_dict']
-
-            # Clean up DDP and torch.compile prefixes while preserving module structure
-            # Expected format: vae_model.module._orig_mod.xxx or loss_module.module._orig_mod.xxx
-            # Target format: vae_model.xxx or loss_module.xxx
-            new_state_dict = {}
-            for key, value in state_dict.items():
-                new_key = key
-                # Remove 'module._orig_mod.' pattern (DDP + torch.compile)
-                new_key = new_key.replace('.module._orig_mod.', '.')
-                # Also handle cases with only one of the prefixes
-                new_key = new_key.replace('.module.', '.')
-                new_key = new_key.replace('._orig_mod.', '.')
-                new_state_dict[new_key] = value
-
-            msg = self.load_state_dict(new_state_dict, strict=False)
-            if self.global_rank == 0:
-                print(f"\nLoaded pretrained model from {self.pretrain_model_path}")
-                print(f"Loading status: {msg}")
-
         # Compile models for efficiency AFTER loading pretrained weights
         self.vae_model = torch.compile(self.vae_model)
+        self.ema_vae_model = torch.compile(self.ema_vae_model)
         # self.loss_module = torch.compile(self.loss_module)
 
     def _get_module(self, module):
@@ -162,7 +175,7 @@ class LightningModelVAE(pl.LightningModule):
         params_encoder = filter_nograd_tensors(vae_model.parameters())
         optimizer_encoder = self.optimizer([{"params": params_encoder}])
         lr_scheduler_encoder = get_constant_schedule_with_warmup(
-            optimizer_encoder, num_warmup_steps=0
+            optimizer_encoder, num_warmup_steps=10000
         )
 
         # Optimizer for discriminator
@@ -195,11 +208,25 @@ class LightningModelVAE(pl.LightningModule):
             },
         ]
 
+    def configure_callbacks(self) -> Union[Sequence[Callback], Callback]:
+        if self.ema_tracker is not None:
+            return [self.ema_tracker]
+        return []
+
     def on_validation_start(self) -> None:
+        self.ema_vae_model.to(torch.float32)
         self._logged_images_count = 0
 
     def on_predict_start(self) -> None:
+        self.ema_vae_model.to(torch.float32)
         self._logged_images_count = 0
+
+    def on_train_start(self) -> None:
+        self.ema_vae_model.to(torch.float32)
+        if self.ema_tracker is not None:
+            self.ema_tracker.setup_models(
+                net=self.vae_model, ema_net=self.ema_vae_model
+            )
 
     def training_step(self, batch, batch_idx):
         img, _, metadata = batch
@@ -304,10 +331,13 @@ class LightningModelVAE(pl.LightningModule):
     def predict_step(self, batch, batch_idx):
         img, _, metadata = batch
 
+        # Select model based on eval_original_model flag
+        model = self.vae_model if self.eval_original_model else self.ema_vae_model
+
         with torch.no_grad():
             # Encode to latent and decode to reconstruct
             # Use deterministic mode (use_mode=True) for inference
-            samples = self.vae_model(img, use_mode=True).float()
+            samples = model(img, use_mode=True).float()
 
             # Denormalize reconstructions from ImageNet normalization to [0, 255] uint8
             # from src.utils.image_utils import denormalize_to_uint8
@@ -373,6 +403,11 @@ class LightningModelVAE(pl.LightningModule):
         self._save_to_state_dict(destination, prefix, keep_vars)
         self.vae_model.state_dict(
             destination=destination, prefix=prefix + "vae_model.", keep_vars=keep_vars
+        )
+        self.ema_vae_model.state_dict(
+            destination=destination,
+            prefix=prefix + "ema_vae_model.",
+            keep_vars=keep_vars,
         )
         self.loss_module.state_dict(
             destination=destination,

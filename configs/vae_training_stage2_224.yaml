@@ -1,7 +1,7 @@
 # lightning.pytorch==2.4.0
 seed_everything: true
 tags:
-  exp: &exp Sphere_VAE_1.1_Stage1
+  exp: &exp Sphere_VAE_1.1_Stage2
 torch_hub_dir: ~/.cache/torch/hub
 huggingface_cache_dir: null
 trainer:
@@ -67,7 +67,7 @@ model:
       logvar_init: 0.0
       distillation_weight: 1.0
       distillation_loss_type: "mse"
-      teacher_model_path: null
+      teacher_model_path: "/apdcephfs/share_300000800/datamultimodal/models/InternVL3-2B"
       select_layer: -1
       downsample_ratio: 0.5
   ema_tracker:
@@ -88,8 +88,8 @@ model:
       weight_decay: 0.0
       betas: [0.9, 0.95]
   eval_original_model: true
-  pretrain_model_path: null
-  freeze_encoder: true
+  pretrain_model_path: Sphere_vae_training_workdir/exp_Sphere_VAE_1.1_Stage1/epoch=0-step=50000.ckpt
+  freeze_encoder: false
 
 data:
   train_dataset:
