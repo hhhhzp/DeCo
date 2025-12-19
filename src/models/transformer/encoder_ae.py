@@ -156,6 +156,16 @@ class VAEModel(nn.Module):
             nn.Linear(llm_hidden_size, llm_hidden_size),
         )
 
+        self.gen_mlp1 = nn.Sequential(
+            nn.LayerNorm(vit_hidden_size * int(1 / self.downsample_ratio) ** 2),
+            nn.Linear(
+                vit_hidden_size * int(1 / self.downsample_ratio) ** 2,
+                llm_hidden_size,
+            ),
+            nn.GELU(),
+            nn.Linear(llm_hidden_size, llm_hidden_size),
+        )
+
         # Latent connector to convert vision features to latent space
         # Output latent_channel + 1 dimensions: latent_channel for mu, 1 for kappa
         self.latent_projector = LatentConnectorModule(
@@ -202,7 +212,18 @@ class VAEModel(nn.Module):
         self.vision_model = model.vision_model  # .state_dict(), strict=False)
         self.mlp1 = model.mlp1  # .state_dict())
 
+        # Copy mlp1 weights to gen_mlp1
+        self.copy_mlp1_to_gen_mlp1()
+
         print("Pretrained encoder weights loaded successfully!")
+
+    def copy_mlp1_to_gen_mlp1(self):
+        """
+        Copy weights from mlp1 to gen_mlp1.
+        This initializes gen_mlp1 with the same weights as mlp1.
+        """
+        self.gen_mlp1.load_state_dict(self.mlp1.state_dict())
+        print("Copied mlp1 weights to gen_mlp1")
 
     def pixel_shuffle(self, x, scale_factor=0.5):
         """Pixel shuffle downsampling"""
@@ -218,11 +239,11 @@ class VAEModel(nn.Module):
         x = x.permute(0, 2, 1, 3).contiguous()
         return x
 
-    def extract_feature(self, pixel_values):
+    def extract_vision_features(self, pixel_values):
         """
-        Extract features from vision model with pixel shuffle downsampling.
+        Extract raw features from vision model (before MLP projection).
         :param pixel_values: input image [B, C, H, W]
-        :return: vit_embeds [B, num_patches, hidden_size]
+        :return: vit_embeds [B, num_patches, vit_hidden_size * 4] (after pixel shuffle, before MLP)
         """
         # Normalize to ImageNet stats
         pixel_values = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(
@@ -230,7 +251,6 @@ class VAEModel(nn.Module):
         )
 
         vision_model = self.vision_model
-        mlp1 = self.mlp1
 
         if self.select_layer == -1:
             vit_embeds = vision_model(
@@ -247,7 +267,25 @@ class VAEModel(nn.Module):
         vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], h, w, -1)
         vit_embeds = self.pixel_shuffle(vit_embeds, scale_factor=self.downsample_ratio)
         vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], -1, vit_embeds.shape[-1])
-        vit_embeds = mlp1(vit_embeds)
+
+        return vit_embeds
+
+    def extract_feature(self, pixel_values, use_gen_mlp=False, vision_features=None):
+        """
+        Extract features from vision model with pixel shuffle downsampling.
+        :param pixel_values: input image [B, C, H, W]
+        :param use_gen_mlp: if True, use gen_mlp1; if False, use mlp1
+        :param vision_features: pre-computed vision features (before MLP), if provided, skip vision model computation
+        :return: vit_embeds [B, num_patches, hidden_size]
+        """
+        # Extract vision features if not provided
+        if vision_features is None:
+            vision_features = self.extract_vision_features(pixel_values)
+
+        # Apply MLP projection
+        mlp = self.gen_mlp1 if use_gen_mlp else self.mlp1
+        vit_embeds = mlp(vision_features)
+
         return vit_embeds
 
     def normalize(self, x):
@@ -259,13 +297,14 @@ class VAEModel(nn.Module):
     def encode_latent(self, x, features=None):
         """
         Encode image to Power Spherical distribution.
+        Uses gen_mlp1 for feature extraction (latent mode).
         :param x: input image [B, C, H, W] in range [-1, 1]
         :param features: pre-extracted features [B, N, hidden_size]
         :return: qz - PowerSphericalDistribution object
         """
-        # Extract features [B, N, hidden_size]
+        # Extract features [B, N, hidden_size] using gen_mlp1
         if features is None:
-            features = self.extract_feature(x)
+            features = self.extract_feature(x, use_gen_mlp=True)
 
         # Project to latent space [B, N, latent_channel + 1]
         latent_params = self.latent_projector(features)
@@ -345,6 +384,10 @@ class VAEModel(nn.Module):
     def forward(self, x, return_features=False, return_kl_loss=False, use_mode=False):
         """
         Full forward pass: encode then decode.
+        Supports two output modes:
+        1. Feature mode: vision_model + mlp1 -> features
+        2. Latent mode: vision_model + gen_mlp1 + latent_projector -> latent -> reconstructed
+
         :param x: input image [B, C, H, W] in range [-1, 1]
         :param return_features: if True, return features in output
         :param return_kl_loss: if True, return KL loss in output
@@ -355,10 +398,23 @@ class VAEModel(nn.Module):
                  - if return_features: (reconstructed, features)
                  - if both: (reconstructed, features, kl_loss)
         """
-        features = self.extract_feature(x)
-        qz = self.encode_latent(x, features=features)
+        # Extract vision features once (before MLP) to avoid redundant computation
+        vision_features = self.extract_vision_features(x)
+
+        # Extract features using gen_mlp1 for latent encoding
+        gen_features = self.extract_feature(
+            x, use_gen_mlp=True, vision_features=vision_features
+        )
+        qz = self.encode_latent(x, features=gen_features)
         latent = self.sample_latent(qz, use_mode=use_mode)
         reconstructed = self.decode_latent(latent)
+
+        # If features are requested, extract using mlp1 (feature mode)
+        # Reuse the same vision_features to avoid redundant vision model computation
+        if return_features:
+            features = self.extract_feature(
+                x, use_gen_mlp=False, vision_features=vision_features
+            )
 
         if return_features and return_kl_loss:
             kl_loss = self.forward_loss(qz)
