@@ -209,7 +209,7 @@ class VAEReconstructionLoss(nn.Module):
         print(f"Loading teacher model from {pretrained_model_path}...")
 
         # Load pretrained InternVLChatModel config
-        config = InternVLChatConfig.from_pretrained(pretrained_model_path)
+        config = AutoConfig.from_pretrained(pretrained_model_path)
         vision_config = config.vision_config
         vision_config.drop_path_rate = 0.0
 
