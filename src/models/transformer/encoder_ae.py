@@ -13,12 +13,6 @@ from src.models.transformer.dit_t2i_DeCo import LatentConnectorModule
 from src.models.layers.rmsnorm import RMSNorm as Norm
 
 
-import math
-
-import torch
-from torch.distributions import Beta
-
-
 class DCDownsampleMLP(nn.Module):
     """
     MLP projection module with shortcut channel grouping (no spatial downsampling).
@@ -43,6 +37,7 @@ class DCDownsampleMLP(nn.Module):
         super().__init__()
 
         self.shortcut = shortcut
+        self.out_channels = out_channels
         self.factor = 2
         # Calculate group size for channel grouping in shortcut
         # Assumes in_channels * factor^2 is divisible by out_channels
@@ -75,7 +70,7 @@ class DCDownsampleMLP(nn.Module):
         # Shortcut path: Channel grouping and averaging
         if self.shortcut:
             # [B, N, in_channels] -> [B, N, out_channels, group_size] -> [B, N, out_channels]
-            y = hidden_states.unflatten(-1, (-1, self.group_size))
+            y = hidden_states.unflatten(-1, (self.out_channels, self.group_size))
             y = y.mean(dim=-1)
             x = x + y
 
