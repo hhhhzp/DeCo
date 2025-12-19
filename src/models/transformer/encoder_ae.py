@@ -232,13 +232,6 @@ class VAEModel(nn.Module):
         vision_model = self.vision_model
         mlp1 = self.mlp1
 
-        # Temporarily set vision_model to eval mode to ensure exact match with teacher
-        # This is critical for distillation: even with frozen parameters,
-        # training mode can cause numerical differences in attention dropout paths
-        was_training = vision_model.training
-        if was_training:
-            vision_model.eval()
-
         if self.select_layer == -1:
             vit_embeds = vision_model(
                 pixel_values=pixel_values, output_hidden_states=False, return_dict=True
@@ -247,10 +240,6 @@ class VAEModel(nn.Module):
             vit_embeds = vision_model(
                 pixel_values=pixel_values, output_hidden_states=True, return_dict=True
             ).hidden_states[self.select_layer]
-
-        # Restore original training mode
-        if was_training:
-            vision_model.train()
 
         vit_embeds = vit_embeds[:, 1:, :]  # Remove CLS token
 
