@@ -90,7 +90,7 @@ def l2_norm(x: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
 
 
 class PowerSphericalDistribution:
-    def __init__(self, mu: torch.Tensor, kappa: torch.Tensor, eps: float = 1e-7):
+    def __init__(self, mu: torch.Tensor, kappa: torch.Tensor, eps: float = 1e-6):
         self.eps = eps
         self.mu = l2_norm(mu, eps)  # [..., m]
         self.kappa = torch.clamp(kappa, min=0.0)
