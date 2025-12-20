@@ -5,7 +5,7 @@ tags:
 torch_hub_dir: ~/.cache/torch/hub
 huggingface_cache_dir: null
 trainer:
-  default_root_dir: ./Sphere_vae_gen_mlp_new
+  default_root_dir: ./Sphere_vae_gen_mlp_layernorm
   accelerator: auto
   strategy:
     class_path: src.strategies.multi_model_ddp.MultiModelDDPStrategy
@@ -15,7 +15,7 @@ trainer:
   logger:
       class_path: lightning.pytorch.loggers.WandbLogger
       init_args:
-        save_dir: ./Sphere_vae_gen_mlp_new
+        save_dir: ./Sphere_vae_gen_mlp_layernorm
         name: *exp
   num_sanity_val_steps: 0
   max_steps: 200000  # Train for 1M steps (discriminator starts at 500k)
@@ -93,13 +93,11 @@ model:
 
 data:
   train_dataset:
-    class_path: src.data.dataset.imagenet.PixMultiJSONLDataset
+    class_path: src.data.dataset.imagenet.PixHFDataset
     init_args:
-      config_path: scripts/total_images.json
-      resolution: 224  # Input resolution
-      random_crop: true
-      random_flip: true
-      max_num_samples: null
+      root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k  # /path/to/ImageNet/train/
+      resolution: 224
+      split: train
   
   eval_dataset:
     class_path: src.data.dataset.imagenet.PixHFDataset

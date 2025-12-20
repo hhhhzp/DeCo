@@ -7,6 +7,11 @@ from torchvision.transforms import Normalize
 from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from transformers import AutoModel, AutoConfig
 from diffusers.models import AutoencoderDC
+from diffusers.models.autoencoders.vae import (
+    DecoderOutput,
+    DiagonalGaussianDistribution,
+)
+from diffusers.models.modeling_outputs import AutoencoderKLOutput
 from src.models.transformer.configuration_internvl_chat import InternVLChatConfig
 from src.models.transformer.modeling_intern_vit import InternVisionModel
 from src.models.transformer.dit_t2i_DeCo import LatentConnectorModule
@@ -70,130 +75,13 @@ class DCDownsampleMLP(nn.Module):
         return self.mlp(x)
 
 
-def l2_norm(x: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-    # 使用更安全的 norm 方式
-    return F.normalize(x, p=2, dim=-1, eps=eps)
-
-
-class PowerSphericalDistribution:
-    def __init__(self, mu: torch.Tensor, kappa: torch.Tensor, eps: float = 1e-6):
-        self.eps = eps
-        self.mu = l2_norm(mu, eps)  # [..., m]
-        self.kappa = torch.clamp(kappa, min=0.0)
-
-        self.m = self.mu.shape[-1]
-        self.d = self.m - 1
-        beta_const = 0.5 * self.d
-        self.alpha = self.kappa + beta_const  # [...,]
-        self.beta = torch.as_tensor(
-            beta_const, dtype=self.kappa.dtype, device=self.kappa.device
-        ).expand_as(self.kappa)
-
-    def _log_normalizer(self) -> torch.Tensor:
-        # log N_X(κ,d) = -[ (α+β)log 2 + β log π + lgamma(α) - lgamma(α+β) ]
-        return (
-            -(self.alpha + self.beta) * math.log(2.0)
-            - self.beta * math.log(math.pi)
-            - torch.lgamma(self.alpha)
-            + torch.lgamma(self.alpha + self.beta)
-        )
-
-    def log_prob(self, x: torch.Tensor) -> torch.Tensor:
-        dot = (self.mu * x).sum(dim=-1).clamp(-1.0, 1.0)
-        return self._log_normalizer() + self.kappa * torch.log1p(dot)
-
-    def entropy(self) -> torch.Tensor:
-        # H = -[ log N_X + κ ( log 2 + ψ(α) - ψ(α+β) ) ]
-        return -(
-            self._log_normalizer()
-            + self.kappa
-            * (
-                math.log(2.0)
-                + (torch.digamma(self.alpha) - torch.digamma(self.alpha + self.beta))
-            )
-        )
-
-    def kl_to_uniform(self) -> torch.Tensor:
-        # KL(q || U(S^{d})) = -H(q) + log |S^{d}|
-        d = torch.as_tensor(self.d, dtype=self.kappa.dtype, device=self.kappa.device)
-        log_area = (
-            math.log(2.0)
-            + 0.5 * (d + 1.0) * math.log(math.pi)
-            - torch.lgamma(0.5 * (d + 1.0))
-        )
-        return -self.entropy() + log_area
-
-    @property
-    def mode(self) -> torch.Tensor:
-        return self.mu
-
-    def rsample(self):
-        device = self.mu.device
-        dtype = self.mu.dtype
-
-        # --- 1. 进入 FP32 环境 ---
-        mu_f32 = self.mu.float()
-        alpha_f32 = self.alpha.float()
-        beta_f32 = self.beta.float()
-
-        # --- 2. 采样 Z (投影分量) ---
-        # Z ~ Beta(alpha, beta). 如果 alpha/beta 极大，BF16 会直接 NaN
-        z_dist = Beta(alpha_f32, beta_f32)
-        Z = z_dist.rsample()
-
-        # 极值保护：防止 t^2 刚好等于 1 导致后续梯度在 sqrt(0) 处爆炸
-        Z = torch.clamp(Z, min=self.eps, max=1.0 - self.eps)
-        t = (2.0 * Z - 1.0).unsqueeze(-1)  # [..., 1]
-
-        # --- 3. 采样 v (正交分量) ---
-        # v ~ U(S^{m-2})
-        v_raw = torch.randn(
-            *mu_f32.shape[:-1],
-            self.m - 1,
-            device=device,
-            dtype=torch.float32,
-        )
-        v = l2_norm(v_raw, eps=self.eps)
-
-        # --- 4. 构造基于 e1 为轴的采样点 y ---
-        # y = [t, sqrt(1-t^2) * v]
-        # 使用 clamp 确保 1-t^2 恒大于 0
-        inner_val = torch.clamp(1.0 - t.pow(2), min=self.eps)
-        y = torch.cat([t, torch.sqrt(inner_val) * v], dim=-1)
-
-        # --- 5. Householder 变换 (旋转 e1 到 mu) ---
-        e1 = torch.zeros_like(mu_f32)
-        e1[..., 0] = 1.0
-
-        # 计算反射向量 u
-        u = e1 - mu_f32
-        u_norm = torch.norm(u, dim=-1, keepdim=True)
-
-        # 稳定性检查：如果 mu 已经指向 e1 方向，跳过反射
-        # 这里的阈值需能覆盖 BF16 的最小精度误差
-        is_parallel = u_norm < 1e-5
-
-        # 归一化反射向量，使用您新提供的 l2_norm 逻辑（此处内联以确保 FP32 精度）
-        u = u / u_norm.clamp(min=self.eps)
-
-        # 执行反射: z = y - 2(u·y)u
-        # 确保 u 维度对齐
-        if u.dim() < y.dim():
-            u = u.view((1,) * (y.dim() - u.dim()) + u.shape)
-
-        dot_prod = torch.sum(y * u, dim=-1, keepdim=True)
-        z = y - 2.0 * dot_prod * u
-
-        # --- 6. 处理并行情况并返回 ---
-        if is_parallel.any():
-            # 针对 is_parallel 为 True 的位置，直接取 y (因为 e1 就是 mu)
-            p_mask = is_parallel
-            if p_mask.dim() < z.dim():
-                p_mask = p_mask.view(p_mask.shape + (1,) * (z.dim() - p_mask.dim()))
-            z = torch.where(p_mask, y, z)
-
-        # 回归原始精度（如 bfloat16）
-        return z.to(dtype)
+def layer_norm_2d(input: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    """Apply layer normalization in 2D spatial format."""
+    # input.shape = (bsz, c, h, w)
+    _input = input.permute(0, 2, 3, 1)
+    _input = F.layer_norm(_input, _input.size()[-1:], None, None, eps)
+    _input = _input.permute(0, 3, 1, 2)
+    return _input
 
 
 class VAEModel(nn.Module):
@@ -257,11 +145,15 @@ class VAEModel(nn.Module):
         )
 
         # Latent connector to convert vision features to latent space
-        # Output latent_channel + 1 dimensions: latent_channel for mu, 1 for kappa
+        # Output 2*latent_channel dimensions: latent_channel for mean, latent_channel for logvar
         # Input: 2*vit_hidden_size (from gen_mlp1)
         self.latent_projector = LatentConnectorModule(
-            hidden_size=2 * vit_hidden_size, out_channels=self.latent_channel + 1
+            hidden_size=2 * vit_hidden_size, out_channels=2 * self.latent_channel
         )
+
+        # Encoder normalization flag (optional)
+        self.encoder_norm = True
+        self.deterministic = False
 
         # Load pretrained encoder weights if specified
         if load_pretrained_encoder:
@@ -380,73 +272,79 @@ class VAEModel(nn.Module):
 
         return vit_embeds
 
-    def normalize(self, x):
-        """Normalize latent to unit sphere and scale."""
-        x = l2_norm(x)
-        x = x * (self.latent_channel**0.5)
-        return x
-
-    def encode_latent(self, x, features=None):
+    def encode_latent(self, x, features=None, return_dict=True):
         """
-        Encode image to Power Spherical distribution.
+        Encode image to Diagonal Gaussian distribution.
         Uses gen_mlp1 for feature extraction (latent mode).
         :param x: input image [B, C, H, W] in range [-1, 1]
         :param features: pre-extracted features [B, N, hidden_size]
-        :return: qz - PowerSphericalDistribution object
+        :param return_dict: if True, return AutoencoderKLOutput; else return tuple
+        :return: posterior - DiagonalGaussianDistribution object (or AutoencoderKLOutput)
         """
         # Extract features [B, N, hidden_size] using gen_mlp1
         if features is None:
             features = self.extract_feature(x, use_gen_mlp=True)
 
-        # Project to latent space [B, N, latent_channel + 1]
-        latent_params = self.latent_projector(features)
+        # Project to latent space [B, N, 2*latent_channel]
+        moments = self.latent_projector(features)
 
-        # Split into mu and kappa
-        mu = latent_params[..., :-1]  # [B, N, latent_channel]
-        kappa = latent_params[..., -1]  # [B, N]
+        # Reshape to spatial format [B, 2*latent_channel, H', W']
+        grid_size = int(moments.shape[1] ** 0.5)
+        moments = moments.transpose(1, 2).reshape(
+            moments.shape[0], 2 * self.latent_channel, grid_size, grid_size
+        )
 
-        # Normalize mu to unit sphere
-        mu = l2_norm(mu)
-        # Apply softplus to kappa and add 1.0 to ensure kappa > 0
-        kappa = F.softplus(kappa) + 1.0
+        # Split into mean and logvar
+        mean, logvar = torch.chunk(moments, 2, dim=1)
 
-        # Create Power Spherical distribution
-        qz = PowerSphericalDistribution(mu, kappa)
+        # Optional: apply layer normalization to mean
+        if self.encoder_norm:
+            mean = layer_norm_2d(mean)
 
-        return qz
+        # Concatenate back
+        moments = torch.cat([mean, logvar], dim=1).contiguous()
 
-    def sample_latent(self, qz, use_mode=False):
+        # Create Diagonal Gaussian distribution
+        posterior = DiagonalGaussianDistribution(
+            moments, deterministic=self.deterministic
+        )
+
+        if not return_dict:
+            return (posterior,)
+
+        return AutoencoderKLOutput(latent_dist=posterior)
+
+    def sample_latent(self, posterior, use_mode=False):
         """
-        Sample latent from Power Spherical distribution and reshape to spatial format.
-        :param qz: PowerSphericalDistribution object
-        :param use_mode: if True, use mode (mu) instead of sampling; if False, use rsample()
+        Sample latent from Diagonal Gaussian distribution.
+        :param posterior: DiagonalGaussianDistribution object or AutoencoderKLOutput
+        :param use_mode: if True, use mode() instead of sampling; if False, use sample()
         :return: latent [B, latent_channel, H', W']
         """
-        # Sample from distribution (reparameterized) or use mode
+        # Extract distribution if wrapped in AutoencoderKLOutput
+        if isinstance(posterior, AutoencoderKLOutput):
+            posterior = posterior.latent_dist
+
+        # Sample from distribution or use mode
         if use_mode:
-            latent = qz.mode  # Use mean (deterministic)
+            latent = posterior.mode()  # Use mean (deterministic)
         else:
-            latent = qz.rsample()  # Random sampling (stochastic)
-
-        # Scale by sqrt(latent_dim)
-        latent = latent * (self.latent_channel**0.5)
-
-        # Reshape to spatial format [B, latent_channel, H', W']
-        grid_size = int(latent.shape[1] ** 0.5)
-        latent = latent.transpose(1, 2).reshape(
-            latent.shape[0], self.latent_channel, grid_size, grid_size
-        )
+            latent = posterior.sample()  # Random sampling (stochastic)
 
         return latent
 
-    def forward_loss(self, qz):
+    def forward_loss(self, posterior):
         """
-        Compute KL divergence loss for Power Spherical distribution.
-        :param qz: PowerSphericalDistribution object
+        Compute KL divergence loss for Diagonal Gaussian distribution.
+        :param posterior: DiagonalGaussianDistribution object or AutoencoderKLOutput
         :return: kl_loss - scalar tensor
         """
-        # Compute KL divergence to uniform distribution
-        kl_loss = qz.kl_to_uniform()
+        # Extract distribution if wrapped in AutoencoderKLOutput
+        if isinstance(posterior, AutoencoderKLOutput):
+            posterior = posterior.latent_dist
+
+        # Compute KL divergence to standard normal distribution
+        kl_loss = posterior.kl()
         return kl_loss.mean()
 
     def decode_latent(self, latent):
@@ -473,7 +371,13 @@ class VAEModel(nn.Module):
 
         return reconstructed_pixels
 
-    def forward(self, x, return_features=False, return_kl_loss=False, use_mode=False):
+    def forward(
+        self,
+        x,
+        return_features=False,
+        return_kl_loss=False,
+        use_mode=False,
+    ):
         """
         Full forward pass: encode then decode.
         Supports two output modes:
@@ -483,7 +387,8 @@ class VAEModel(nn.Module):
         :param x: input image [B, C, H, W] in range [-1, 1]
         :param return_features: if True, return features in output
         :param return_kl_loss: if True, return KL loss in output
-        :param use_mode: if True, use mode (mu) for sampling; if False, use rsample()
+        :param use_mode: if True, use mode() for sampling; if False, use sample()
+        :param sample_posterior: if True, sample from posterior; if False, use mode (same as use_mode)
         :return: reconstructed image [B, C, H, W] in range [-1, 1]
                  Additional returns based on flags:
                  - if return_kl_loss: (reconstructed, kl_loss)
@@ -497,8 +402,10 @@ class VAEModel(nn.Module):
         gen_features = self.extract_feature(
             x, use_gen_mlp=True, vision_features=vision_features
         )
-        qz = self.encode_latent(x, features=gen_features)
-        latent = self.sample_latent(qz, use_mode=use_mode)
+        posterior = self.encode_latent(x, features=gen_features)
+
+        # Determine sampling mode
+        latent = self.sample_latent(posterior, use_mode=use_mode)
         reconstructed = self.decode_latent(latent)
 
         # If features are requested, extract using mlp1 (feature mode)
@@ -509,10 +416,10 @@ class VAEModel(nn.Module):
             )
 
         if return_features and return_kl_loss:
-            kl_loss = self.forward_loss(qz)
+            kl_loss = self.forward_loss(posterior)
             return reconstructed, features, kl_loss
         elif return_kl_loss:
-            kl_loss = self.forward_loss(qz)
+            kl_loss = self.forward_loss(posterior)
             return reconstructed, kl_loss
         elif return_features:
             return reconstructed, features
