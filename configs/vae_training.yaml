@@ -5,7 +5,7 @@ tags:
 torch_hub_dir: ~/.cache/torch/hub
 huggingface_cache_dir: null
 trainer:
-  default_root_dir: ./Sphere_vae_gen_mlp_dcdown
+  default_root_dir: ./Sphere_vae_gen_mlp_new
   accelerator: auto
   strategy:
     class_path: src.strategies.multi_model_ddp.MultiModelDDPStrategy
@@ -15,7 +15,7 @@ trainer:
   logger:
       class_path: lightning.pytorch.loggers.WandbLogger
       init_args:
-        save_dir: ./Sphere_vae_gen_mlp_dcdown
+        save_dir: ./Sphere_vae_gen_mlp_new
         name: *exp
   num_sanity_val_steps: 0
   max_steps: 200000  # Train for 1M steps (discriminator starts at 500k)
