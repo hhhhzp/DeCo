@@ -51,10 +51,6 @@ class DCDownsampleMLP(nn.Module):
             nn.Linear(out_channels, out_channels),
         )
 
-        # Initialize last layer to 0 for residual connection
-        nn.init.zeros_(self.mlp[-1].weight)
-        nn.init.zeros_(self.mlp[-1].bias)
-
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         """
         Forward pass with channel projection and shortcut grouping.
