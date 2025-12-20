@@ -71,7 +71,10 @@ class DCDownsampleMLP(nn.Module):
             y = y.mean(dim=-1)
             x = x + y
 
-        return self.mlp(x)
+        # Apply MLP with residual connection: x = x + MLP(x)
+        x = x + self.mlp(x)
+
+        return x
 
 
 def l2_norm(x: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
