@@ -31,6 +31,7 @@ class DCDownsampleMLP(nn.Module):
     def __init__(
         self,
         in_channels: int,
+        inter_channels: int,
         out_channels: int,
         shortcut: bool = True,
     ) -> None:
@@ -41,19 +42,15 @@ class DCDownsampleMLP(nn.Module):
         self.group_size = 2
 
         # Channel projection layer (main path)
-        self.channel_proj = nn.Linear(in_channels, out_channels)
+        self.channel_proj = nn.Linear(in_channels, inter_channels)
 
         # MLP with residual connection
         self.mlp = nn.Sequential(
-            nn.LayerNorm(out_channels),
-            nn.Linear(out_channels, out_channels),
+            nn.LayerNorm(inter_channels),
+            nn.Linear(inter_channels, inter_channels),
             nn.GELU(),
-            nn.Linear(out_channels, out_channels),
+            nn.Linear(inter_channels, out_channels),
         )
-
-        # Initialize last layer to 0 for residual connection
-        nn.init.zeros_(self.mlp[-1].weight)
-        nn.init.zeros_(self.mlp[-1].bias)
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         """
@@ -228,6 +225,7 @@ class VAEModel(nn.Module):
         # Downsampling is already done in extract_vision_features via pixel_shuffle
         self.gen_mlp1 = DCDownsampleMLP(
             in_channels=vit_hidden_size * int(1 / self.downsample_ratio) ** 2,
+            inter_channels=2 * vit_hidden_size,
             out_channels=llm_hidden_size,
         )
 
