@@ -228,13 +228,13 @@ class VAEModel(nn.Module):
         # Downsampling is already done in extract_vision_features via pixel_shuffle
         self.gen_mlp1 = DCDownsampleMLP(
             in_channels=vit_hidden_size * int(1 / self.downsample_ratio) ** 2,
-            out_channels=2 * vit_hidden_size,
+            out_channels=llm_hidden_size,
         )
 
         # Latent connector to convert vision features to latent space
         # Output latent_channel + 1 dimensions: latent_channel for mu, 1 for kappa
         # Input: 2*vit_hidden_size (from gen_mlp1)
-        self.latent_projector = nn.Linear(2 * vit_hidden_size, self.latent_channel + 1)
+        self.latent_projector = nn.Linear(llm_hidden_size, self.latent_channel + 1)
         # LatentConnectorModule(
         #     hidden_size=2 * vit_hidden_size, out_channels=self.latent_channel + 1
         # )
