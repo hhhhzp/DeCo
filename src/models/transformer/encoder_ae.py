@@ -64,7 +64,7 @@ class DCDownsampleMLP(nn.Module):
         # Shortcut path: Channel grouping and averaging
         if self.shortcut:
             # [B, N, in_channels] -> [B, N, out_channels, group_size] -> [B, N, out_channels]
-            y = hidden_states.unflatten(-1, (self.out_channels, self.group_size))
+            y = hidden_states.unflatten(-1, (-1, self.group_size))
             y = y.mean(dim=-1)
             x = x + y
 
