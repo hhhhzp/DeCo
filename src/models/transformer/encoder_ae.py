@@ -128,36 +128,72 @@ class PowerSphericalDistribution:
         return self.mu
 
     def rsample(self):
-        Z = Beta(self.alpha, self.beta).rsample()  # [*S, *B]
-        t = (2.0 * Z - 1.0).unsqueeze(-1)  # [*S, *B, 1]
+        device = self.mu.device
+        dtype = self.mu.dtype
 
-        # 2) v ~ U(S^{m-2})
-        v = torch.randn(
-            *self.mu.shape[:-1],
+        # --- 1. 进入 FP32 环境 ---
+        mu_f32 = self.mu.float()
+        alpha_f32 = self.alpha.float()
+        beta_f32 = self.beta.float()
+
+        # --- 2. 采样 Z (投影分量) ---
+        # Z ~ Beta(alpha, beta). 如果 alpha/beta 极大，BF16 会直接 NaN
+        z_dist = Beta(alpha_f32, beta_f32)
+        Z = z_dist.rsample()
+
+        # 极值保护：防止 t^2 刚好等于 1 导致后续梯度在 sqrt(0) 处爆炸
+        Z = torch.clamp(Z, min=self.eps, max=1.0 - self.eps)
+        t = (2.0 * Z - 1.0).unsqueeze(-1)  # [..., 1]
+
+        # --- 3. 采样 v (正交分量) ---
+        # v ~ U(S^{m-2})
+        v_raw = torch.randn(
+            *mu_f32.shape[:-1],
             self.m - 1,
-            device=self.mu.device,
-            dtype=self.mu.dtype,
-        )  # [*S, *B, m-1]
-        v = l2_norm(v, self.eps)
+            device=device,
+            dtype=torch.float32,
+        )
+        v = l2_norm(v_raw, eps=self.eps)
 
-        y = torch.cat(
-            [t, torch.sqrt(torch.clamp(1 - t**2, min=self.eps)) * v], dim=-1
-        )  # [*S, *B, m]
+        # --- 4. 构造基于 e1 为轴的采样点 y ---
+        # y = [t, sqrt(1-t^2) * v]
+        # 使用 clamp 确保 1-t^2 恒大于 0
+        inner_val = torch.clamp(1.0 - t.pow(2), min=self.eps)
+        y = torch.cat([t, torch.sqrt(inner_val) * v], dim=-1)
 
-        e1 = torch.zeros_like(self.mu)
+        # --- 5. Householder 变换 (旋转 e1 到 mu) ---
+        e1 = torch.zeros_like(mu_f32)
         e1[..., 0] = 1.0
-        u = l2_norm(e1 - self.mu, self.eps)
+
+        # 计算反射向量 u
+        u = e1 - mu_f32
+        u_norm = torch.norm(u, dim=-1, keepdim=True)
+
+        # 稳定性检查：如果 mu 已经指向 e1 方向，跳过反射
+        # 这里的阈值需能覆盖 BF16 的最小精度误差
+        is_parallel = u_norm < 1e-5
+
+        # 归一化反射向量，使用您新提供的 l2_norm 逻辑（此处内联以确保 FP32 精度）
+        u = u / u_norm.clamp(min=self.eps)
+
+        # 执行反射: z = y - 2(u·y)u
+        # 确保 u 维度对齐
         if u.dim() < y.dim():
             u = u.view((1,) * (y.dim() - u.dim()) + u.shape)
-        z = y - 2.0 * (y * u).sum(dim=-1, keepdim=True) * u
 
-        parallel = (self.mu - e1).abs().sum(dim=-1, keepdim=True) < 1e-6
-        if parallel.any():
-            p = parallel
-            if p.dim() < y.dim() - 1:
-                p = p.view((1,) * (y.dim() - 1 - p.dim()) + p.shape)
-            z = torch.where(p, y, z)
-        return z
+        dot_prod = torch.sum(y * u, dim=-1, keepdim=True)
+        z = y - 2.0 * dot_prod * u
+
+        # --- 6. 处理并行情况并返回 ---
+        if is_parallel.any():
+            # 针对 is_parallel 为 True 的位置，直接取 y (因为 e1 就是 mu)
+            p_mask = is_parallel
+            if p_mask.dim() < z.dim():
+                p_mask = p_mask.view(p_mask.shape + (1,) * (z.dim() - p_mask.dim()))
+            z = torch.where(p_mask, y, z)
+
+        # 回归原始精度（如 bfloat16）
+        return z.to(dtype)
 
 
 class VAEModel(nn.Module):
