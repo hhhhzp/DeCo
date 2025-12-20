@@ -78,19 +78,22 @@ class DCDownsampleMLP(nn.Module):
 
 
 def l2_norm(x: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-    """L2 normalization with numerical stability."""
-    norm = x.norm(dim=-1, keepdim=True)
-    # Clamp to avoid division by very small numbers
+    """
+    L2 normalization with numerical stability.
+    FIX: Place eps INSIDE sqrt to ensure gradient is defined at 0.
+    """
+    # 原写法在 x=0 处梯度为 NaN，修改为先平方求和加 eps 再开方
+    norm = (x.pow(2).sum(dim=-1, keepdim=True) + 1e-12).sqrt()
+    # 保持原有的 clamp 逻辑防止除零，但此时 eps 主要用于防止除以极小值
     norm = torch.clamp(norm, min=eps)
     return x / norm
 
 
 class PowerSphericalDistribution:
-    def __init__(self, mu: torch.Tensor, kappa: torch.Tensor, eps: float = 1e-6):
+    def __init__(self, mu: torch.Tensor, kappa: torch.Tensor, eps: float = 1e-7):
         self.eps = eps
         self.mu = l2_norm(mu, eps)  # [..., m]
-        # Clamp kappa to reasonable range to prevent numerical overflow
-        self.kappa = torch.clamp(kappa, min=0.0, max=100.0)
+        self.kappa = torch.clamp(kappa, min=0.0)
 
         self.m = self.mu.shape[-1]
         self.d = self.m - 1
@@ -152,7 +155,7 @@ class PowerSphericalDistribution:
         v = l2_norm(v, self.eps)
 
         y = torch.cat(
-            [t, torch.sqrt(torch.clamp(1 - t**2, min=self.eps)) * v], dim=-1
+            [t, torch.sqrt(torch.clamp(1 - t**2, min=0.0)) * v], dim=-1
         )  # [*S, *B, m]
 
         e1 = torch.zeros_like(self.mu)
