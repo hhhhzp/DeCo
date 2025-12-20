@@ -71,10 +71,7 @@ class DCDownsampleMLP(nn.Module):
             y = y.mean(dim=-1)
             x = x + y
 
-        # Apply MLP with residual connection: x = x + MLP(x)
-        x = x + self.mlp(x)
-
-        return x
+        return self.mlp(x)
 
 
 def l2_norm(x: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
@@ -237,9 +234,10 @@ class VAEModel(nn.Module):
         # Latent connector to convert vision features to latent space
         # Output latent_channel + 1 dimensions: latent_channel for mu, 1 for kappa
         # Input: 2*vit_hidden_size (from gen_mlp1)
-        self.latent_projector = LatentConnectorModule(
-            hidden_size=2 * vit_hidden_size, out_channels=self.latent_channel + 1
-        )
+        self.latent_projector = nn.Linear(2 * vit_hidden_size, self.latent_channel + 1)
+        # LatentConnectorModule(
+        #     hidden_size=2 * vit_hidden_size, out_channels=self.latent_channel + 1
+        # )
 
         # Load pretrained encoder weights if specified
         if load_pretrained_encoder:
