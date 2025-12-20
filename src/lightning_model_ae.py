@@ -275,8 +275,8 @@ class LightningModelVAE(pl.LightningModule):
 
         # Forward pass: encode -> sample -> decode
         # Use stochastic sampling (use_mode=False) for training
-        reconstructed_pixels, student_features, kl_loss = self.vae_model(
-            img, return_features=True, return_kl_loss=True, use_mode=False
+        reconstructed_pixels, student_features = self.vae_model(
+            img, return_features=True, use_mode=False
         )
 
         # Pass student features to loss module for distillation
@@ -299,8 +299,8 @@ class LightningModelVAE(pl.LightningModule):
         )
 
         # Add KL loss for Power Spherical regularization
-        total_loss = total_loss + 0.0 * kl_loss
-        loss_dict["kl_loss"] = kl_loss
+        # total_loss = total_loss + 0.0 * kl_loss
+        # loss_dict["kl_loss"] = kl_loss
 
         # Backward and optimize generator (encoder)
         opt_generator.zero_grad()
