@@ -70,12 +70,13 @@ class DCDownsampleMLP(nn.Module):
         return self.mlp(x)
 
 
-def l2_norm(x: torch.Tensor, eps: float = 1e-7) -> torch.Tensor:
-    return x / torch.clamp(x.norm(dim=-1, keepdim=True), min=eps)
+def l2_norm(x: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    # 使用更安全的 norm 方式
+    return F.normalize(x, p=2, dim=-1, eps=eps)
 
 
 class PowerSphericalDistribution:
-    def __init__(self, mu: torch.Tensor, kappa: torch.Tensor, eps: float = 1e-7):
+    def __init__(self, mu: torch.Tensor, kappa: torch.Tensor, eps: float = 1e-6):
         self.eps = eps
         self.mu = l2_norm(mu, eps)  # [..., m]
         self.kappa = torch.clamp(kappa, min=0.0)
@@ -140,7 +141,7 @@ class PowerSphericalDistribution:
         v = l2_norm(v, self.eps)
 
         y = torch.cat(
-            [t, torch.sqrt(torch.clamp(1 - t**2, min=0.0)) * v], dim=-1
+            [t, torch.sqrt(torch.clamp(1 - t**2, min=self.eps)) * v], dim=-1
         )  # [*S, *B, m]
 
         e1 = torch.zeros_like(self.mu)
