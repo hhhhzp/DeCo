@@ -31,7 +31,6 @@ class DCDownsampleMLP(nn.Module):
     def __init__(
         self,
         in_channels: int,
-        inter_channels: int,
         out_channels: int,
         shortcut: bool = True,
     ) -> None:
@@ -42,15 +41,19 @@ class DCDownsampleMLP(nn.Module):
         self.group_size = 2
 
         # Channel projection layer (main path)
-        self.channel_proj = nn.Linear(in_channels, inter_channels)
+        self.channel_proj = nn.Linear(in_channels, out_channels)
 
         # MLP with residual connection
         self.mlp = nn.Sequential(
-            nn.LayerNorm(inter_channels),
-            nn.Linear(inter_channels, inter_channels),
+            nn.LayerNorm(out_channels),
+            nn.Linear(out_channels, out_channels),
             nn.GELU(),
-            nn.Linear(inter_channels, out_channels),
+            nn.Linear(out_channels, out_channels),
         )
+
+        # Initialize last layer to 0 for residual connection
+        nn.init.zeros_(self.mlp[-1].weight)
+        nn.init.zeros_(self.mlp[-1].bias)
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         """
@@ -64,27 +67,19 @@ class DCDownsampleMLP(nn.Module):
         # Shortcut path: Channel grouping and averaging
         if self.shortcut:
             # [B, N, in_channels] -> [B, N, out_channels, group_size] -> [B, N, out_channels]
-            y = hidden_states.unflatten(-1, (-1, self.group_size))
+            y = hidden_states.unflatten(-1, (self.out_channels, self.group_size))
             y = y.mean(dim=-1)
             x = x + y
 
         return self.mlp(x)
 
 
-def l2_norm(x: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-    """
-    L2 normalization with numerical stability.
-    FIX: Place eps INSIDE sqrt to ensure gradient is defined at 0.
-    """
-    # 原写法在 x=0 处梯度为 NaN，修改为先平方求和加 eps 再开方
-    norm = (x.pow(2).sum(dim=-1, keepdim=True) + 1e-12).sqrt()
-    # 保持原有的 clamp 逻辑防止除零，但此时 eps 主要用于防止除以极小值
-    norm = torch.clamp(norm, min=eps)
-    return x / norm
+def l2_norm(x: torch.Tensor, eps: float = 1e-7) -> torch.Tensor:
+    return x / torch.clamp(x.norm(dim=-1, keepdim=True), min=eps)
 
 
 class PowerSphericalDistribution:
-    def __init__(self, mu: torch.Tensor, kappa: torch.Tensor, eps: float = 1e-6):
+    def __init__(self, mu: torch.Tensor, kappa: torch.Tensor, eps: float = 1e-7):
         self.eps = eps
         self.mu = l2_norm(mu, eps)  # [..., m]
         self.kappa = torch.clamp(kappa, min=0.0)
@@ -225,17 +220,15 @@ class VAEModel(nn.Module):
         # Downsampling is already done in extract_vision_features via pixel_shuffle
         self.gen_mlp1 = DCDownsampleMLP(
             in_channels=vit_hidden_size * int(1 / self.downsample_ratio) ** 2,
-            inter_channels=2 * vit_hidden_size,
-            out_channels=llm_hidden_size,
+            out_channels=2 * vit_hidden_size,
         )
 
         # Latent connector to convert vision features to latent space
         # Output latent_channel + 1 dimensions: latent_channel for mu, 1 for kappa
         # Input: 2*vit_hidden_size (from gen_mlp1)
-        self.latent_projector = nn.Linear(llm_hidden_size, self.latent_channel + 1)
-        # LatentConnectorModule(
-        #     hidden_size=2 * vit_hidden_size, out_channels=self.latent_channel + 1
-        # )
+        self.latent_projector = LatentConnectorModule(
+            hidden_size=2 * vit_hidden_size, out_channels=self.latent_channel + 1
+        )
 
         # Load pretrained encoder weights if specified
         if load_pretrained_encoder:
