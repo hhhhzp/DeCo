@@ -211,7 +211,36 @@ class LightningModelVAE(pl.LightningModule):
             param_groups.append({"params": other_params})
 
         if self.global_rank == 0:
-            print(param_groups)
+            print("\n" + "=" * 80)
+            print("OPTIMIZER CONFIGURATION - Learning Rates by Component")
+            print("=" * 80)
+
+            # Group 0: vision_model components
+            if len(vision_mlp_params) > 0:
+                vision_param_count = sum(p.numel() for p in vision_mlp_params)
+                vision_lr = param_groups[0].get('lr', 'default')
+                print(f"\nGroup 0 - Vision Model Components:")
+                print(f"  Learning Rate: {vision_lr}")
+                print(f"  Total Parameters: {vision_param_count:,}")
+                print(f"  Components:")
+                for name, param in vae_model.named_parameters():
+                    if param.requires_grad and 'vision_model' in name:
+                        print(f"    - {name}: {param.numel():,} params")
+
+            # Group 1: other components
+            if len(other_params) > 0:
+                group_idx = 1 if len(vision_mlp_params) > 0 else 0
+                other_param_count = sum(p.numel() for p in other_params)
+                other_lr = param_groups[group_idx].get('lr', 'default (from config)')
+                print(f"\nGroup {group_idx} - Other Trainable Components:")
+                print(f"  Learning Rate: {other_lr}")
+                print(f"  Total Parameters: {other_param_count:,}")
+                print(f"  Components:")
+                for name, param in vae_model.named_parameters():
+                    if param.requires_grad and 'vision_model' not in name:
+                        print(f"    - {name}: {param.numel():,} params")
+
+            print("\n" + "=" * 80 + "\n")
         optimizer_encoder = self.optimizer(param_groups)
         lr_scheduler_encoder = get_constant_schedule_with_warmup(
             optimizer_encoder, num_warmup_steps=0
