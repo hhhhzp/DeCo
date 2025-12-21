@@ -132,6 +132,9 @@ class VAEModel(nn.Module):
             nn.GELU(),
             nn.Linear(llm_hidden_size, llm_hidden_size),
         )
+        self.semantic_projector = LatentConnectorModule(
+            hidden_size=llm_hidden_size, out_channels=llm_hidden_size
+        )
 
         # gen_mlp1: MLP projection with residual connection (no downsampling)
         # Input: vit_hidden_size * 4 channels -> channel projection -> 2*vit_hidden_size (output)
@@ -269,7 +272,8 @@ class VAEModel(nn.Module):
         # Both mlp1 and gen_mlp1 preserve spatial dimensions (N unchanged)
         mlp = self.gen_mlp1 if use_gen_mlp else self.mlp1
         vit_embeds = mlp(vision_features)
-
+        if not use_gen_mlp and hasattr(self, "semantic_projector"):
+            vit_embeds = self.semantic_projector(vit_embeds)
         return vit_embeds
 
     def encode_latent(self, x, features=None, return_dict=True):
