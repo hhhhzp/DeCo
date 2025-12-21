@@ -1,7 +1,7 @@
 # lightning.pytorch==2.4.0
 seed_everything: true
 tags:
-  exp: &exp vae_gen_sem_mlp_layernorm_constant_lr5e-5_stage2
+  exp: &exp vae_latent_sem_mlp_layernorm_constant_lr5e-5_stage2
 torch_hub_dir: ~/.cache/torch/hub
 huggingface_cache_dir: null
 trainer:
