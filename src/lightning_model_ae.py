@@ -199,15 +199,19 @@ class LightningModelVAE(pl.LightningModule):
                     other_params.append(param)
 
         # Create parameter groups with different learning rates
+        # Base learning rate from config: 1e-4
+        # vision_model and mlp1 use 0.1x learning rate: 1e-5
         param_groups = []
-        if len(vision_mlp_params) > 0:
-            param_groups.append({"params": vision_mlp_params, "lr_scale": 0.1})
         if len(other_params) > 0:
-            param_groups.append({"params": other_params, "lr_scale": 1.0})
+            param_groups.append({"params": other_params})
+            # Will use base lr from optimizer config
+        if len(vision_mlp_params) > 0:
+            param_groups.append({"params": vision_mlp_params, "lr": 1e-5})
+            # 0.1x of base lr
 
         optimizer_encoder = self.optimizer(param_groups)
-        lr_scheduler_encoder = get_cosine_schedule_with_warmup(
-            optimizer_encoder, num_warmup_steps=10000, num_training_steps=200000
+        lr_scheduler_encoder = get_constant_schedule_with_warmup(
+            optimizer_encoder, num_warmup_steps=0
         )
 
         # get_constant_schedule_with_warmup(optimizer_encoder, num_warmup_steps=0)
