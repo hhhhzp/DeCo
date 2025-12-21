@@ -210,6 +210,8 @@ class LightningModelVAE(pl.LightningModule):
             # Group 1: other parameters with base learning rate (from config)
             param_groups.append({"params": other_params})
 
+        if self.global_rank == 0:
+            print(param_groups)
         optimizer_encoder = self.optimizer(param_groups)
         lr_scheduler_encoder = get_constant_schedule_with_warmup(
             optimizer_encoder, num_warmup_steps=0
