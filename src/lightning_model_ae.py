@@ -50,6 +50,7 @@ class LightningModelVAE(pl.LightningModule):
         discriminator_optimizer: OptimizerCallable = None,
         freeze_encoder: bool = False,
         ema_tracker: SimpleEMA = None,
+        load_ema_as_main: bool = False,
     ):
         super().__init__()
         self.vae_model = vae_model
@@ -64,6 +65,7 @@ class LightningModelVAE(pl.LightningModule):
         self.eval_original_model = eval_original_model
         self.pretrain_model_path = pretrain_model_path
         self.freeze_encoder = freeze_encoder
+        self.load_ema_as_main = load_ema_as_main
 
         self._strict_loading = True
         self._logged_images_count = 0
@@ -90,11 +92,18 @@ class LightningModelVAE(pl.LightningModule):
                 # Also handle cases with only one of the prefixes
                 new_key = new_key.replace('.module.', '.')
                 new_key = new_key.replace('._orig_mod.', '.')
+
+                # If load_ema_as_main is True, load ema_vae_model weights into vae_model
+                if self.load_ema_as_main and new_key.startswith('ema_vae_model.'):
+                    new_key = new_key.replace('ema_vae_model.', 'vae_model.', 1)
+
                 new_state_dict[new_key] = value
 
             msg = self.load_state_dict(new_state_dict, strict=False)
             if self.global_rank == 0:
                 print(f"\nLoaded pretrained model from {self.pretrain_model_path}")
+                if self.load_ema_as_main:
+                    print("✓ Loaded EMA model weights as main model (vae_model)")
                 print(f"Loading status: {msg}")
 
         # Copy parameters from vae_model to ema_vae_model
