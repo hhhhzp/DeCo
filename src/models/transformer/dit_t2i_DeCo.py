@@ -277,7 +277,10 @@ class LatentConnectorModule(nn.Module):
             ResidualMLPBlock(hidden_size, expansion_ratio=4),
             ResidualMLPBlock(hidden_size, expansion_ratio=4),
         )
-        self.final_proj = nn.Linear(hidden_size, out_channels)
+        if hidden_size == out_channels:
+            self.final_proj = nn.Identity()
+        else:
+            self.final_proj = nn.Linear(hidden_size, out_channels)
 
         # 执行初始化
         self.apply(self._init_weights)
