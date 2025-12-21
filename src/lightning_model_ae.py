@@ -320,7 +320,7 @@ class LightningModelVAE(pl.LightningModule):
         # Forward pass: encode -> sample -> decode
         # Use stochastic sampling (use_mode=False) for training
         reconstructed_pixels, student_features = self.vae_model(
-            img, return_features=True, use_mode=False
+            img, return_features=True, use_mode=True
         )
 
         # Pass student features to loss module for distillation
