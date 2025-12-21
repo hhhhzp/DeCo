@@ -199,15 +199,16 @@ class LightningModelVAE(pl.LightningModule):
                     other_params.append(param)
 
         # Create parameter groups with different learning rates
-        # Base learning rate from config: 1e-4
-        # vision_model and mlp1 use 0.1x learning rate: 1e-5
+        # Note: The optimizer callable should be configured with base_lr in config
+        # We'll manually set lr for vision_mlp group to be 0.1x of base_lr
+        # Assuming base_lr = 1e-4, vision_mlp_lr = 1e-5
         param_groups = []
-        if len(other_params) > 0:
-            param_groups.append({"params": other_params})
-            # Will use base lr from optimizer config
         if len(vision_mlp_params) > 0:
+            # Group 0: vision_model and mlp1 with 0.1x learning rate
             param_groups.append({"params": vision_mlp_params, "lr": 1e-5})
-            # 0.1x of base lr
+        if len(other_params) > 0:
+            # Group 1: other parameters with base learning rate (from config)
+            param_groups.append({"params": other_params})
 
         optimizer_encoder = self.optimizer(param_groups)
         lr_scheduler_encoder = get_constant_schedule_with_warmup(
@@ -358,10 +359,13 @@ class LightningModelVAE(pl.LightningModule):
             output_dict.update(disc_loss_dict)
 
         # Log learning rates for different parameter groups
+        # Group 0: vision_model and mlp1 (if exists)
+        # Group 1: other parameters (if exists)
         if len(opt_generator.param_groups) > 1:
             output_dict["lr_encoder_vision_mlp"] = opt_generator.param_groups[0]['lr']
             output_dict["lr_encoder_other"] = opt_generator.param_groups[1]['lr']
         else:
+            # Only one group exists
             output_dict["lr_encoder"] = opt_generator.param_groups[0]['lr']
         output_dict["lr_discriminator"] = opt_discriminator.param_groups[0]['lr']
 
