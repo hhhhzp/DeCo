@@ -206,12 +206,11 @@ class LightningModelVAE(pl.LightningModule):
             param_groups.append({"params": other_params, "lr_scale": 1.0})
 
         optimizer_encoder = self.optimizer(param_groups)
-        lr_scheduler_encoder = get_constant_schedule_with_warmup(
-            optimizer_encoder, num_warmup_steps=0
+        lr_scheduler_encoder = get_cosine_schedule_with_warmup(
+            optimizer_encoder, num_warmup_steps=10000, num_training_steps=200000
         )
-        # get_cosine_schedule_with_warmup(
-        #     optimizer_encoder, num_warmup_steps=10000, num_training_steps=200000
-        # )
+
+        # get_constant_schedule_with_warmup(optimizer_encoder, num_warmup_steps=0)
 
         # Optimizer for discriminator
         loss_module = self._get_module(self.loss_module)
