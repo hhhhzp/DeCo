@@ -93,6 +93,7 @@ model:
   load_ema_as_main: true
 
 data:
+  train_dataset:
     class_path: src.data.dataset.imagenet.PixHFDataset
     init_args:
       root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k
