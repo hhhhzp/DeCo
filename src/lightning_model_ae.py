@@ -205,7 +205,7 @@ class LightningModelVAE(pl.LightningModule):
         param_groups = []
         if len(vision_mlp_params) > 0:
             # Group 0: vision_model and mlp1 with 0.1x learning rate
-            param_groups.append({"params": vision_mlp_params, "lr": 5e-5})
+            param_groups.append({"params": vision_mlp_params, "lr": 1e-4})
         if len(other_params) > 0:
             # Group 1: other parameters with base learning rate (from config)
             param_groups.append({"params": other_params})
@@ -242,9 +242,12 @@ class LightningModelVAE(pl.LightningModule):
 
             print("\n" + "=" * 80 + "\n")
         optimizer_encoder = self.optimizer(param_groups)
-        lr_scheduler_encoder = get_constant_schedule_with_warmup(
-            optimizer_encoder, num_warmup_steps=0
+        lr_scheduler_encoder = get_cosine_schedule_with_warmup(
+            optimizer_encoder, num_warmup_steps=10000, num_training_steps=200000
         )
+        # get_constant_schedule_with_warmup(
+        #     optimizer_encoder, num_warmup_steps=0
+        # )
 
         # get_constant_schedule_with_warmup(optimizer_encoder, num_warmup_steps=0)
 
@@ -255,8 +258,8 @@ class LightningModelVAE(pl.LightningModule):
         optimizer_discriminator = self.discriminator_optimizer(
             [{"params": params_discriminator}]
         )
-        lr_scheduler_discriminator = get_constant_schedule_with_warmup(
-            optimizer_discriminator, num_warmup_steps=0
+        lr_scheduler_discriminator = get_cosine_schedule_with_warmup(
+            optimizer_discriminator, num_warmup_steps=10000, num_training_steps=200000
         )
 
         return [
