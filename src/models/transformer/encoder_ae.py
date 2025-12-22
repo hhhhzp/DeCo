@@ -479,10 +479,7 @@ class VAEModel(nn.Module):
 
         # Crop padding: restore original size with center crop
         # decode_latent applies 14/16 scaling, so calculate target size accordingly
-        scale_factor = 14.0 / 16.0
-        target_H = int(orig_H * scale_factor)
-        target_W = int(orig_W * scale_factor)
-        reconstructed = self.center_crop(reconstructed, target_H, target_W)
+        reconstructed = self.center_crop(reconstructed, orig_H, orig_W)
 
         # If features are requested, extract using mlp1 (feature mode)
         # Reuse the same vision_features to avoid redundant vision model computation
