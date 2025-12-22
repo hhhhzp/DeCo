@@ -352,6 +352,65 @@ class VAEModel(nn.Module):
         kl_loss = posterior.kl()
         return kl_loss.mean()
 
+    def pad_to_multiple(self, x, multiple=28, pad_value=0):
+        """
+        Pad input tensor to make spatial dimensions divisible by multiple (center padding).
+
+        :param x: input tensor [B, C, H, W]
+        :param multiple: target multiple for spatial dimensions (default: 28)
+        :param pad_value: value to use for padding (default: 0)
+        :return: padded tensor [B, C, H_padded, W_padded], (orig_H, orig_W, pad_info)
+                 pad_info = (pad_left, pad_right, pad_top, pad_bottom)
+        """
+        B, C, orig_H, orig_W = x.shape
+
+        # Calculate padding needed
+        pad_H = (multiple - orig_H % multiple) % multiple
+        pad_W = (multiple - orig_W % multiple) % multiple
+
+        if pad_H > 0 or pad_W > 0:
+            # Center padding: distribute padding evenly on both sides
+            pad_left = pad_W // 2
+            pad_right = pad_W - pad_left
+            pad_top = pad_H // 2
+            pad_bottom = pad_H - pad_top
+
+            # Apply padding (F.pad format: left, right, top, bottom)
+            x_padded = F.pad(
+                x,
+                (pad_left, pad_right, pad_top, pad_bottom),
+                mode='constant',
+                value=pad_value,
+            )
+            pad_info = (pad_left, pad_right, pad_top, pad_bottom)
+        else:
+            x_padded = x
+            pad_info = (0, 0, 0, 0)
+
+        return x_padded, (orig_H, orig_W, pad_info)
+
+    def center_crop(self, x, target_H, target_W):
+        """
+        Center crop tensor to target spatial dimensions.
+
+        :param x: input tensor [B, C, H, W]
+        :param target_H: target height
+        :param target_W: target width
+        :return: cropped tensor [B, C, target_H, target_W]
+        """
+        _, _, H, W = x.shape
+
+        # Calculate center crop coordinates
+        crop_top = (H - target_H) // 2
+        crop_left = (W - target_W) // 2
+
+        # Crop from center
+        x_cropped = x[
+            :, :, crop_top : crop_top + target_H, crop_left : crop_left + target_W
+        ]
+
+        return x_cropped
+
     def decode_latent(self, latent):
         """
         Decode latent to reconstructed image.
@@ -400,24 +459,36 @@ class VAEModel(nn.Module):
                  - if return_features: (reconstructed, features)
                  - if both: (reconstructed, features, kl_loss)
         """
+        # Pad input to make it divisible by 28 (center padding)
+        x_padded, (orig_H, orig_W, pad_info) = self.pad_to_multiple(
+            x, multiple=28, pad_value=0
+        )
+
         # Extract vision features once (before MLP) to avoid redundant computation
-        vision_features = self.extract_vision_features(x)
+        vision_features = self.extract_vision_features(x_padded)
 
         # Extract features using gen_mlp1 for latent encoding
         gen_features = self.extract_feature(
-            x, use_gen_mlp=True, vision_features=vision_features
+            x_padded, use_gen_mlp=True, vision_features=vision_features
         )
-        posterior = self.encode_latent(x, features=gen_features)
+        posterior = self.encode_latent(x_padded, features=gen_features)
 
         # Determine sampling mode
         latent = self.sample_latent(posterior, use_mode=use_mode)
         reconstructed = self.decode_latent(latent)
 
+        # Crop padding: restore original size with center crop
+        # decode_latent applies 14/16 scaling, so calculate target size accordingly
+        scale_factor = 14.0 / 16.0
+        target_H = int(orig_H * scale_factor)
+        target_W = int(orig_W * scale_factor)
+        reconstructed = self.center_crop(reconstructed, target_H, target_W)
+
         # If features are requested, extract using mlp1 (feature mode)
         # Reuse the same vision_features to avoid redundant vision model computation
         if return_features:
             features = self.extract_feature(
-                x, use_gen_mlp=False, vision_features=vision_features
+                x_padded, use_gen_mlp=False, vision_features=vision_features
             )
 
         if return_features and return_kl_loss:

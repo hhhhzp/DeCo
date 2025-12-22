@@ -1,0 +1,107 @@
+# lightning.pytorch==2.4.0
+seed_everything: true
+tags:
+  exp: &exp vae_gen_mlp_layernorm
+torch_hub_dir: ~/.cache/torch/hub
+huggingface_cache_dir: null
+trainer:
+  default_root_dir: ./work_dirs
+  accelerator: auto
+  strategy:
+    class_path: src.strategies.multi_model_ddp.MultiModelDDPStrategy
+  devices: auto
+  num_nodes: 1
+  precision: bf16
+  logger:
+      class_path: lightning.pytorch.loggers.WandbLogger
+      init_args:
+        save_dir: ./work_dirs
+        name: *exp
+  num_sanity_val_steps: 0
+  max_steps: 200000  # Train for 1M steps (discriminator starts at 500k)
+  val_check_interval: 1000
+  check_val_every_n_epoch: null
+  log_every_n_steps: 50
+  deterministic: null
+  inference_mode: true
+  use_distributed_sampler: true
+  callbacks:
+    - class_path: src.callbacks.model_checkpoint.CheckpointHook
+      init_args:
+        every_n_train_steps: 1000
+        save_top_k: -1
+        save_last: true
+    - class_path: src.callbacks.save_images.SaveImagesHook
+      init_args:
+         save_dir: vae_reconstructions
+         save_compressed: true
+    - class_path: src.callbacks.compute_metrics.ComputeMetricsHook
+      init_args:
+         compute_fid: true
+         fid_feature_dim: 2048
+  plugins:
+    - src.plugins.bd_env.BDEnvironment
+
+model:
+  vae_model:
+    class_path: src.models.transformer.encoder_ae.VAEModel
+    init_args:
+      encoder_config_path: "/apdcephfs/share_300000800/datamultimodal/models/InternVL3-2B"
+      decoder_weight_path: "/apdcephfs/share_300000800/datamultimodal/models/dc-ae-f32c32-sana-1.1-diffusers"
+      decoder_subfolder: "vae"
+      select_layer: -1
+      latent_channel: 32
+      load_pretrained_encoder: true
+  loss_module:
+    class_path: src.models.modules.vae_loss.VAEReconstructionLoss
+    init_args:
+      discriminator_start: 10000000
+      discriminator_factor: 1.0
+      discriminator_weight: 0.1
+      lecam_regularization_weight: 0.001
+      perceptual_loss: "lpips-convnext_s-1.0-0.1"
+      perceptual_weight: 1.1
+      reconstruction_loss: "l2"
+      reconstruction_weight: 1.0
+      kl_weight: 0.0
+      logvar_init: 0.0
+      distillation_weight: 1.0
+      distillation_loss_type: "mse"
+      teacher_model_path: null
+      select_layer: -1
+      downsample_ratio: 0.5
+  ema_tracker:
+    class_path: src.callbacks.simple_ema.SimpleEMA
+    init_args:
+      decay: 0.9999
+      every_n_steps: 1
+  optimizer:
+    class_path: torch.optim.AdamW
+    init_args:
+      lr: 1e-4
+      weight_decay: 0.0
+      betas: [0.9, 0.95]
+  discriminator_optimizer:
+    class_path: torch.optim.AdamW
+    init_args:
+      lr: 1e-4
+      weight_decay: 0.0
+      betas: [0.9, 0.95]
+  eval_original_model: false
+  pretrain_model_path: null
+  freeze_encoder: false
+
+data:  
+  eval_dataset:
+    class_path: src.data.dataset.imagenet.PixHFDataset
+    init_args:
+      root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k
+      resolution: 256
+      split: validation
+  
+  # Data loading settings
+  train_batch_size: 16  # Batch size per GPU
+  train_num_workers: 8
+  train_prefetch_factor: 4
+  pred_batch_size: 32
+  pred_num_workers: 4
