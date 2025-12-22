@@ -35,7 +35,7 @@ trainer:
       init_args:
          save_dir: vae_reconstructions
          save_compressed: true
-    - class_path: src.callbacks.compute_metrics_orig.ComputeMetricsHook
+    - class_path: src.callbacks.compute_metrics.ComputeMetricsHook
       init_args:
          compute_fid: true
          fid_feature_dim: 2048
@@ -87,7 +87,7 @@ model:
       lr: 1e-4
       weight_decay: 0.0
       betas: [0.9, 0.95]
-  eval_original_model: true
+  eval_original_model: false
   pretrain_model_path: null
   freeze_encoder: false
 
