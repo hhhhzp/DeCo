@@ -152,7 +152,9 @@ class VAEModel(nn.Module):
         # Output latent_channel dimensions directly (deterministic latent)
         # Input: 2*vit_hidden_size (from gen_mlp1)
         self.latent_projector = LatentConnectorModule(
-            hidden_size=2 * vit_hidden_size, out_channels=self.latent_channel
+            hidden_size=2 * vit_hidden_size,
+            out_channels=self.latent_channel,
+            expansion_ratio=1,
         )
 
         # Encoder normalization flag (optional)
@@ -318,20 +320,6 @@ class VAEModel(nn.Module):
         # Return in AutoencoderKLOutput format for compatibility
         # Store latent directly in latent_dist field
         return latent
-
-    def sample_latent(self, latent_or_output, use_mode=False):
-        """
-        Extract latent from output (for backward compatibility).
-        :param latent_or_output: latent tensor or AutoencoderKLOutput
-        :param use_mode: deprecated parameter (kept for interface compatibility)
-        :return: latent [B, latent_channel, H', W']
-        """
-        # Extract latent if wrapped in AutoencoderKLOutput
-        if isinstance(latent_or_output, AutoencoderKLOutput):
-            return latent_or_output.latent_dist
-
-        # Otherwise return as-is
-        return latent_or_output
 
     def decode_latent(self, latent):
         """

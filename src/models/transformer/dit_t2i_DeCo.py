@@ -268,14 +268,14 @@ class ResidualMLPBlock(nn.Module):
 
 
 class LatentConnectorModule(nn.Module):
-    def __init__(self, hidden_size, out_channels):
+    def __init__(self, hidden_size, out_channels, expansion_ratio=4):
         super().__init__()
         self.hidden_size = hidden_size
         self.out_channels = out_channels
         self.mlp_blocks = nn.Sequential(
-            ResidualMLPBlock(hidden_size, expansion_ratio=4),
-            ResidualMLPBlock(hidden_size, expansion_ratio=4),
-            ResidualMLPBlock(hidden_size, expansion_ratio=4),
+            ResidualMLPBlock(hidden_size, expansion_ratio=expansion_ratio),
+            ResidualMLPBlock(hidden_size, expansion_ratio=expansion_ratio),
+            ResidualMLPBlock(hidden_size, expansion_ratio=expansion_ratio),
         )
         if hidden_size == out_channels:
             self.final_proj = nn.Identity()
