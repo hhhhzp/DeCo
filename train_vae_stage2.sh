@@ -18,9 +18,10 @@ export NNODES=4
 export NGPUS_PER_NODE=8
 export NODE_RANK=${NODE_RANK:-0}
 
-# export WANDB_RESUME=auto
-# export WANDB_RUN_ID=ootrpwz9
+export WANDB_RESUME=auto
+export WANDB_RUN_ID=q7pj6pi1
 
 python main.py fit -c configs/vae_training_stage2_224.yaml \
     --trainer.num_nodes=4 \
-    --trainer.devices=8
+    --trainer.devices=8 \
+    --ckpt_path=work_dirs/exp_vae_latent_mlp_layernorm_cos_lr5e-5_stage2/epoch=0-step=30000.ckpt
