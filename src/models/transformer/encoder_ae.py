@@ -279,62 +279,37 @@ class VAEModel(nn.Module):
 
     def encode_latent(self, x, features=None, return_dict=True):
         """
-        Encode image to Diagonal Gaussian distribution with dynamic spatial alignment.
-        Ensures latent size matches Decoder's 32x downsampling requirement.
+        Encode image to Diagonal Gaussian distribution.
+        Uses gen_mlp1 for feature extraction (latent mode).
+        :param x: input image [B, C, H, W] in range [-1, 1]
+        :param features: pre-extracted features [B, N, hidden_size]
+        :param return_dict: if True, return AutoencoderKLOutput; else return tuple
+        :return: posterior - DiagonalGaussianDistribution object (or AutoencoderKLOutput)
         """
-        # 1. 动态计算目标 Latent 尺寸
-        # Decoder stride = 32. 输入 448 -> 14, 512 -> 16
-        B, C, H, W = x.shape
-        target_H = H // 32
-        target_W = W // 32
-
-        # 2. 提取特征 [B, N, C]
-        # 使用 gen_mlp1 提取特征
+        # Extract features [B, N, hidden_size] using gen_mlp1
         if features is None:
             features = self.extract_feature(x, use_gen_mlp=True)
 
-        # 3. 空间重组与插值对齐 (关键修正步骤)
-        # 获取当前特征的空间维度
-        current_N = features.shape[1]
-        current_size = int(current_N**0.5)  # 假设正方形特征，例如 16
-
-        # [B, N, C] -> [B, C, H_curr, W_curr]
-        features_spatial = features.transpose(1, 2).reshape(
-            B, -1, current_size, current_size
-        )
-
-        # 如果当前尺寸与目标 Latent 尺寸不一致，进行双线性插值
-        # 例如：从 16x16 (Encoder输出) 插值到 14x14 (Decoder需求)
-        if (current_size, current_size) != (target_H, target_W):
-            features_spatial = F.interpolate(
-                features_spatial,
-                size=(target_H, target_W),
-                mode='bilinear',
-                align_corners=False,
-            )
-
-        # 插值后展平回序列格式: [B, C, H_target, W_target] -> [B, N_target, C]
-        features = features_spatial.flatten(2).transpose(1, 2)
-
-        # 4. 投影到 Latent 分布参数空间
-        # moments shape: [B, N_target, 2*latent_channel]
+        # Project to latent space [B, N, 2*latent_channel]
         moments = self.latent_projector(features)
 
-        # 5. 重塑为 VAE 标准空间格式 [B, 2*latent_channel, H_target, W_target]
+        # Reshape to spatial format [B, 2*latent_channel, H', W']
+        grid_size = int(moments.shape[1] ** 0.5)
         moments = moments.transpose(1, 2).reshape(
-            moments.shape[0], 2 * self.latent_channel, target_H, target_W
+            moments.shape[0], 2 * self.latent_channel, grid_size, grid_size
         )
 
-        # 6. 拆分 Mean 和 Logvar
+        # Split into mean and logvar
         mean, logvar = torch.chunk(moments, 2, dim=1)
 
-        # 7. 可选归一化 (注意：这可能会限制分布范围，调试时需留意)
+        # Optional: apply layer normalization to mean
         if self.encoder_norm:
             mean = layer_norm_2d(mean)
 
-        # 8. 重新拼接并构建分布
+        # Concatenate back
         moments = torch.cat([mean, logvar], dim=1).contiguous()
 
+        # Create Diagonal Gaussian distribution
         posterior = DiagonalGaussianDistribution(
             moments, deterministic=self.deterministic
         )
@@ -380,13 +355,24 @@ class VAEModel(nn.Module):
     def decode_latent(self, latent):
         """
         Decode latent to reconstructed image.
+        :param latent: latent representation [B, latent_channel, H', W']
+        :return: reconstructed image [B, C, H, W] in range [-1, 1]
         """
         # Decode using AutoencoderDC
-        # latent size 已经对齐了 (e.g. 14x14)，输出直接是 448x448
         reconstructed_pixels = self.decoder(latent)
 
-        # 原始代码中的 F.interpolate 已被移除
-        # 此时 reconstructed_pixels 应该已经是目标分辨率
+        # Scale spatial dimensions to 14/16 of original size
+        scale_factor = 14.0 / 16.0
+        B, C, H, W = reconstructed_pixels.shape
+        target_H = int(H * scale_factor)
+        target_W = int(W * scale_factor)
+
+        reconstructed_pixels = F.interpolate(
+            reconstructed_pixels,
+            size=(target_H, target_W),
+            mode='bilinear',
+            align_corners=False,
+        )
 
         return reconstructed_pixels
 
