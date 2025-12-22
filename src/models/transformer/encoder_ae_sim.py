@@ -56,6 +56,11 @@ class DCDownsampleMLP(nn.Module):
             nn.Linear(out_channels, out_channels),
         )
 
+        # Initialize last layer of MLP to 0 for residual connection
+        nn.init.constant_(self.mlp[-1].weight, 0)
+        if self.mlp[-1].bias is not None:
+            nn.init.constant_(self.mlp[-1].bias, 0)
+
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         """
         Forward pass with channel projection and shortcut grouping.
@@ -67,7 +72,6 @@ class DCDownsampleMLP(nn.Module):
 
         # Shortcut path: Channel grouping and averaging
         if self.shortcut:
-            # [B, N, in_channels] -> [B, N, out_channels, group_size] -> [B, N, out_channels]
             y = hidden_states.unflatten(-1, (self.out_channels, self.group_size))
             y = y.mean(dim=-1)
             x = x + y
