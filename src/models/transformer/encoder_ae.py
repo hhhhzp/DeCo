@@ -132,9 +132,10 @@ class VAEModel(nn.Module):
             nn.GELU(),
             nn.Linear(llm_hidden_size, llm_hidden_size),
         )
-        self.semantic_projector = LatentConnectorModule(
-            hidden_size=llm_hidden_size, out_channels=llm_hidden_size
-        )
+        self.semantic_projector = nn.Identity()
+        # LatentConnectorModule(
+        #     hidden_size=llm_hidden_size, out_channels=llm_hidden_size
+        # )
 
         # gen_mlp1: MLP projection with residual connection (no downsampling)
         # Input: vit_hidden_size * 4 channels -> channel projection -> 2*vit_hidden_size (output)
