@@ -55,7 +55,7 @@ model:
   loss_module:
     class_path: src.models.modules.vae_loss.VAEReconstructionLoss
     init_args:
-      discriminator_start: 50000
+      discriminator_start: 200000
       discriminator_factor: 1.0
       discriminator_weight: 0.1
       lecam_regularization_weight: 0.001
@@ -100,7 +100,6 @@ data:
       resolution: 224  # Input resolution
       random_crop: true
       random_flip: true
-      max_num_samples: null
   
   eval_dataset:
     class_path: src.data.dataset.imagenet.PixHFDataset
