@@ -19,7 +19,7 @@ from transformers import (
 )
 
 from src.models.autoencoder.base import BaseAE, fp2uint8
-from src.models.transformer.encoder_ae import VAEModel
+from src.models.transformer.encoder_ae_sim import VAEModel
 from src.utils.model_loader import ModelLoader
 from src.utils.no_grad import no_grad, filter_nograd_tensors
 from src.callbacks.simple_ema import SimpleEMA
@@ -41,7 +41,7 @@ class LightningModelVAE(pl.LightningModule):
 
     def __init__(
         self,
-        vae_model: VAEModel,
+        vae_model: nn.Module,
         loss_module: nn.Module,
         optimizer: OptimizerCallable = None,
         lr_scheduler: LRSchedulerCallable = None,
