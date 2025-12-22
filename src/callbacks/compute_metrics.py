@@ -3,6 +3,7 @@ import torch.nn.functional as F
 import lightning.pytorch as pl
 from lightning.pytorch.callbacks import Callback
 from lightning.pytorch.utilities import rank_zero_info
+from src.models.autoencoder.base import fp2uint8
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from torchmetrics.image.fid import FrechetInceptionDistance
 import numpy as np
@@ -23,9 +24,9 @@ class ComputeMetricsHook(Callback):
         super().__init__()
         # 初始化指标计算器，dist_sync_on_step=False 表示我们只在 epoch 结束时同步
         # data_range=1.0 对应 [0, 1] 的数据范围
-        self.psnr = PeakSignalNoiseRatio(data_range=1.0)
+        self.psnr = PeakSignalNoiseRatio(data_range=(-1.0, 1.0))
         self.ssim = StructuralSimilarityIndexMeasure(
-            data_range=1.0, gaussian_kernel=False
+            data_range=(-1.0, 1.0), gaussian_kernel=False
         )
 
         # FID 相关
@@ -52,27 +53,12 @@ class ComputeMetricsHook(Callback):
             if self.compute_fid:
                 self.fid = self.fid.to(pl_module.device)
 
-    def _normalize_images(self, images, device):
-        """Normalize images to [0, 1] range"""
-        from src.utils.image_utils import normalize_from_neg1_to_1
-
-        images = images.to(device)
-        if images.dtype == torch.uint8:
-            # uint8 类型: [0, 255] -> [0, 1]
-            images = images.float() / 255.0
-        else:
-            # float 类型: 假设 [-1, 1] -> [0, 1]
-            images = normalize_from_neg1_to_1(images)
-            images = torch.clamp(images, 0.0, 1.0)
-        return images
-
     def _update_metrics(self, pl_module, outputs, batch):
         # 提取数据 (假设 batch 格式为 [img, label, metadata])
         original_img, _, _ = batch
 
         # 归一化处理
-        reconstructed = self._normalize_images(outputs, pl_module.device)
-        original_img = self._normalize_images(original_img, pl_module.device)
+        reconstructed = outputs
 
         # 更新 PSNR 和 SSIM (此时不计算最终值，只累积统计量)
         self.psnr.update(reconstructed, original_img)
@@ -81,8 +67,8 @@ class ComputeMetricsHook(Callback):
         # 更新 FID (如果启用)
         if self.compute_fid and self.fid_enabled:
             # 将图像转换为 uint8 [0, 255] 格式，这是 FID 期望的输入
-            reconstructed_uint8 = (reconstructed * 255).to(torch.uint8)
-            original_uint8 = (original_img * 255).to(torch.uint8)
+            reconstructed_uint8 = fp2uint8(reconstructed)
+            original_uint8 = fp2uint8(original_img)
 
             # TorchMetrics FID 会自动提取 Inception 特征并累积统计量
             # 这里只在每个 rank 上处理自己的 batch，不会 OOM

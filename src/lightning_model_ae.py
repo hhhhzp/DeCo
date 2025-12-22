@@ -450,7 +450,7 @@ class LightningModelVAE(pl.LightningModule):
 
                 self._logged_images_count += num_to_log
 
-        return fp2uint8(samples)
+        return samples
 
     def validation_step(self, batch, batch_idx):
         samples = self.predict_step(batch, batch_idx)
