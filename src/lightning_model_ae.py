@@ -205,7 +205,7 @@ class LightningModelVAE(pl.LightningModule):
         param_groups = []
         if len(vision_mlp_params) > 0:
             # Group 0: vision_model and mlp1 with 0.1x learning rate
-            param_groups.append({"params": vision_mlp_params, "lr": 2e-5})
+            param_groups.append({"params": vision_mlp_params, "lr": 5e-5})
         if len(other_params) > 0:
             # Group 1: other parameters with base learning rate (from config)
             param_groups.append({"params": other_params})
