@@ -335,6 +335,7 @@ class LightningModelVAE(pl.LightningModule):
             }
         else:
             reconstructed_pixels = self.vae_model(img)
+            extra_result_dict = {}
 
         ######################
         # Optimize Generator #
