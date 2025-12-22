@@ -25,7 +25,7 @@ class ComputeMetricsHook(Callback):
         # data_range=1.0 对应 [0, 1] 的数据范围
         self.psnr = PeakSignalNoiseRatio(data_range=1.0)
         self.ssim = StructuralSimilarityIndexMeasure(
-            data_range=1.0, gaussian_kernel=False
+            data_range=1.0  # , gaussian_kernel=False
         )
 
         # FID 相关
