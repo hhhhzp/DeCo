@@ -226,7 +226,7 @@ class LightningModelVAE(pl.LightningModule):
                 print(f"  Total Parameters: {vision_param_count:,}")
                 print(f"  Components:")
                 for name, param in vae_model.named_parameters():
-                    if param.requires_grad and 'vision_model' in name:
+                    if param.requires_grad:
                         print(f"    - {name}: {param.numel():,} params")
 
             # Group 1: other components
@@ -239,7 +239,7 @@ class LightningModelVAE(pl.LightningModule):
                 print(f"  Total Parameters: {other_param_count:,}")
                 print(f"  Components:")
                 for name, param in vae_model.named_parameters():
-                    if param.requires_grad and 'vision_model' not in name:
+                    if param.requires_grad:
                         print(f"    - {name}: {param.numel():,} params")
 
             print("\n" + "=" * 80 + "\n")
