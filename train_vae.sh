@@ -22,5 +22,4 @@ export NODE_RANK=${NODE_RANK:-0}
 
 python main.py fit -c configs/vae_training.yaml \
     --trainer.num_nodes=4 \
-    --trainer.devices=8 \
-    --ckpt_path=work_dirs/exp_vae_gen_mlp_layernorm/epoch=0-step=74000.ckpt
+    --trainer.devices=8
