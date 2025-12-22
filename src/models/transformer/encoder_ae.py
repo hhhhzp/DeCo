@@ -461,7 +461,7 @@ class VAEModel(nn.Module):
         """
         # Pad input to make it divisible by 28 (center padding)
         x_padded, (orig_H, orig_W, pad_info) = self.pad_to_multiple(
-            x, multiple=28, pad_value=0
+            x, multiple=28, pad_value=-1
         )
 
         # Extract vision features once (before MLP) to avoid redundant computation
