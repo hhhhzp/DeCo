@@ -317,7 +317,7 @@ class VAEModel(nn.Module):
 
         # Return in AutoencoderKLOutput format for compatibility
         # Store latent directly in latent_dist field
-        return AutoencoderKLOutput(latent_dist=latent)
+        return latent
 
     def sample_latent(self, latent_or_output, use_mode=False):
         """
