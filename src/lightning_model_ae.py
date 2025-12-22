@@ -243,7 +243,7 @@ class LightningModelVAE(pl.LightningModule):
             print("\n" + "=" * 80 + "\n")
         optimizer_encoder = self.optimizer(param_groups)
         lr_scheduler_encoder = get_cosine_schedule_with_warmup(
-            optimizer_encoder, num_warmup_steps=10000, num_training_steps=200000
+            optimizer_encoder, num_warmup_steps=10000, num_training_steps=400000
         )
         # get_constant_schedule_with_warmup(
         #     optimizer_encoder, num_warmup_steps=0
@@ -259,7 +259,7 @@ class LightningModelVAE(pl.LightningModule):
             [{"params": params_discriminator}]
         )
         lr_scheduler_discriminator = get_cosine_schedule_with_warmup(
-            optimizer_discriminator, num_warmup_steps=10000, num_training_steps=200000
+            optimizer_discriminator, num_warmup_steps=10000, num_training_steps=400000
         )
 
         return [

@@ -110,7 +110,7 @@ data:
       split: validation
   
   # Data loading settings
-  train_batch_size: 16  # Batch size per GPU
+  train_batch_size: 8  # Batch size per GPU
   train_num_workers: 8
   train_prefetch_factor: 4
   pred_batch_size: 32
