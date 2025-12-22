@@ -132,9 +132,10 @@ class VAEModel(nn.Module):
             nn.GELU(),
             nn.Linear(llm_hidden_size, llm_hidden_size),
         )
-        self.semantic_projector = LatentConnectorModule(
-            hidden_size=llm_hidden_size, out_channels=llm_hidden_size
-        )
+        # self.semantic_projector = nn.Identity()
+        # LatentConnectorModule(
+        #     hidden_size=llm_hidden_size, out_channels=llm_hidden_size
+        # )
 
         # gen_mlp1: MLP projection with residual connection (no downsampling)
         # Input: vit_hidden_size * 4 channels -> channel projection -> 2*vit_hidden_size (output)
@@ -148,15 +149,14 @@ class VAEModel(nn.Module):
         )
 
         # Latent connector to convert vision features to latent space
-        # Output 2*latent_channel dimensions: latent_channel for mean, latent_channel for logvar
+        # Output latent_channel dimensions directly (deterministic latent)
         # Input: 2*vit_hidden_size (from gen_mlp1)
         self.latent_projector = LatentConnectorModule(
-            hidden_size=2 * vit_hidden_size, out_channels=2 * self.latent_channel
+            hidden_size=2 * vit_hidden_size, out_channels=self.latent_channel
         )
 
         # Encoder normalization flag (optional)
-        self.encoder_norm = True
-        self.deterministic = False
+        self.encoder_norm = False
 
         # Load pretrained encoder weights if specified
         if load_pretrained_encoder:
@@ -272,84 +272,54 @@ class VAEModel(nn.Module):
         # Both mlp1 and gen_mlp1 preserve spatial dimensions (N unchanged)
         mlp = self.gen_mlp1 if use_gen_mlp else self.mlp1
         vit_embeds = mlp(vision_features)
-        if not use_gen_mlp and hasattr(self, "semantic_projector"):
-            vit_embeds = self.semantic_projector(vit_embeds)
         return vit_embeds
 
     def encode_latent(self, x, features=None, return_dict=True):
         """
-        Encode image to Diagonal Gaussian distribution.
+        Encode image to deterministic latent representation.
         Uses gen_mlp1 for feature extraction (latent mode).
         :param x: input image [B, C, H, W] in range [-1, 1]
         :param features: pre-extracted features [B, N, hidden_size]
-        :param return_dict: if True, return AutoencoderKLOutput; else return tuple
-        :return: posterior - DiagonalGaussianDistribution object (or AutoencoderKLOutput)
+        :param return_dict: if True, return AutoencoderKLOutput; else return tuple (for compatibility)
+        :return: latent [B, latent_channel, H', W'] or AutoencoderKLOutput with latent_dist=latent
         """
         # Extract features [B, N, hidden_size] using gen_mlp1
         if features is None:
             features = self.extract_feature(x, use_gen_mlp=True)
 
-        # Project to latent space [B, N, 2*latent_channel]
-        moments = self.latent_projector(features)
+        # Project to latent space [B, N, latent_channel]
+        latent = self.latent_projector(features)
 
-        # Reshape to spatial format [B, 2*latent_channel, H', W']
-        grid_size = int(moments.shape[1] ** 0.5)
-        moments = moments.transpose(1, 2).reshape(
-            moments.shape[0], 2 * self.latent_channel, grid_size, grid_size
+        # Reshape to spatial format [B, latent_channel, H', W']
+        grid_size = int(latent.shape[1] ** 0.5)
+        latent = latent.transpose(1, 2).reshape(
+            latent.shape[0], self.latent_channel, grid_size, grid_size
         )
 
-        # Split into mean and logvar
-        mean, logvar = torch.chunk(moments, 2, dim=1)
-
-        # Optional: apply layer normalization to mean
-        if self.encoder_norm:
-            mean = layer_norm_2d(mean)
-
-        # Concatenate back
-        moments = torch.cat([mean, logvar], dim=1).contiguous()
-
-        # Create Diagonal Gaussian distribution
-        posterior = DiagonalGaussianDistribution(
-            moments, deterministic=self.deterministic
-        )
+        # Optional: apply layer normalization
+        # if self.encoder_norm:
+        #     latent = layer_norm_2d(latent)
 
         if not return_dict:
-            return (posterior,)
+            return (latent,)
 
-        return AutoencoderKLOutput(latent_dist=posterior)
+        # Return in AutoencoderKLOutput format for compatibility
+        # Store latent directly in latent_dist field
+        return AutoencoderKLOutput(latent_dist=latent)
 
-    def sample_latent(self, posterior, use_mode=False):
+    def sample_latent(self, latent_or_output, use_mode=False):
         """
-        Sample latent from Diagonal Gaussian distribution.
-        :param posterior: DiagonalGaussianDistribution object or AutoencoderKLOutput
-        :param use_mode: if True, use mode() instead of sampling; if False, use sample()
+        Extract latent from output (for backward compatibility).
+        :param latent_or_output: latent tensor or AutoencoderKLOutput
+        :param use_mode: deprecated parameter (kept for interface compatibility)
         :return: latent [B, latent_channel, H', W']
         """
-        # Extract distribution if wrapped in AutoencoderKLOutput
-        if isinstance(posterior, AutoencoderKLOutput):
-            posterior = posterior.latent_dist
+        # Extract latent if wrapped in AutoencoderKLOutput
+        if isinstance(latent_or_output, AutoencoderKLOutput):
+            return latent_or_output.latent_dist
 
-        # Sample from distribution or use mode
-        if use_mode:
-            latent = posterior.mode()  # Use mean (deterministic)
-        else:
-            latent = posterior.sample()  # Random sampling (stochastic)
-
-        return latent
-
-    def forward_loss(self, posterior):
-        """
-        Compute KL divergence loss for Diagonal Gaussian distribution.
-        :param posterior: DiagonalGaussianDistribution object or AutoencoderKLOutput
-        :return: kl_loss - scalar tensor
-        """
-        # Extract distribution if wrapped in AutoencoderKLOutput
-        if isinstance(posterior, AutoencoderKLOutput):
-            posterior = posterior.latent_dist
-
-        # Compute KL divergence to standard normal distribution
-        kl_loss = posterior.kl()
-        return kl_loss.mean()
+        # Otherwise return as-is
+        return latent_or_output
 
     def decode_latent(self, latent):
         """
@@ -379,7 +349,6 @@ class VAEModel(nn.Module):
         self,
         x,
         return_features=False,
-        return_kl_loss=False,
         use_mode=False,
     ):
         """
@@ -390,14 +359,9 @@ class VAEModel(nn.Module):
 
         :param x: input image [B, C, H, W] in range [-1, 1]
         :param return_features: if True, return features in output
-        :param return_kl_loss: if True, return KL loss in output
-        :param use_mode: if True, use mode() for sampling; if False, use sample()
-        :param sample_posterior: if True, sample from posterior; if False, use mode (same as use_mode)
+        :param use_mode: deprecated parameter (kept for interface compatibility)
         :return: reconstructed image [B, C, H, W] in range [-1, 1]
-                 Additional returns based on flags:
-                 - if return_kl_loss: (reconstructed, kl_loss)
-                 - if return_features: (reconstructed, features)
-                 - if both: (reconstructed, features, kl_loss)
+                 If return_features=True: (reconstructed, features)
         """
         # Extract vision features once (before MLP) to avoid redundant computation
         vision_features = self.extract_vision_features(x)
@@ -406,10 +370,10 @@ class VAEModel(nn.Module):
         gen_features = self.extract_feature(
             x, use_gen_mlp=True, vision_features=vision_features
         )
-        posterior = self.encode_latent(x, features=gen_features)
+        latent_output = self.encode_latent(x, features=gen_features)
 
-        # Determine sampling mode
-        latent = self.sample_latent(posterior, use_mode=use_mode)
+        # Extract latent (no sampling needed, deterministic)
+        latent = self.sample_latent(latent_output)
         reconstructed = self.decode_latent(latent)
 
         # If features are requested, extract using mlp1 (feature mode)
@@ -418,13 +382,6 @@ class VAEModel(nn.Module):
             features = self.extract_feature(
                 x, use_gen_mlp=False, vision_features=vision_features
             )
-
-        if return_features and return_kl_loss:
-            kl_loss = self.forward_loss(posterior)
-            return reconstructed, features, kl_loss
-        elif return_kl_loss:
-            kl_loss = self.forward_loss(posterior)
-            return reconstructed, kl_loss
-        elif return_features:
             return reconstructed, features
+
         return reconstructed
