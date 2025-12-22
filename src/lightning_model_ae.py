@@ -51,6 +51,7 @@ class LightningModelVAE(pl.LightningModule):
         freeze_encoder: bool = False,
         ema_tracker: SimpleEMA = None,
         load_ema_as_main: bool = False,
+        stage: int = -1,
     ):
         super().__init__()
         self.vae_model = vae_model
@@ -66,6 +67,7 @@ class LightningModelVAE(pl.LightningModule):
         self.pretrain_model_path = pretrain_model_path
         self.freeze_encoder = freeze_encoder
         self.load_ema_as_main = load_ema_as_main
+        self.stage = stage
 
         self._strict_loading = True
         self._logged_images_count = 0
@@ -322,14 +324,17 @@ class LightningModelVAE(pl.LightningModule):
 
         # Forward pass: encode -> sample -> decode
         # Use stochastic sampling (use_mode=False) for training
-        reconstructed_pixels, student_features = self.vae_model(
-            img, return_features=True, use_mode=False
-        )
+        if self.stage != 1:
+            reconstructed_pixels, student_features = self.vae_model(
+                img, return_features=True, use_mode=False
+            )
 
-        # Pass student features to loss module for distillation
-        extra_result_dict = {
-            "student_features": student_features,
-        }
+            # Pass student features to loss module for distillation
+            extra_result_dict = {
+                "student_features": student_features,
+            }
+        else:
+            reconstructed_pixels = self.vae_model(img)
 
         ######################
         # Optimize Generator #
