@@ -1,7 +1,7 @@
 # lightning.pytorch==2.4.0
 seed_everything: true
 tags:
-  exp: &exp vae_sim_gen_mlp_stage2_lr5e-5
+  exp: &exp test
 torch_hub_dir: ~/.cache/torch/hub
 huggingface_cache_dir: null
 trainer:
