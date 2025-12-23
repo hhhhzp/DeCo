@@ -122,17 +122,27 @@ class PixHFDataset(Dataset):
         resolution=256,
         random_crop=False,
         random_flip=False,
-        max_num_samples=None,  # <--- 新增参数
+        max_num_samples=None,
     ):
+        """
+        HuggingFace Dataset wrapper with flexible train/validation split support.
+
+        Args:
+            root: HuggingFace dataset name or path
+            split: Dataset split ('train' or 'validation')
+            resolution: Target image resolution
+            random_crop: Whether to use random crop (for training)
+            random_flip: Whether to use random horizontal flip (for training)
+            max_num_samples: Maximum number of samples to use
+        """
         super().__init__()
 
+        self.split = split
         self.dataset = load_dataset(root, split=split, trust_remote_code=True)
 
-        # 1.1 处理 Max Samples (新增逻辑)
-        # 使用 np.random.choice 随机选择固定的样本索引（用于一致性评估）
+        # Handle max_num_samples
         if max_num_samples is not None and max_num_samples < len(self.dataset):
             total_samples = len(self.dataset)
-            # 设置随机数种子以确保可复现性
             np.random.seed(42)
             selected_indices = np.random.choice(
                 total_samples,
@@ -140,58 +150,40 @@ class PixHFDataset(Dataset):
                 replace=False,
             ).tolist()
             self.dataset = self.dataset.select(selected_indices)
-        # 2. 恢复原本的 Transform 逻辑
-        if random_crop:
-            self.transform = transforms.Compose(
-                [
-                    transforms.Resize(resolution),
-                    transforms.RandomCrop(resolution),
-                    transforms.RandomHorizontalFlip(),
-                ]
-            )
-        else:
-            # 完全复用你原来的逻辑
-            if random_flip is False:
-                self.transform = partial(center_crop_fn, image_size=resolution)
-            else:
-                self.transform = transforms.Compose(
-                    [
-                        transforms.Lambda(
-                            partial(center_crop_fn, image_size=resolution)
-                        ),
-                        transforms.RandomHorizontalFlip(),
-                    ]
-                )
+            print(f"Subsampled {split} split to {len(self.dataset)} samples")
 
-        self.normalize = transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+        # Setup transforms using create_image_transform function
+        # For validation split, force random_crop=False and random_flip=False
+        is_train = split == 'train'
+        self.transform = create_image_transform(
+            resolution=resolution,
+            random_crop=random_crop if is_train else False,
+            random_flip=random_flip if is_train else False,
+            normalize_mean=[0.5, 0.5, 0.5],
+            normalize_std=[0.5, 0.5, 0.5],
+        )
+        print(f"PixHFDataset ({split}) transform: {self.transform}")
 
     def __len__(self):
         return len(self.dataset)
 
     def __getitem__(self, idx: int):
-        # 1. 从 HF Dataset 获取 item
+        # 1. Get item from HF Dataset
         item = self.dataset[idx]
 
-        # 2. 处理图片 (确保是 PIL RGB)
+        # 2. Process image (ensure PIL RGB)
         raw_image = item['image']
         if raw_image.mode != 'RGB':
             raw_image = raw_image.convert('RGB')
 
         target = item['label']
 
-        # 3. 执行 Transform (PIL -> PIL)
-        # 注意：这里的 self.transform 返回的是 PIL，保持与你原代码一致
-        raw_image = self.transform(raw_image)
+        # 3. Apply transform (includes Resize -> Crop -> Flip -> ToTensor -> Normalize)
+        normalized_image = self.transform(raw_image)
 
-        # 4. 转 Tensor (PIL -> Tensor)
-        raw_image = to_tensor(raw_image)
-
-        # 5. 归一化
-        normalized_image = self.normalize(raw_image)
-
-        # 6. 构造 Metadata
+        # 4. Construct metadata
         metadata = {
-            "raw_image": raw_image,  # 这里是未归一化的 Tensor (0-1)
+            "raw_image": normalized_image,  # Normalized tensor [-1, 1]
             "class": target,
         }
         return normalized_image, target, metadata
