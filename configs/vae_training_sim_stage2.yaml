@@ -1,7 +1,7 @@
 # lightning.pytorch==2.4.0
 seed_everything: true
 tags:
-  exp: &exp vae_sim_gen_mlp_stage2
+  exp: &exp vae_sim_gen_mlp_stage2_lr5e-5
 torch_hub_dir: ~/.cache/torch/hub
 huggingface_cache_dir: null
 trainer:
@@ -78,15 +78,15 @@ model:
   optimizer:
     class_path: torch.optim.AdamW
     init_args:
-      lr: 1e-4
-      weight_decay: 0.0
-      betas: [0.9, 0.95]
+      lr: 2e-4
+      weight_decay: 1e-4
+      betas: [0.9, 0.999]
   discriminator_optimizer:
     class_path: torch.optim.AdamW
     init_args:
-      lr: 1e-4
-      weight_decay: 0.0
-      betas: [0.9, 0.95]
+      lr: 2e-4
+      weight_decay: 1e-4
+      betas: [0.9, 0.999]
   eval_original_model: true
   pretrain_model_path: work_dirs/exp_vae_sim_gen_mlp_stage1/epoch=0-step=100000.ckpt
   freeze_encoder: false

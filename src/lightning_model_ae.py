@@ -219,7 +219,7 @@ class LightningModelVAE(pl.LightningModule):
             vae_groups.append(
                 {
                     "params": [p for n, p in low_lr_info],
-                    "lr": 1e-5,
+                    "lr": 5e-5,
                     "name": "Group 0 (Vision/MLP)",
                     "debug_names": [n for n, p in low_lr_info],  # 暂存名字用于打印
                 }
