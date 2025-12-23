@@ -1,7 +1,7 @@
 # lightning.pytorch==2.4.0
 seed_everything: true
 tags:
-  exp: &exp vae_sim_gen_mlp_stage2_lr5e-5
+  exp: &exp test
 torch_hub_dir: ~/.cache/torch/hub
 huggingface_cache_dir: null
 trainer:
@@ -55,7 +55,7 @@ model:
   loss_module:
     class_path: src.models.modules.vae_loss.VAEReconstructionLoss
     init_args:
-      discriminator_start: 50000
+      discriminator_start: 0
       discriminator_factor: 1.0
       discriminator_weight: 0.1
       lecam_regularization_weight: 0.001

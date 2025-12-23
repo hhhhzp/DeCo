@@ -421,15 +421,9 @@ class VAEReconstructionLoss(nn.Module):
 
             # --- 核心修改：自适应权重计算逻辑 ---
             if self.training and last_layer is not None:
-                try:
-                    d_weight = self.calculate_adaptive_weight(
-                        nll_loss, generator_loss, last_layer=last_layer
-                    )
-                except RuntimeError:
-                    # 验证阶段或计算图异常时，保持初始权重
-                    d_weight = torch.tensor(
-                        self.discriminator_weight, device=inputs.device
-                    )
+                d_weight = self.calculate_adaptive_weight(
+                    nll_loss, generator_loss, last_layer=last_layer
+                )
         # ---------------------------------------------
 
         # Compute distillation loss
