@@ -189,25 +189,36 @@ class LightningModelVAE(pl.LightningModule):
         # Optimizer for encoder (generator)
         vae_model = self._get_module(self.vae_model)
 
-        # Separate parameters: vision_model and mlp1 use 0.1x learning rate
+        # Separate parameters by directly referencing submodules
+        # Group 0: vision_model and mlp1 with lower learning rate (0.1x)
         vision_mlp_params = []
+
+        # Collect parameters from vision_model and mlp1 submodules
+        if hasattr(vae_model, 'vision_model'):
+            vision_mlp_params.extend(
+                filter_nograd_tensors(vae_model.vision_model.parameters())
+            )
+        if hasattr(vae_model, 'mlp1'):
+            vision_mlp_params.extend(filter_nograd_tensors(vae_model.mlp1.parameters()))
+
+        # Group 1: other trainable parameters (gen_mlp1, latent_projector, decoder, etc.)
         other_params = []
 
-        for name, param in vae_model.named_parameters():
-            if param.requires_grad:
-                if 'vision_model' in name:  # or 'mlp1' in name:
-                    vision_mlp_params.append(param)
-                else:
-                    other_params.append(param)
+        # Collect parameters from other submodules
+        for name, module in vae_model.named_children():
+            if name not in [
+                'vision_model',
+                'mlp1',
+            ]:  # Exclude vision_model and mlp1 (already in Group 0)
+                other_params.extend(filter_nograd_tensors(module.parameters()))
 
         # Create parameter groups with different learning rates
         # Note: The optimizer callable should be configured with base_lr in config
-        # We'll manually set lr for vision_mlp group to be 0.1x of base_lr
-        # Assuming base_lr = 1e-4, vision_mlp_lr = 1e-5
+        # We'll manually set lr for vision_model group to be 0.1x of base_lr
         param_groups = []
         if len(vision_mlp_params) > 0:
-            # Group 0: vision_model and mlp1 with 0.1x learning rate
-            param_groups.append({"params": vision_mlp_params, "lr": 5e-5})
+            # Group 0: vision_model with lower learning rate
+            param_groups.append({"params": vision_mlp_params, "lr": 1e-5})
         if len(other_params) > 0:
             # Group 1: other parameters with base learning rate (from config)
             param_groups.append({"params": other_params})
@@ -224,10 +235,7 @@ class LightningModelVAE(pl.LightningModule):
                 print(f"\nGroup 0 - Vision Model Components:")
                 print(f"  Learning Rate: {vision_lr}")
                 print(f"  Total Parameters: {vision_param_count:,}")
-                print(f"  Components:")
-                for name, param in vae_model.named_parameters():
-                    if param.requires_grad:
-                        print(f"    - {name}: {param.numel():,} params")
+                print(f"  Submodules: vision_model, mlp1")
 
             # Group 1: other components
             if len(other_params) > 0:
@@ -237,10 +245,9 @@ class LightningModelVAE(pl.LightningModule):
                 print(f"\nGroup {group_idx} - Other Trainable Components:")
                 print(f"  Learning Rate: {other_lr}")
                 print(f"  Total Parameters: {other_param_count:,}")
-                print(f"  Components:")
-                for name, param in vae_model.named_parameters():
-                    if param.requires_grad:
-                        print(f"    - {name}: {param.numel():,} params")
+                print(
+                    f"  Submodules: gen_mlp1, latent_projector, decoder (if trainable)"
+                )
 
             print("\n" + "=" * 80 + "\n")
         optimizer_encoder = self.optimizer(param_groups)
