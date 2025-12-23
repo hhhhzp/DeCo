@@ -57,7 +57,7 @@ model:
     init_args:
       discriminator_start: 0
       discriminator_factor: 1.0
-      discriminator_weight: 0.1
+      discriminator_weight: 0.5
       lecam_regularization_weight: 0.001
       perceptual_loss: "lpips-convnext_s-1.0-0.1"
       perceptual_weight: 1.1
