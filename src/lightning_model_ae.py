@@ -185,92 +185,82 @@ class LightningModelVAE(pl.LightningModule):
             return module.module
         return module
 
-    def configure_optimizers(self) -> OptimizerLRScheduler:
-        # Optimizer for encoder (generator)
+    def configure_optimizers(self) -> list:
+        # =========================================
+        # 1. 配置 VAE (Generator) 优化器
+        # =========================================
         vae_model = self._get_module(self.vae_model)
 
-        # Separate parameters by directly referencing submodules
-        # Group 0: vision_model and mlp1 with lower learning rate (0.1x)
-        vision_mlp_params = []
+        # 定义低学习率模块 (vision_model, mlp1)
+        low_lr_names = {'vision_model', 'mlp1'}
+        low_lr_modules = [
+            getattr(vae_model, name)
+            for name in low_lr_names
+            if hasattr(vae_model, name)
+        ]
 
-        # Collect parameters from vision_model and mlp1 submodules
-        if hasattr(vae_model, 'vision_model'):
-            vision_mlp_params.extend(
-                filter_nograd_tensors(vae_model.vision_model.parameters())
+        # 策略：用 Set 加速去重，用 List 保持顺序 (Checkpoints 安全)
+        low_lr_lookup = set()
+        low_lr_params = []
+        for module in low_lr_modules:
+            for p in filter_nograd_tensors(module.parameters()):
+                if p not in low_lr_lookup:
+                    low_lr_params.append(p)
+                    low_lr_lookup.add(p)
+
+        # 收集剩余参数 (Base LR)
+        other_params = [
+            p
+            for p in filter_nograd_tensors(vae_model.parameters())
+            if p not in low_lr_lookup
+        ]
+
+        # 构建参数组
+        vae_groups = []
+        if low_lr_params:
+            vae_groups.append(
+                {"params": low_lr_params, "lr": 1e-5, "name": "Low LR (Vision/MLP)"}
             )
-        if hasattr(vae_model, 'mlp1'):
-            vision_mlp_params.extend(filter_nograd_tensors(vae_model.mlp1.parameters()))
+        if other_params:
+            vae_groups.append({"params": other_params, "name": "Base LR (Main VAE)"})
+            # 注意：未指定 lr 则使用优化器默认 lr
 
-        # Group 1: other trainable parameters (gen_mlp1, latent_projector, decoder, etc.)
-        other_params = []
-
-        # Collect parameters from other submodules
-        for name, module in vae_model.named_children():
-            if name not in [
-                'vision_model',
-                'mlp1',
-            ]:  # Exclude vision_model and mlp1 (already in Group 0)
-                other_params.extend(filter_nograd_tensors(module.parameters()))
-
-        # Create parameter groups with different learning rates
-        # Note: The optimizer callable should be configured with base_lr in config
-        # We'll manually set lr for vision_model group to be 0.1x of base_lr
-        param_groups = []
-        if len(vision_mlp_params) > 0:
-            # Group 0: vision_model with lower learning rate
-            param_groups.append({"params": vision_mlp_params, "lr": 1e-5})
-        if len(other_params) > 0:
-            # Group 1: other parameters with base learning rate (from config)
-            param_groups.append({"params": other_params})
-
-        if self.global_rank == 0:
-            print("\n" + "=" * 80)
-            print("OPTIMIZER CONFIGURATION - Learning Rates by Component")
-            print("=" * 80)
-
-            # Group 0: vision_model components
-            if len(vision_mlp_params) > 0:
-                vision_param_count = sum(p.numel() for p in vision_mlp_params)
-                vision_lr = param_groups[0].get('lr', 'default')
-                print(f"\nGroup 0 - Vision Model Components:")
-                print(f"  Learning Rate: {vision_lr}")
-                print(f"  Total Parameters: {vision_param_count:,}")
-                print(f"  Submodules: vision_model, mlp1")
-
-            # Group 1: other components
-            if len(other_params) > 0:
-                group_idx = 1 if len(vision_mlp_params) > 0 else 0
-                other_param_count = sum(p.numel() for p in other_params)
-                other_lr = param_groups[group_idx].get('lr', 'default (from config)')
-                print(f"\nGroup {group_idx} - Other Trainable Components:")
-                print(f"  Learning Rate: {other_lr}")
-                print(f"  Total Parameters: {other_param_count:,}")
-                print(
-                    f"  Submodules: gen_mlp1, latent_projector, decoder (if trainable)"
-                )
-
-            print("\n" + "=" * 80 + "\n")
-        optimizer_encoder = self.optimizer(param_groups)
+        optimizer_encoder = self.optimizer(vae_groups)
         lr_scheduler_encoder = get_cosine_schedule_with_warmup(
             optimizer_encoder, num_warmup_steps=10000, num_training_steps=400000
         )
-        # get_constant_schedule_with_warmup(
-        #     optimizer_encoder, num_warmup_steps=0
-        # )
 
-        # get_constant_schedule_with_warmup(optimizer_encoder, num_warmup_steps=0)
+        # =========================================
+        # 2. 打印参数统计 (仅主进程)
+        # =========================================
+        if self.global_rank == 0:
+            print(f"\n{'='*80}\nOPTIMIZER CONFIGURATION\n{'='*80}")
+            for i, group in enumerate(vae_groups):
+                lr_info = group.get('lr', 'Default')
+                n_params = sum(p.numel() for p in group['params'])
+                g_name = group.get('name', 'Unknown')
+                print(f"Group {i} - {g_name}:")
+                print(f"  Learning Rate    : {lr_info}")
+                print(f"  Total Parameters : {n_params:,}")
+            print(f"{'='*80}\n")
 
-        # Optimizer for discriminator
+        # =========================================
+        # 3. 配置 Discriminator 优化器
+        # =========================================
         loss_module = self._get_module(self.loss_module)
-        discriminator = loss_module.discriminator
-        params_discriminator = filter_nograd_tensors(discriminator.parameters())
-        optimizer_discriminator = self.discriminator_optimizer(
-            [{"params": params_discriminator}]
+        # 简化：直接获取参数，无需手动构建 dict，传入 list 即可
+        params_discriminator = filter_nograd_tensors(
+            loss_module.discriminator.parameters()
         )
+        optimizer_discriminator = self.discriminator_optimizer(params_discriminator)
+
         lr_scheduler_discriminator = get_cosine_schedule_with_warmup(
             optimizer_discriminator, num_warmup_steps=10000, num_training_steps=400000
         )
 
+        # =========================================
+        # 4. 返回配置
+        # =========================================
         return [
             {
                 "optimizer": optimizer_encoder,
