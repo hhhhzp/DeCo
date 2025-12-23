@@ -357,6 +357,7 @@ class LightningModelVAE(pl.LightningModule):
             extra_result_dict=extra_result_dict,
             global_step=self.global_step,
             mode="generator",
+            last_layer=self._get_module(self.vae_model).decoder.conv_out.weight,
         )
 
         # Add KL loss for Power Spherical regularization

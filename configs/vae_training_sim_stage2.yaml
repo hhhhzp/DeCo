@@ -55,13 +55,13 @@ model:
   loss_module:
     class_path: src.models.modules.vae_loss.VAEReconstructionLoss
     init_args:
-      discriminator_start: 2000000
+      discriminator_start: 50000
       discriminator_factor: 1.0
       discriminator_weight: 0.1
       lecam_regularization_weight: 0.001
       perceptual_loss: "lpips-convnext_s-1.0-0.1"
       perceptual_weight: 1.1
-      reconstruction_loss: "l2"
+      reconstruction_loss: "l1"
       reconstruction_weight: 1.0
       kl_weight: 0.0
       logvar_init: 0.0

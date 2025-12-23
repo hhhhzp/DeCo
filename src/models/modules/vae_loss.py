@@ -265,116 +265,62 @@ class VAEReconstructionLoss(nn.Module):
             return None
 
         with torch.no_grad():
-            if use_rotation_aug:
-                # Create rotated versions: [B*4, C, H, W]
-                B = pixel_values.shape[0]
-                pixel_values_rotated = create_rotated_batch(pixel_values)
+            # Original implementation without rotation augmentation
+            # Normalize to ImageNet stats
+            pixel_values = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(
+                pixel_values * 0.5 + 0.5
+            )
 
-                # Normalize to ImageNet stats
-                pixel_values_rotated = Normalize(
-                    IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
-                )(pixel_values_rotated * 0.5 + 0.5)
-
-                # Extract vision features for all rotations in one forward pass
-                if self.select_layer == -1:
-                    vit_embeds = self.teacher_vision_model(
-                        pixel_values=pixel_values_rotated,
-                        output_hidden_states=False,
-                        return_dict=True,
-                    ).last_hidden_state
-                else:
-                    vit_embeds = self.teacher_vision_model(
-                        pixel_values=pixel_values_rotated,
-                        output_hidden_states=True,
-                        return_dict=True,
-                    ).hidden_states[self.select_layer]
-
-                vit_embeds = vit_embeds[:, 1:, :]  # Remove CLS token [B*4, N, C]
-
-                # Get spatial dimensions
-                h = w = int(vit_embeds.shape[1] ** 0.5)
-
-                # Reshape all features to spatial format at once [B*4, h, w, C]
-                vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], h, w, -1)
-
-                # Split into 4 groups and rotate back
-                vit_embeds_list = torch.chunk(vit_embeds, 4, dim=0)
-                rotated_back_list = []
-
-                for k, vit_embeds_k in enumerate(vit_embeds_list):
-                    if k == 0:
-                        # No rotation needed for 0°
-                        rotated_back_list.append(vit_embeds_k)
-                    else:
-                        # Rotate back: convert to [B, C, h, w] format
-                        vit_spatial = vit_embeds_k.permute(0, 3, 1, 2)
-
-                        # Rotate back (inverse rotation)
-                        if k == 1:  # Was 90° CCW, rotate 270° CCW (90° CW)
-                            vit_spatial = torch.rot90(vit_spatial, k=3, dims=[2, 3])
-                        elif k == 2:  # Was 180°, rotate 180° back
-                            vit_spatial = torch.rot90(vit_spatial, k=2, dims=[2, 3])
-                        elif k == 3:  # Was 270° CCW, rotate 90° CCW
-                            vit_spatial = torch.rot90(vit_spatial, k=1, dims=[2, 3])
-
-                        # Convert back to [B, h, w, C]
-                        vit_spatial = vit_spatial.permute(0, 2, 3, 1)
-                        rotated_back_list.append(vit_spatial)
-
-                # Stack and average rotated features [B, h, w, C]
-                vit_embeds = torch.stack(rotated_back_list, dim=0).mean(dim=0)
-
-                # Apply pixel shuffle (batched operation)
-                vit_embeds = self.pixel_shuffle(
-                    vit_embeds, scale_factor=self.downsample_ratio
-                )
-
-                # Reshape to sequence format [B, N', C]
-                vit_embeds = vit_embeds.reshape(
-                    vit_embeds.shape[0], -1, vit_embeds.shape[-1]
-                )
-
-                # Apply MLP (batched operation)
-                vit_embeds = self.teacher_mlp1(vit_embeds)
-
+            # Extract vision features
+            if self.select_layer == -1:
+                vit_embeds = self.teacher_vision_model(
+                    pixel_values=pixel_values,
+                    output_hidden_states=False,
+                    return_dict=True,
+                ).last_hidden_state
             else:
-                # Original implementation without rotation augmentation
-                # Normalize to ImageNet stats
-                pixel_values = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(
-                    pixel_values * 0.5 + 0.5
-                )
+                vit_embeds = self.teacher_vision_model(
+                    pixel_values=pixel_values,
+                    output_hidden_states=True,
+                    return_dict=True,
+                ).hidden_states[self.select_layer]
 
-                # Extract vision features
-                if self.select_layer == -1:
-                    vit_embeds = self.teacher_vision_model(
-                        pixel_values=pixel_values,
-                        output_hidden_states=False,
-                        return_dict=True,
-                    ).last_hidden_state
-                else:
-                    vit_embeds = self.teacher_vision_model(
-                        pixel_values=pixel_values,
-                        output_hidden_states=True,
-                        return_dict=True,
-                    ).hidden_states[self.select_layer]
+            vit_embeds = vit_embeds[:, 1:, :]  # Remove CLS token
 
-                vit_embeds = vit_embeds[:, 1:, :]  # Remove CLS token
-
-                h = w = int(vit_embeds.shape[1] ** 0.5)
-                vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], h, w, -1)
-                vit_embeds = self.pixel_shuffle(
-                    vit_embeds, scale_factor=self.downsample_ratio
-                )
-                vit_embeds = vit_embeds.reshape(
-                    vit_embeds.shape[0], -1, vit_embeds.shape[-1]
-                )
-                vit_embeds = self.teacher_mlp1(vit_embeds)
+            h = w = int(vit_embeds.shape[1] ** 0.5)
+            vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], h, w, -1)
+            vit_embeds = self.pixel_shuffle(
+                vit_embeds, scale_factor=self.downsample_ratio
+            )
+            vit_embeds = vit_embeds.reshape(
+                vit_embeds.shape[0], -1, vit_embeds.shape[-1]
+            )
+            vit_embeds = self.teacher_mlp1(vit_embeds)
 
         return vit_embeds
 
     def should_discriminator_be_trained(self, global_step: int):
         """Check if discriminator should be trained at this step."""
         return global_step >= self.discriminator_iter_start
+
+    def calculate_adaptive_weight(self, nll_loss, g_loss, last_layer=None):
+        """
+        计算自适应权重：通过 NLL 梯度与 GAN 梯度的比值来动态调节。
+        """
+        if last_layer is None:
+            return torch.tensor(self.discriminator_weight, device=nll_loss.device)
+
+        # 计算两个 Loss 相对于最后一层参数的梯度
+        # 注意：这里必须设置 retain_graph=True 以便后续总损失的 backward
+        nll_grads = torch.autograd.grad(nll_loss, last_layer, retain_graph=True)[0]
+        g_grads = torch.autograd.grad(g_loss, last_layer, retain_graph=True)[0]
+
+        # 计算模长比值并进行数值截断（防止除零或权重爆炸）
+        d_weight = torch.norm(nll_grads) / (torch.norm(g_grads) + 1e-4)
+        d_weight = torch.clamp(d_weight, 0.0, 1e4).detach()
+
+        # 乘以初始配置的权重系数
+        return d_weight * self.discriminator_weight
 
     def forward(
         self,
@@ -383,6 +329,7 @@ class VAEReconstructionLoss(nn.Module):
         extra_result_dict: Mapping[Text, torch.Tensor],
         global_step: int,
         mode: str = "generator",
+        last_layer: torch.Tensor = None,  # <--- 新增此参数
     ) -> Tuple[torch.Tensor, Mapping[Text, torch.Tensor]]:
         """
         Forward pass for loss computation.
@@ -402,7 +349,11 @@ class VAEReconstructionLoss(nn.Module):
 
         if mode == "generator":
             return self._forward_generator(
-                inputs, reconstructions, extra_result_dict, global_step
+                inputs,
+                reconstructions,
+                extra_result_dict,
+                global_step,
+                last_layer=last_layer,
             )
         elif mode == "discriminator":
             return self._forward_discriminator(inputs, reconstructions, global_step)
@@ -415,6 +366,7 @@ class VAEReconstructionLoss(nn.Module):
         reconstructions: torch.Tensor,
         extra_result_dict: Mapping[Text, torch.Tensor],
         global_step: int,
+        last_layer: torch.Tensor = None,  # 新增参数，用于计算自适应权重梯度
     ) -> Tuple[torch.Tensor, Mapping[Text, torch.Tensor]]:
         """Generator training step."""
         inputs = inputs.contiguous()
@@ -424,7 +376,6 @@ class VAEReconstructionLoss(nn.Module):
         student_features = extra_result_dict.get("student_features", None)
 
         # Extract teacher features using teacher model
-        # IMPORTANT: Pass inputs in [-1, 1] range to match student's input
         teacher_features = None
         if self.distillation_weight > 0.0 and self.teacher_vision_model is not None:
             teacher_features = self.extract_teacher_features(
@@ -434,14 +385,6 @@ class VAEReconstructionLoss(nn.Module):
         # Convert to [0, 1] range for reconstruction and perceptual loss
         inputs = (inputs * 0.5) + 0.5
         reconstructions = (reconstructions * 0.5) + 0.5
-
-        # Convert inputs from [-1, 1] to [0, 1] for loss computation
-        # from src.utils.image_utils import normalize_from_neg1_to_1, denormalize_imagenet
-
-        # inputs = normalize_from_neg1_to_1(inputs)
-
-        # # Convert reconstructions from ImageNet normalization to [0, 1]
-        # reconstructions = denormalize_imagenet(reconstructions, clamp=True)
 
         # Compute reconstruction loss (MSE or L1)
         if self.reconstruction_loss == "l1":
@@ -458,6 +401,9 @@ class VAEReconstructionLoss(nn.Module):
         # Compute perceptual loss (LPIPS)
         perceptual_loss = self.perceptual_loss(inputs, reconstructions).mean()
 
+        # --- 修改部分：计算用于自适应权重的 nll_loss ---
+        nll_loss = reconstruction_loss + self.perceptual_weight * perceptual_loss
+
         # Compute GAN loss
         generator_loss = torch.zeros((), device=inputs.device)
         discriminator_factor = (
@@ -465,15 +411,26 @@ class VAEReconstructionLoss(nn.Module):
             if self.should_discriminator_be_trained(global_step)
             else 0
         )
-        d_weight = 1.0
+
+        # 默认权重
+        d_weight = torch.tensor(self.discriminator_weight, device=inputs.device)
 
         if discriminator_factor > 0.0 and self.discriminator_weight > 0.0:
-            # Use discriminator without updating its parameters
-            # No need to set requires_grad=False, just don't backward through it
             logits_fake = self.discriminator(reconstructions)
             generator_loss = -torch.mean(logits_fake)
 
-        d_weight *= self.discriminator_weight
+            # --- 核心修改：自适应权重计算逻辑 ---
+            if self.training and last_layer is not None:
+                try:
+                    d_weight = self.calculate_adaptive_weight(
+                        nll_loss, generator_loss, last_layer=last_layer
+                    )
+                except RuntimeError:
+                    # 验证阶段或计算图异常时，保持初始权重
+                    d_weight = torch.tensor(
+                        self.discriminator_weight, device=inputs.device
+                    )
+        # ---------------------------------------------
 
         # Compute distillation loss
         distillation_loss = torch.zeros((), device=inputs.device)
@@ -491,18 +448,13 @@ class VAEReconstructionLoss(nn.Module):
                 )
                 distillation_loss = mse_loss
             elif self.distillation_loss_type == "cosine":
-                # Cosine similarity loss (1 - cosine_similarity)
                 student_norm = F.normalize(student_features, p=2, dim=-1)
                 teacher_norm = F.normalize(teacher_features, p=2, dim=-1)
                 cosine_sim = (student_norm * teacher_norm).sum(dim=-1).mean()
                 cosine_loss = 1.0 - cosine_sim
-
-                # Also compute MSE loss
                 mse_loss = F.mse_loss(
                     student_features, teacher_features, reduction="mean"
                 )
-
-                # Combine both losses
                 distillation_loss = cosine_loss + mse_loss
             else:
                 raise ValueError(
@@ -512,9 +464,9 @@ class VAEReconstructionLoss(nn.Module):
             distillation_loss *= self.distillation_weight
 
         # Compute total loss
+        # 注意：此处直接使用 nll_loss (已包含 rec 和 perceptual)
         total_loss = (
-            reconstruction_loss
-            + self.perceptual_weight * perceptual_loss
+            nll_loss
             + d_weight * discriminator_factor * generator_loss
             + distillation_loss
         )
@@ -528,7 +480,9 @@ class VAEReconstructionLoss(nn.Module):
                 d_weight * discriminator_factor * generator_loss
             ).detach(),
             discriminator_factor=torch.tensor(discriminator_factor),
-            d_weight=d_weight,
+            d_weight=(
+                d_weight.detach() if isinstance(d_weight, torch.Tensor) else d_weight
+            ),
             gan_loss=generator_loss.detach(),
             distillation_loss=distillation_loss.detach(),
             distillation_cosine_loss=cosine_loss.detach(),
