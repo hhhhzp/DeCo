@@ -10,8 +10,8 @@ export NCCL_SOCKET_IFNAME=bond1
 # export NCCL_DEBUG=INFO
 export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
 
-# export WANDB_RESUME=auto
-# export WANDB_RUN_ID=q6xzhips
+export WANDB_RESUME=auto
+export WANDB_RUN_ID=r56kj9jg
 
 # multi-node training in lightning style, e.g., 4 nodes
 export MASTER_ADDR=29.111.44.218
