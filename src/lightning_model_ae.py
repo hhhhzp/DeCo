@@ -194,6 +194,7 @@ class LightningModelVAE(pl.LightningModule):
         # 定义低学习率模块的名称前缀 (对应之前的 vae_model.vision_model 和 vae_model.mlp1)
         low_lr_prefixes = ['vision_model.', 'mlp1.']
         low_lr_prefixes += ["_orig_mod." + p for p in low_lr_prefixes]
+        low_lr_prefixes = tuple(low_lr_prefixes)  # Convert to tuple for startswith()
 
         low_lr_info = []  # 存 (name, param)
         base_lr_info = []  # 存 (name, param)
