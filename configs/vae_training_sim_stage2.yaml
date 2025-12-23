@@ -100,7 +100,13 @@ data:
       resolution: 224  # Input resolution
       random_crop: true
       random_flip: true
-  
+  train_dataset:
+    class_path: src.data.dataset.imagenet.PixHFDataset
+    init_args:
+      root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k  # /path/to/ImageNet/train/
+      resolution: 224
+      split: train
+
   eval_dataset:
     class_path: src.data.dataset.imagenet.PixHFDataset
     init_args:
