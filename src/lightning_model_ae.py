@@ -186,81 +186,90 @@ class LightningModelVAE(pl.LightningModule):
         return module
 
     def configure_optimizers(self) -> list:
-        # =========================================
-        # 1. 配置 VAE (Generator) 优化器
-        # =========================================
         vae_model = self._get_module(self.vae_model)
 
-        # 定义低学习率模块 (vision_model, mlp1)
-        low_lr_names = {'vision_model', 'mlp1'}
-        low_lr_modules = [
-            getattr(vae_model, name)
-            for name in low_lr_names
-            if hasattr(vae_model, name)
-        ]
+        # ============================================================
+        # 1. 使用 named_parameters 同时收集 名字 和 参数
+        # ============================================================
+        # 定义低学习率模块的名称前缀 (对应之前的 vae_model.vision_model 和 vae_model.mlp1)
+        low_lr_prefixes = ('vision_model.', 'mlp1.')
 
-        # 策略：用 Set 加速去重，用 List 保持顺序 (Checkpoints 安全)
-        low_lr_lookup = set()
-        low_lr_params = []
-        for module in low_lr_modules:
-            for p in filter_nograd_tensors(module.parameters()):
-                if p not in low_lr_lookup:
-                    low_lr_params.append(p)
-                    low_lr_lookup.add(p)
+        low_lr_info = []  # 存 (name, param)
+        base_lr_info = []  # 存 (name, param)
 
-        # 收集剩余参数 (Base LR)
-        other_params = [
-            p
-            for p in filter_nograd_tensors(vae_model.parameters())
-            if p not in low_lr_lookup
-        ]
+        # 遍历所有参数
+        for name, param in vae_model.named_parameters():
+            if not param.requires_grad:
+                continue
 
-        # 构建参数组
+            # 根据名字前缀分组
+            if name.startswith(low_lr_prefixes):
+                low_lr_info.append((name, param))
+            else:
+                base_lr_info.append((name, param))
+
+        # ============================================================
+        # 2. 构建优化器参数组 (提取 Tensor)
+        # ============================================================
         vae_groups = []
-        if low_lr_params:
+
+        if low_lr_info:
             vae_groups.append(
-                {"params": low_lr_params, "lr": 1e-5, "name": "Low LR (Vision/MLP)"}
+                {
+                    "params": [p for n, p in low_lr_info],
+                    "lr": 1e-5,
+                    "name": "Group 0 (Vision/MLP)",
+                    "debug_names": [n for n, p in low_lr_info],  # 暂存名字用于打印
+                }
             )
-        if other_params:
-            vae_groups.append({"params": other_params, "name": "Base LR (Main VAE)"})
-            # 注意：未指定 lr 则使用优化器默认 lr
+
+        if base_lr_info:
+            vae_groups.append(
+                {
+                    "params": [p for n, p in base_lr_info],
+                    # 未指定 lr 则使用 config 中的 base_lr
+                    "name": "Group 1 (Base VAE)",
+                    "debug_names": [n for n, p in base_lr_info],
+                }
+            )
 
         optimizer_encoder = self.optimizer(vae_groups)
         lr_scheduler_encoder = get_cosine_schedule_with_warmup(
             optimizer_encoder, num_warmup_steps=10000, num_training_steps=400000
         )
 
-        # =========================================
-        # 2. 打印参数统计 (仅主进程)
-        # =========================================
+        # ============================================================
+        # 3. 详细打印参数名 (仅主进程)
+        # ============================================================
         if self.global_rank == 0:
-            print(f"\n{'='*80}\nOPTIMIZER CONFIGURATION\n{'='*80}")
-            for i, group in enumerate(vae_groups):
-                lr_info = group.get('lr', 'Default')
-                n_params = sum(p.numel() for p in group['params'])
-                g_name = group.get('name', 'Unknown')
-                print(f"Group {i} - {g_name}:")
-                print(f"  Learning Rate    : {lr_info}")
-                print(f"  Total Parameters : {n_params:,}")
+            print(f"\n{'='*80}\nOPTIMIZER PARAMETER DETAILED REPORT\n{'='*80}")
+
+            for group in vae_groups:
+                g_name = group['name']
+                lr = group.get('lr', 'Default')
+                names = group['debug_names']
+
+                print(f"\n>>> {g_name} | LR: {lr} | Count: {len(names)}")
+                print("-" * 80)
+
+                # 打印每一个参数名
+                for name in names:
+                    print(f" • {name}")
+
             print(f"{'='*80}\n")
 
-        # =========================================
-        # 3. 配置 Discriminator 优化器
-        # =========================================
+        # ============================================================
+        # 4. Discriminator 配置 (保持不变)
+        # ============================================================
         loss_module = self._get_module(self.loss_module)
-        # 简化：直接获取参数，无需手动构建 dict，传入 list 即可
         params_discriminator = filter_nograd_tensors(
             loss_module.discriminator.parameters()
         )
         optimizer_discriminator = self.discriminator_optimizer(params_discriminator)
-
         lr_scheduler_discriminator = get_cosine_schedule_with_warmup(
             optimizer_discriminator, num_warmup_steps=10000, num_training_steps=400000
         )
 
-        # =========================================
-        # 4. 返回配置
-        # =========================================
         return [
             {
                 "optimizer": optimizer_encoder,
