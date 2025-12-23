@@ -323,6 +323,53 @@ class PixJSONLDataset(Dataset):
                 continue
 
 
+def create_image_transform(
+    resolution=256,
+    random_crop=False,
+    random_flip=False,
+    normalize_mean=[0.5, 0.5, 0.5],
+    normalize_std=[0.5, 0.5, 0.5],
+):
+    """
+    Create image transformation pipeline.
+
+    Args:
+        resolution: Target image resolution
+        random_crop: Whether to use random crop (otherwise center crop)
+        random_flip: Whether to use random horizontal flip
+        normalize_mean: Mean values for normalization
+        normalize_std: Std values for normalization
+
+    Returns:
+        A composed transform that includes Resize -> Crop -> Flip -> ToTensor -> Normalize
+    """
+    train_transform = []
+    interpolation = transforms.InterpolationMode.BICUBIC
+
+    # Resize shorter edge
+    train_transform.append(
+        transforms.Resize(resolution, interpolation=interpolation, antialias=True)
+    )
+
+    # Crop
+    if random_crop:
+        train_transform.append(transforms.RandomCrop(resolution))
+    else:
+        train_transform.append(transforms.CenterCrop(resolution))
+
+    # Random flip
+    if random_flip:
+        train_transform.append(transforms.RandomHorizontalFlip())
+
+    # ToTensor
+    train_transform.append(transforms.ToTensor())
+
+    # Normalize
+    train_transform.append(transforms.Normalize(mean=normalize_mean, std=normalize_std))
+
+    return transforms.Compose(train_transform)
+
+
 class PixMultiJSONLDataset(Dataset):
     """
     Dataset that loads multiple JSONL datasets from a JSON config file.
@@ -401,29 +448,15 @@ class PixMultiJSONLDataset(Dataset):
             self.samples = [self.samples[i] for i in selected_indices]
             print(f"Subsampled to {len(self.samples)} samples")
 
-        # Setup transforms
-        if random_crop:
-            self.transform = transforms.Compose(
-                [
-                    transforms.Resize(resolution),
-                    transforms.RandomCrop(resolution),
-                    transforms.RandomHorizontalFlip(),
-                ]
-            )
-        else:
-            if random_flip is False:
-                self.transform = partial(center_crop_fn, image_size=resolution)
-            else:
-                self.transform = transforms.Compose(
-                    [
-                        transforms.Lambda(
-                            partial(center_crop_fn, image_size=resolution)
-                        ),
-                        transforms.RandomHorizontalFlip(),
-                    ]
-                )
-
-        self.normalize = transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+        # Setup transforms using the create_image_transform function
+        self.transform = create_image_transform(
+            resolution=resolution,
+            random_crop=random_crop,
+            random_flip=random_flip,
+            normalize_mean=[0.5, 0.5, 0.5],
+            normalize_std=[0.5, 0.5, 0.5],
+        )
+        print(f"PixMultiJSONLDataset transform: {self.transform}")
 
     def __len__(self):
         return len(self.samples)
@@ -448,21 +481,16 @@ class PixMultiJSONLDataset(Dataset):
                 # 3. Load and process image
                 raw_image = Image.open(image_path).convert('RGB')
 
-                # 4. Apply transforms
-                raw_image = self.transform(raw_image)
+                # 4. Apply transforms (includes ToTensor and Normalize)
+                normalized_image = self.transform(raw_image)
 
-                # 5. Convert to tensor
-                raw_image = to_tensor(raw_image)
-
-                # 6. Normalize
-                normalized_image = self.normalize(raw_image)
-
-                # 7. Set target to 0 (as requested)
+                # 5. Set target to 0 (as requested)
                 target = 0
 
-                # 8. Construct metadata
+                # 6. Construct metadata
+                # Note: raw_image is now the normalized tensor, so we store it as is
                 metadata = {
-                    "raw_image": raw_image,  # Unnormalized tensor (0-1)
+                    "raw_image": normalized_image,  # Normalized tensor [-1, 1]
                     "class": target,
                     "dataset_name": item['dataset_name'],
                 }
