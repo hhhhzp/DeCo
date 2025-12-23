@@ -1,7 +1,7 @@
 # lightning.pytorch==2.4.0
 seed_everything: true
 tags:
-  exp: &exp test
+  exp: &exp vae_sim_gen_mlp_stage2_lr5e-5
 torch_hub_dir: ~/.cache/torch/hub
 huggingface_cache_dir: null
 trainer:
@@ -100,11 +100,6 @@ data:
       resolution: 224  # Input resolution
       random_crop: true
       random_flip: true
-    class_path: src.data.dataset.imagenet.PixHFDataset
-    init_args:
-      root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k  # /path/to/ImageNet/train/
-      resolution: 224
-      split: train
 
   eval_dataset:
     class_path: src.data.dataset.imagenet.PixHFDataset
