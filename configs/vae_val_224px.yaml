@@ -87,7 +87,7 @@ model:
       lr: 1e-4
       weight_decay: 0.0
       betas: [0.9, 0.95]
-  eval_original_model: false
+  eval_original_model: true
   pretrain_model_path: null
   freeze_encoder: false
 
