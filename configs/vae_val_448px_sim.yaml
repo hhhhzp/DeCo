@@ -44,7 +44,7 @@ trainer:
 
 model:
   vae_model:
-    class_path: src.models.transformer.encoder_ae.VAEModel
+    class_path: src.models.transformer.encoder_ae_sim.VAEModel
     init_args:
       encoder_config_path: "/apdcephfs/share_300000800/datamultimodal/models/InternVL3-2B"
       decoder_weight_path: "/apdcephfs/share_300000800/datamultimodal/models/dc-ae-f32c32-sana-1.1-diffusers"
