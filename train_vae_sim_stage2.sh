@@ -23,4 +23,4 @@ export NODE_RANK=${NODE_RANK:-0}
 python main.py fit -c configs/vae_training_sim_stage2.yaml \
     --trainer.num_nodes=4 \
     --trainer.devices=8 \
-    --ckpt_path=work_dirs/exp_vae_sim_gen_mlp_stage2_lr5e-5/epoch=0-step=50000.ckpt
+    --ckpt_path=work_dirs/exp_vae_sim_gen_mlp_stage2_lr5e-5/epoch=0-step=100000.ckpt

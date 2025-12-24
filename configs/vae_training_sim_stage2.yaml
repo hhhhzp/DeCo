@@ -97,7 +97,7 @@ data:
     class_path: src.data.dataset.imagenet.PixMultiJSONLDataset
     init_args:
       config_path: scripts/total_images.json
-      resolution: 224  # Input resolution
+      resolution: 448  # Input resolution
       random_crop: true
       random_flip: true
 
@@ -105,7 +105,7 @@ data:
     class_path: src.data.dataset.imagenet.PixHFDataset
     init_args:
       root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k
-      resolution: 224
+      resolution: 448
       split: validation
   
   # Data loading settings
