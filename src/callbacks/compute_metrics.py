@@ -24,8 +24,8 @@ class ComputeMetricsHook(Callback):
         super().__init__()
         # 初始化指标计算器，dist_sync_on_step=False 表示我们只在 epoch 结束时同步
         # data_range=1.0 对应 [0, 1] 的数据范围
-        self.psnr = PeakSignalNoiseRatio(data_range=(-1.0, 1.0))
-        self.ssim = StructuralSimilarityIndexMeasure(data_range=(-1.0, 1.0))
+        self.psnr = PeakSignalNoiseRatio(data_range=(0, 255.0))
+        self.ssim = StructuralSimilarityIndexMeasure(data_range=(0, 255.0))
 
         # FID 相关
         self.compute_fid = compute_fid
@@ -51,15 +51,18 @@ class ComputeMetricsHook(Callback):
             if self.compute_fid:
                 self.fid = self.fid.to(pl_module.device)
 
-    def _update_metrics(self, pl_module, pred, batch):
+    def _update_metrics(self, pl_module, outputs, batch):
         # 提取数据 (假设 batch 格式为 [img, label, metadata])
-        target, _, _ = batch
+        original_img, _, _ = batch
 
         # 归一化处理
+        reconstructed = fp2uint8(outputs)
+        original_img = fp2uint8(original_img)
 
         # 更新 PSNR 和 SSIM (此时不计算最终值，只累积统计量)
-        self.psnr.update(pred, target)
-        self.ssim.update(pred, target)
+        self.psnr.update(reconstructed, original_img)
+        self.ssim.update(reconstructed, original_img)
+
         # 更新 FID (如果启用)
         if self.compute_fid and self.fid_enabled:
             # 将图像转换为 uint8 [0, 255] 格式，这是 FID 期望的输入
@@ -68,10 +71,8 @@ class ComputeMetricsHook(Callback):
 
             # TorchMetrics FID 会自动提取 Inception 特征并累积统计量
             # 这里只在每个 rank 上处理自己的 batch，不会 OOM
-            pred = fp2uint8(pred)
-            target = fp2uint8(target)
-            self.fid.update(target, real=True)
-            self.fid.update(pred, real=False)
+            self.fid.update(original_img, real=True)
+            self.fid.update(reconstructed, real=False)
 
     def _log_and_reset(self, pl_module, prefix="val"):
         # 计算最终指标 (自动处理 DDP 同步)
