@@ -210,7 +210,7 @@ class LightningModel(pl.LightningModule):
 
         # Extract condition from original image (only once per image)
         # This replaces the external text/class condition
-        vit_embeds = self.denoiser.extract_feature(img)
+        vit_embeds = self.denoiser.extract_vision_feature(img)
         condition = self.denoiser.forward_condition(img, vit_embeds=vit_embeds)
 
         # Replicate latent x to improve training efficiency
