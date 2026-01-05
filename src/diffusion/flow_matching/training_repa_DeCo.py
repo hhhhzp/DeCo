@@ -273,15 +273,16 @@ class REPATrainer(BaseTrainer):
         weight = self.loss_weight_fn(alpha, sigma)
         fm_loss = weight * (out - v_t) ** 2
 
-        v_t_freq = self._dct(self._rgb2ycbcr(v_t))
-        out_freq = self._dct(self._rgb2ycbcr(out))
-        fm_loss_freq = (self.freq_w * ((out_freq - v_t_freq) ** 2)).mean()
+        # v_t_freq = self._dct(self._rgb2ycbcr(v_t))
+        # out_freq = self._dct(self._rgb2ycbcr(out))
+        # fm_loss_freq = (self.freq_w * ((out_freq - v_t_freq) ** 2)).mean()
 
         out = dict(
             fm_loss=fm_loss.mean(),
-            fm_loss_freq=fm_loss_freq,
+            # fm_loss_freq=fm_loss_freq,
             # cos_loss=cos_loss.mean(),
-            loss=fm_loss.mean() + self.freq_loss_weight * fm_loss_freq,
+            loss=fm_loss.mean(),
+            # + self.freq_loss_weight * fm_loss_freq,
             # + self.feat_loss_weight * cos_loss.mean(),
         )
         return out
