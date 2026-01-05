@@ -173,16 +173,16 @@ class LightningModel(pl.LightningModule):
         ]
         # optimizer: torch.optim.Optimizer = self.optimizer([*params_trainer, *params_denoiser])
         optimizer: torch.optim.Optimizer = self.optimizer(param_groups)
-        lr_scheduler = get_constant_schedule_with_warmup(
-            optimizer, num_warmup_steps=1000
-        )
+        # lr_scheduler = get_constant_schedule_with_warmup(
+        #     optimizer, num_warmup_steps=1000
+        # )
         return dict(
             optimizer=optimizer,
-            lr_scheduler={
-                "scheduler": lr_scheduler,
-                "interval": "step",
-                "frequency": 1,
-            },
+            # lr_scheduler={
+            #     "scheduler": lr_scheduler,
+            #     "interval": "step",
+            #     "frequency": 1,
+            # },
         )
 
     def on_validation_start(self) -> None:
