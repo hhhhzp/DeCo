@@ -603,7 +603,7 @@ class PixNerDiT(nn.Module):
         vit_hidden_size = config.vision_config.hidden_size
         llm_hidden_size = config.llm_config.hidden_size
         self.downsample_ratio = 0.5
-        self.latent_channel = 64
+        self.latent_channel = 32
         self.patch_size = vision_config.patch_size
 
         # ============================================================
