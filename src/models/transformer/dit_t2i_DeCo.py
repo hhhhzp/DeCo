@@ -432,6 +432,144 @@ class SimpleMLPAdaLN(nn.Module):
         return self.final_layer(x)
 
 
+class PixelDecoder(nn.Module):
+    """Pixel Decoder for diffusion model."""
+
+    def __init__(
+        self,
+        in_channels=4,
+        latent_channel=64,
+        hidden_size=1152,
+        hidden_size_x=64,
+        num_groups=12,
+        num_encoder_blocks=18,
+        num_decoder_blocks=4,
+        patch_size=14,
+    ):
+        super().__init__()
+        self.in_channels = in_channels
+        self.latent_channel = latent_channel
+        self.hidden_size = hidden_size
+        self.hidden_size_x = hidden_size_x
+        self.num_groups = num_groups
+        self.num_encoder_blocks = num_encoder_blocks
+        self.num_decoder_blocks = num_decoder_blocks
+        self.patch_size = patch_size
+
+        # Learnable tokens for DiT (replacing text condition)
+        num_learnable_tokens = 64  # Can be adjusted
+        self.learnable_tokens = nn.Parameter(
+            torch.randn(1, num_learnable_tokens, hidden_size), requires_grad=True
+        )
+        nn.init.xavier_uniform_(self.learnable_tokens)
+
+        # Embedders
+        self.s_embedder = Embed(self.latent_channel, hidden_size, bias=True)
+        self.x_embedder = NerfEmbedder(in_channels, hidden_size_x, max_freqs=8)
+        self.t_embedder = TimestepEmbedder(hidden_size)
+
+        # Condition projector to map latent_channel to hidden_size
+        self.condition_proj = nn.Linear(self.latent_channel, hidden_size)
+
+        # DiT blocks
+        self.blocks = nn.ModuleList(
+            [
+                FlattenDiTBlock(self.hidden_size, self.num_groups)
+                for _ in range(self.num_encoder_blocks)
+            ]
+        )
+
+        # Decoder network with time embedding
+        self.dec_net = SimpleMLPAdaLN(
+            in_channels=hidden_size_x,
+            model_channels=hidden_size_x,
+            out_channels=self.in_channels,  # for vlb loss
+            z_channels=self.hidden_size,
+            num_res_blocks=num_decoder_blocks,
+            patch_size=patch_size,
+            grad_checkpointing=False,
+        )
+
+        self.precompute_pos = dict()
+        self.initialize_weights()
+
+    def fetch_pos(self, height, width, device):
+        if (height, width) in self.precompute_pos:
+            return self.precompute_pos[(height, width)].to(device)
+        else:
+            pos = precompute_freqs_cis_2d(
+                self.hidden_size // self.num_groups, height, width
+            ).to(device)
+            self.precompute_pos[(height, width)] = pos
+            return pos
+
+    def initialize_weights(self):
+        # Initialize patch_embed like nn.Linear (instead of nn.Conv2d):
+        w = self.s_embedder.proj.weight.data
+        nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
+        nn.init.constant_(self.s_embedder.proj.bias, 0)
+
+        # Initialize timestep embedding MLP:
+        nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
+        nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
+
+    def forward_condition(self, latent, device):
+        """
+        Process latent features through DiT blocks.
+        :param latent: latent features [B, N, latent_channel]
+        :param device: device for computation
+        :return: processed features [B, N, hidden_size]
+        """
+        B = latent.shape[0]
+        grid_size = int(latent.shape[1] ** 0.5)
+        xpos = self.fetch_pos(grid_size, grid_size, device)
+
+        y = self.learnable_tokens.expand(B, -1, -1)
+
+        cond = nn.functional.silu(self.condition_proj(latent.mean(dim=1, keepdim=True)))
+        cond = cond.expand(-1, latent.shape[1], -1)
+
+        # DiT Block iteration
+        s = self.s_embedder(latent)
+        for block in self.blocks:
+            s = block(s, y, cond, xpos)
+
+        return s
+
+    def forward(self, x, t, s):
+        """
+        Decode pixels from latent features.
+        :param x: noisy input [B, C, H, W]
+        :param t: timestep [B]
+        :param s: condition features [B, N, hidden_size]
+        :return: predicted output [B, C, H, W]
+        """
+        B, _, H, W = x.shape
+        x = torch.nn.functional.unfold(
+            x, kernel_size=self.patch_size, stride=self.patch_size
+        ).transpose(1, 2)
+        t = self.t_embedder(t.view(-1)).view(B, -1, self.hidden_size)
+
+        s = torch.nn.functional.silu(t + s)
+        batch_size, length, _ = s.shape
+        x = x.reshape(batch_size * length, self.in_channels, self.patch_size**2)
+        x = x.transpose(1, 2)
+        s = s.view(batch_size * length, self.hidden_size)
+        x = self.x_embedder(x)
+
+        x = self.dec_net(x, s)
+
+        x = x.transpose(1, 2)
+        x = x.reshape(batch_size, length, -1)
+        x = torch.nn.functional.fold(
+            x.transpose(1, 2).contiguous(),
+            (H, W),
+            kernel_size=self.patch_size,
+            stride=self.patch_size,
+        )
+        return x
+
+
 class PixNerDiT(nn.Module):
     def __init__(
         self,
@@ -458,17 +596,25 @@ class PixNerDiT(nn.Module):
         self.num_blocks = self.num_encoder_blocks + self.num_decoder_blocks
         self.select_layer = select_layer
 
-        # Vision encoder
+        # Load config
         config = InternVLChatConfig.from_pretrained(config_path)
         vision_config = config.vision_config
         vision_config.drop_path_rate = 0.0
-        self.vision_model = InternVisionModel(vision_config)
         vit_hidden_size = config.vision_config.hidden_size
         llm_hidden_size = config.llm_config.hidden_size
         self.downsample_ratio = 0.5
         self.latent_channel = 64
+        self.patch_size = vision_config.patch_size
 
-        # MLP to project vision features to decoder hidden size
+        # ============================================================
+        # Vision Encoder
+        # ============================================================
+        self.vision_model = InternVisionModel(vision_config)
+
+        # ============================================================
+        # Connector
+        # ============================================================
+        # First connector: vision features -> llm hidden size
         self.mlp1 = nn.Sequential(
             nn.LayerNorm(vit_hidden_size * int(1 / self.downsample_ratio) ** 2),
             nn.Linear(
@@ -479,71 +625,30 @@ class PixNerDiT(nn.Module):
             nn.Linear(llm_hidden_size, llm_hidden_size),
         )
 
-        # Latent connector to convert vision features to latent space
-        self.latent_projector = LatentConnectorModule(
-            hidden_size=llm_hidden_size, out_channels=self.latent_channel
+        # Second connector: llm hidden size -> latent space
+        self.latent_projector = nn.Sequential(
+            nn.LayerNorm(llm_hidden_size),
+            nn.Linear(llm_hidden_size, llm_hidden_size),
+            nn.GELU(),
+            nn.Linear(llm_hidden_size, self.latent_channel),
         )
 
-        # Patch size for DiT processing
-        self.patch_size = 2 * vision_config.patch_size
-
-        # Learnable tokens for DiT (replacing text condition)
-        num_learnable_tokens = 64  # Can be adjusted
-        self.learnable_tokens = nn.Parameter(
-            torch.randn(1, num_learnable_tokens, hidden_size), requires_grad=True
-        )
-        nn.init.xavier_uniform_(self.learnable_tokens)
-
-        # s_embedder should take latent_channels * patch_size^2, not in_channels
-        self.s_embedder = Embed(self.latent_channel, hidden_size, bias=True)
-        self.x_embedder = NerfEmbedder(in_channels, hidden_size_x, max_freqs=8)
-        self.t_embedder = TimestepEmbedder(hidden_size)
-
-        # Condition projector to map latent_channel to hidden_size
-        self.condition_proj = nn.Linear(self.latent_channel, hidden_size)
-        # DiT blocks (no longer need text condition)
-        self.blocks = nn.ModuleList(
-            [
-                FlattenDiTBlock(self.hidden_size, self.num_groups)
-                for _ in range(self.num_encoder_blocks)
-            ]
-        )
-
-        # Decoder network with time embedding
-        self.dec_net = SimpleMLPAdaLN(
-            in_channels=hidden_size_x,
-            model_channels=hidden_size_x,
-            out_channels=self.in_channels,  # for vlb loss
-            z_channels=self.hidden_size,
-            num_res_blocks=num_decoder_blocks,
+        # ============================================================
+        # Pixel Decoder
+        # ============================================================
+        self.pixel_decoder = PixelDecoder(
+            in_channels=in_channels,
+            latent_channel=self.latent_channel,
+            hidden_size=hidden_size,
+            hidden_size_x=hidden_size_x,
+            num_groups=num_groups,
+            num_encoder_blocks=num_encoder_blocks,
+            num_decoder_blocks=num_decoder_blocks,
             patch_size=self.patch_size,
-            grad_checkpointing=False,
         )
 
-        self.initialize_weights()
-        self.precompute_pos = dict()
         self.weight_path = weight_path
         self.load_ema = load_ema
-
-    def fetch_pos(self, height, width, device):
-        if (height, width) in self.precompute_pos:
-            return self.precompute_pos[(height, width)].to(device)
-        else:
-            pos = precompute_freqs_cis_2d(
-                self.hidden_size // self.num_groups, height, width
-            ).to(device)
-            self.precompute_pos[(height, width)] = pos
-            return pos
-
-    def initialize_weights(self):
-        # Initialize patch_embed like nn.Linear (instead of nn.Conv2d):
-        w = self.s_embedder.proj.weight.data
-        nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
-        nn.init.constant_(self.s_embedder.proj.bias, 0)
-
-        # Initialize timestep embedding MLP:
-        nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
-        nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
 
     def pixel_shuffle(self, x, scale_factor=0.5):
         n, w, h, c = x.size()
@@ -560,6 +665,26 @@ class PixNerDiT(nn.Module):
         )
         x = x.permute(0, 2, 1, 3).contiguous()
         return x
+
+    def extract_vision_feature(self, pixel_values):
+        """
+        Extract features from vision model with pixel shuffle downsampling.
+        :param pixel_values: input image [B, C, H, W]
+        :return: vit_embeds [B, num_patches, decoder_hidden_size]
+        """
+        pixel_values = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(
+            pixel_values * 0.5 + 0.5
+        )
+        if self.select_layer == -1:
+            vit_embeds = self.vision_model(
+                pixel_values=pixel_values, output_hidden_states=False, return_dict=True
+            ).last_hidden_state
+        else:
+            vit_embeds = self.vision_model(
+                pixel_values=pixel_values, output_hidden_states=True, return_dict=True
+            ).hidden_states[self.select_layer]
+        vit_embeds = vit_embeds[:, 1:, :]  # Remove CLS token
+        return vit_embeds
 
     def extract_feature(self, pixel_values):
         """
@@ -588,51 +713,28 @@ class PixNerDiT(nn.Module):
         return vit_embeds
 
     def forward_condition(self, x, vit_embeds=None):
-        B = x.shape[0]
-
-        # 1. 提取特征并投影 [B, N, C]
+        """
+        Extract and process condition features.
+        :param x: input image [B, C, H, W]
+        :param vit_embeds: pre-extracted vision features (optional)
+        :return: condition features [B, N, hidden_size]
+        """
+        # Extract features and project to latent space [B, N, latent_channel]
         if vit_embeds is None:
-            latent = self.latent_projector(self.extract_feature(x))
+            latent = self.latent_projector(self.extract_vision_feature(x))
         else:
             latent = self.latent_projector(vit_embeds)
-        latent = F.layer_norm(latent, normalized_shape=latent.shape[2:], eps=1e-6)
-        grid_size = int(latent.shape[1] ** 0.5)
-        xpos = self.fetch_pos(grid_size, grid_size, x.device)
 
-        y = self.learnable_tokens.expand(B, -1, -1)
-
-        cond = nn.functional.silu(self.condition_proj(latent.mean(dim=1, keepdim=True)))
-        cond = cond.expand(-1, latent.shape[1], -1)
-
-        # 4. DiT Block 迭代
-        s = self.s_embedder(latent)
-        for block in self.blocks:
-            s = block(s, y, cond, xpos)
-
+        # Process through pixel decoder
+        s = self.pixel_decoder.forward_condition(latent, x.device)
         return s
 
     def forward(self, x, t, s):
-        B, _, H, W = x.shape
-        x = torch.nn.functional.unfold(
-            x, kernel_size=self.patch_size, stride=self.patch_size
-        ).transpose(1, 2)
-        t = self.t_embedder(t.view(-1)).view(B, -1, self.hidden_size)
-
-        s = torch.nn.functional.silu(t + s)
-        batch_size, length, _ = s.shape
-        x = x.reshape(batch_size * length, self.in_channels, self.patch_size**2)
-        x = x.transpose(1, 2)
-        s = s.view(batch_size * length, self.hidden_size)
-        x = self.x_embedder(x)
-
-        x = self.dec_net(x, s)
-
-        x = x.transpose(1, 2)
-        x = x.reshape(batch_size, length, -1)
-        x = torch.nn.functional.fold(
-            x.transpose(1, 2).contiguous(),
-            (H, W),
-            kernel_size=self.patch_size,
-            stride=self.patch_size,
-        )
-        return x
+        """
+        Forward pass through the complete model.
+        :param x: noisy input [B, C, H, W]
+        :param t: timestep [B]
+        :param s: condition features [B, N, hidden_size]
+        :return: predicted output [B, C, H, W]
+        """
+        return self.pixel_decoder(x, t, s)

@@ -68,7 +68,7 @@ class LightningModel(pl.LightningModule):
     def configure_model(self) -> None:
         self.trainer.strategy.barrier()
         # 然后初始化vision model（如果预训练权重中不包含vision model部分）
-        # self.init_vision_model()
+        self.init_vision_model()
 
         # Initialize teacher model if distillation is enabled
         if self.distill:
@@ -95,7 +95,7 @@ class LightningModel(pl.LightningModule):
 
     def init_vision_model(
         self,
-        pretrained_model_path: str = "/apdcephfs/share_300000800/datamultimodal/models/InternVL3-1B",
+        pretrained_model_path: str = "/apdcephfs/share_300000800/datamultimodal/models/InternVL3-2B",
     ):
         """
         从预训练的 InternVLChatModel 中加载 vision model 和 mlp1
@@ -126,7 +126,7 @@ class LightningModel(pl.LightningModule):
 
     def init_teacher_model(
         self,
-        pretrained_model_path: str = "/apdcephfs/share_300000800/datamultimodal/models/InternVL3-1B",
+        pretrained_model_path: str = "/apdcephfs/share_300000800/datamultimodal/models/InternVL3-2B",
     ):
         """
         初始化冻结的 teacher model 用于自蒸馏
