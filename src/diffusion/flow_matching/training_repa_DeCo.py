@@ -217,12 +217,15 @@ class REPATrainer(BaseTrainer):
         raw_images = metadata["raw_image"]
         batch_size, c, height, width = x.shape
         # self.save_tensor_as_images(raw_images)
-        if self.lognorm_t:
-            base_t = torch.randn(
-                (batch_size), device=x.device, dtype=torch.float32
-            ).sigmoid()
-        else:
-            base_t = torch.rand((batch_size), device=x.device, dtype=torch.float32)
+
+        # Mixed timestep distribution: 90% sigmoid(randn), 10% uniform
+        nt = torch.randn((batch_size,), device=x.device, dtype=torch.float32)
+        t_lognorm = torch.sigmoid(nt)
+        t_uniform = torch.rand((batch_size,), device=x.device, dtype=torch.float32)
+        base_t = torch.where(
+            torch.rand((batch_size,), device=x.device) <= 0.9, t_lognorm, t_uniform
+        )
+
         t = time_shift_fn(base_t, self.timeshift)
         noise = torch.randn_like(x)
         alpha = self.scheduler.alpha(t)
