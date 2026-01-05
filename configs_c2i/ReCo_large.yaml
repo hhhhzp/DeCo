@@ -1,11 +1,11 @@
 # lightning.pytorch==2.4.0
 seed_everything: true
 tags:
-  exp: &exp DeCo_256_large
+  exp: &exp internvit_layer_-1
 torch_hub_dir: ~/.cache/torch/hub
 huggingface_cache_dir: null
 trainer:
-  default_root_dir: ./universal_pix_workdirs
+  default_root_dir: ./internvit_flow_decoder
   accelerator: auto
   strategy: auto
   devices: auto
@@ -14,7 +14,7 @@ trainer:
   logger:
       class_path: lightning.pytorch.loggers.WandbLogger
       init_args:
-        save_dir: ./universal_pix_flow
+        save_dir: ./clip_flow_decoder
         name: *exp
   num_sanity_val_steps: 0
   max_steps: 200000
@@ -55,7 +55,7 @@ model:
         hidden_size_x: 32
         num_encoder_blocks: 6
         num_decoder_blocks: 3
-        config_path: /apdcephfs/share_300000800/datamultimodal/models/InternVL3-1B
+        config_path: /apdcephfs/share_300000800/datamultimodal/models/InternVL3-2B
   diffusion_trainer:
     class_path: src.diffusion.flow_matching.training_repa_DeCo.REPATrainer
     init_args:
