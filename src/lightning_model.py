@@ -309,9 +309,6 @@ class LightningModel(pl.LightningModule):
                     )
 
                 self._logged_images_count += num_to_log
-
-        # fp32 -1,1 -> uint8 0,255
-        # samples = fp2uint8(samples)
         return samples
 
     def validation_step(self, batch, batch_idx):
