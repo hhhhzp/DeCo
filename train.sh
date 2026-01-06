@@ -14,7 +14,7 @@ export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
 # export WANDB_RUN_ID=uzh3m4s6
 
 # multi-node training in lightning style, e.g., 4 nodes
-export MASTER_ADDR=29.111.44.218
+export MASTER_ADDR=29.111.44.202
 export MASTER_PORT=28778
 export NNODES=4
 export NGPUS_PER_NODE=8
