@@ -404,14 +404,13 @@ class PixelDecoder(nn.Module):
         # Concatenate learnable tokens (like cls token) with spatial tokens
         s = torch.cat([learnable_tokens, s], dim=1)
 
-        # Create position encoding: zeros for learnable tokens, rotary for spatial tokens
+        # Create position encoding: center position for learnable tokens, rotary for spatial tokens
         num_learnable = learnable_tokens.shape[1]
         # xpos shape: [grid_size*grid_size, hidden_size//num_groups]
-        # We need to add dummy pos for learnable tokens
-        dummy_pos = torch.zeros(
-            num_learnable, xpos.shape[1], device=device, dtype=xpos.dtype
-        )
-        full_pos = torch.cat([dummy_pos, xpos], dim=0)
+        # Use center position encoding for learnable tokens
+        center_idx = grid_size * grid_size // 2  # Middle position in the spatial grid
+        center_pos = xpos[center_idx : center_idx + 1].expand(num_learnable, -1)
+        full_pos = torch.cat([center_pos, xpos], dim=0)
 
         # DiT Block iteration
         for block in self.blocks:
