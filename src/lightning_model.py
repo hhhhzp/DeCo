@@ -116,7 +116,10 @@ class LightningModel(pl.LightningModule):
         )
 
         # 提取 vision_model 和 mlp1
-        self.denoiser.vision_model.load_state_dict(model.vision_model.state_dict())
+        msg = self.denoiser.vision_model.load_state_dict(
+            model.vision_model.state_dict(), strict=False
+        )
+        print(f"Loaded vision_model and mlp1 from {pretrained_model_path}: {msg}")
         self.denoiser.mlp1.load_state_dict(model.mlp1.state_dict())
 
         # 如果不进行蒸馏，则冻结 vision_model 和 mlp1
