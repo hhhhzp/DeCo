@@ -20,7 +20,19 @@ export NNODES=4
 export NGPUS_PER_NODE=8
 export NODE_RANK=${NODE_RANK:-0}
 
-python main.py fit -c configs_c2i/ReCo_large.yaml \
-    --trainer.num_nodes=4 \
-    --trainer.devices=8 \
-    --trainer.strategy=ddp
+# Run experiments from coarse to fine (reversed order)
+# Phase 1: interval of 4 (22, 18, 14, 10, 6)
+# Phase 2: remaining layers (24, 20, 16, 12, 8)
+echo "=== Starting experiments from layer 24 to layer 6 ==="
+for layer in 24 20 16 8 22 18 14 10 6 12; do
+    echo "Running experiment for layer ${layer}..."
+    python main.py fit -c configs_flow/internvit_2b_layer${layer}.yaml \
+        --trainer.num_nodes=4 \
+        --trainer.devices=8 \
+        --trainer.strategy=ddp
+    echo "Completed layer ${layer}"
+    echo "---"
+    sleep 30
+done
+
+echo "=== All experiments completed! ==="
