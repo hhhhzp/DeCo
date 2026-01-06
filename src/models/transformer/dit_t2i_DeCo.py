@@ -102,9 +102,9 @@ class FlattenDiTBlock(nn.Module):
             nn.Linear(hidden_size, 6 * hidden_size, bias=True)
         )
 
-    def forward(self, x, y, c, pos):
+    def forward(self, x, y, pos):
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
-            self.adaLN_modulation(c).chunk(6, dim=-1)
+            self.adaLN_modulation(x).chunk(6, dim=-1)
         )
         x = x + gate_msa * self.attn(
             modulate(self.norm1(x), shift_msa, scale_msa), y, pos
@@ -413,13 +413,10 @@ class PixelDecoder(nn.Module):
 
         y = self.learnable_tokens.expand(B, -1, -1)
 
-        cond = nn.functional.silu(self.condition_proj(latent))
-        cond = cond.expand(-1, latent.shape[1], -1)
-
         # DiT Block iteration
         s = self.s_embedder(latent)
         for block in self.blocks:
-            s = block(s, y, cond, xpos)
+            s = block(s, y, xpos)
 
         return s
 
