@@ -11,7 +11,7 @@ trainer:
   devices: auto
   num_nodes: 1
   precision: bf16-mixed
-  gradient_clip_val: 1.0  # 添加梯度裁剪
+  gradient_clip_val: 1.0
   gradient_clip_algorithm: norm
   logger:
       class_path: lightning.pytorch.loggers.WandbLogger
@@ -91,6 +91,7 @@ model:
       weight_decay: 0.0
       betas: [0.9, 0.95]
   eval_original_model: true
+  diffusion_batch_mul: 4
 data:
   train_dataset:
     class_path: src.data.dataset.imagenet.PixHFDataset
@@ -105,6 +106,6 @@ data:
       resolution: 224
       split: validation
   train_batch_size: 16
-  train_num_workers: 4
+  train_num_workers: 8
   pred_batch_size: 32
   pred_num_workers: 1
