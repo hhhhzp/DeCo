@@ -228,9 +228,13 @@ class FinalLayer(nn.Module):
             model_channels, elementwise_affine=False, eps=1e-6
         )
         self.linear = nn.Linear(model_channels, out_channels, bias=True)
+        self.adaLN_modulation = nn.Sequential(
+            nn.SiLU(), nn.Linear(model_channels, 2 * model_channels, bias=True)
+        )
 
-    def forward(self, x):
-        x = self.norm_final(x)
+    def forward(self, x, c):
+        shift, scale = self.adaLN_modulation(c).chunk(2, dim=-1)
+        x = modulate(self.norm_final(x), shift, scale)
         x = self.linear(x)
         return x
 
@@ -296,6 +300,8 @@ class SimpleMLPAdaLN(nn.Module):
             nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
 
         # Zero-out output layers
+        nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
+        nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
         nn.init.constant_(self.final_layer.linear.weight, 0)
         nn.init.constant_(self.final_layer.linear.bias, 0)
 
