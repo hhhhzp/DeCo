@@ -9,7 +9,7 @@ export NCCL_IB_GID_INDEX=3
 export NCCL_SOCKET_IFNAME=bond1
 # export NCCL_DEBUG=INFO
 export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
-
+export SETUPTOOLS_USE_DISTUTILS=stdlib
 # export WANDB_RESUME=auto
 # export WANDB_RUN_ID=uzh3m4s6
 
