@@ -487,8 +487,10 @@ class PixNerDiT(nn.Module):
         config = InternVLChatConfig.from_pretrained(config_path)
         vision_config = config.vision_config
         vision_config.drop_path_rate = 0.0
+        vision_config.num_hidden_layers = select_layer
         vit_hidden_size = config.vision_config.hidden_size
         llm_hidden_size = config.llm_config.hidden_size
+
         self.downsample_ratio = 0.5
         self.latent_channel = 32
         self.patch_size = vision_config.patch_size
@@ -562,14 +564,9 @@ class PixNerDiT(nn.Module):
         pixel_values = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(
             pixel_values * 0.5 + 0.5
         )
-        if self.select_layer == -1:
-            vit_embeds = self.vision_model(
-                pixel_values=pixel_values, output_hidden_states=False, return_dict=True
-            ).last_hidden_state
-        else:
-            vit_embeds = self.vision_model(
-                pixel_values=pixel_values, output_hidden_states=True, return_dict=True
-            ).hidden_states[self.select_layer]
+        vit_embeds = self.vision_model(
+            pixel_values=pixel_values, output_hidden_states=False, return_dict=True
+        ).last_hidden_state
         vit_embeds = vit_embeds[:, 1:, :]  # Remove CLS token
         print(f"[extract_vision_feature] Using select_layer: {self.select_layer}")
         return vit_embeds
