@@ -41,8 +41,7 @@ class Attention(nn.Module):
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
         self.scale = self.head_dim**-0.5
-        self.qkv_x = nn.Linear(dim, dim * 3, bias=qkv_bias)
-        self.kv_y = nn.Linear(dim, dim * 2, bias=qkv_bias)
+        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
 
         self.q_norm = Norm(self.head_dim)
         self.k_norm = Norm(self.head_dim)
@@ -50,27 +49,17 @@ class Attention(nn.Module):
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
-    def forward(self, x: torch.Tensor, y, pos) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, pos) -> torch.Tensor:
         B, N, C = x.shape
-        qkv_x = (
-            self.qkv_x(x)
+        qkv = (
+            self.qkv(x)
             .reshape(B, N, 3, self.num_heads, C // self.num_heads)
             .permute(2, 0, 3, 1, 4)
         )
-        q, kx, vx = qkv_x[0], qkv_x[1], qkv_x[2]
+        q, k, v = qkv[0], qkv[1], qkv[2]
         q = self.q_norm(q.contiguous())
-        kx = self.k_norm(kx.contiguous())
-        q, kx = apply_rotary_emb(q, kx, freqs_cis=pos)
-        kv_y = (
-            self.kv_y(y)
-            .reshape(B, -1, 2, self.num_heads, C // self.num_heads)
-            .permute(2, 0, 3, 1, 4)
-        )
-        ky, vy = kv_y[0], kv_y[1]
-        ky = self.k_norm(ky.contiguous())
-
-        k = torch.cat([kx, ky], dim=2)
-        v = torch.cat([vx, vy], dim=2)
+        k = self.k_norm(k.contiguous())
+        q, k = apply_rotary_emb(q, k, freqs_cis=pos)
 
         q = q.view(B, self.num_heads, -1, C // self.num_heads)  # B, H, N, Hc
         k = k.view(
@@ -102,13 +91,11 @@ class FlattenDiTBlock(nn.Module):
             nn.Linear(hidden_size, 6 * hidden_size, bias=True)
         )
 
-    def forward(self, x, y, pos):
+    def forward(self, x, pos):
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
             self.adaLN_modulation(x).chunk(6, dim=-1)
         )
-        x = x + gate_msa * self.attn(
-            modulate(self.norm1(x), shift_msa, scale_msa), y, pos
-        )
+        x = x + gate_msa * self.attn(modulate(self.norm1(x), shift_msa, scale_msa), pos)
         x = x + gate_mlp * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
         return x
 
@@ -408,12 +395,30 @@ class PixelDecoder(nn.Module):
         grid_size = int(latent.shape[1] ** 0.5)
         xpos = self.fetch_pos(grid_size, grid_size, device)
 
-        y = self.learnable_tokens.expand(B, -1, -1)
+        # Expand learnable tokens for batch
+        learnable_tokens = self.learnable_tokens.expand(B, -1, -1)
+
+        # Embed latent features
+        s = self.s_embedder(latent)
+
+        # Concatenate learnable tokens (like cls token) with spatial tokens
+        s = torch.cat([learnable_tokens, s], dim=1)
+
+        # Create position encoding: zeros for learnable tokens, rotary for spatial tokens
+        num_learnable = learnable_tokens.shape[1]
+        # xpos shape: [grid_size*grid_size, hidden_size//num_groups]
+        # We need to add dummy pos for learnable tokens
+        dummy_pos = torch.zeros(
+            num_learnable, xpos.shape[1], device=device, dtype=xpos.dtype
+        )
+        full_pos = torch.cat([dummy_pos, xpos], dim=0)
 
         # DiT Block iteration
-        s = self.s_embedder(latent)
         for block in self.blocks:
-            s = block(s, y, xpos)
+            s = block(s, full_pos)
+
+        # Remove learnable tokens and return only spatial tokens
+        s = s[:, num_learnable:, :]
 
         return s
 
