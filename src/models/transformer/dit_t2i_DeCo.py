@@ -325,7 +325,7 @@ class SimpleMLPAdaLN(nn.Module):
             for block in self.res_blocks:
                 x = block(x, y)
 
-        return self.final_layer(x)
+        return self.final_layer(x, y)
 
 
 class PixelDecoder(nn.Module):
