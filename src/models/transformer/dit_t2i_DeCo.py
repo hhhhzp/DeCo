@@ -11,18 +11,34 @@ from src.models.layers.rope import (
 from src.models.layers.time_embed import TimestepEmbedder as TimestepEmbedder
 from src.models.layers.patch_embed import Embed as Embed
 from src.models.layers.swiglu import SwiGLU as FeedForward
-from src.models.layers.rmsnorm import RMSNorm as Norm
+
+# from src.models.layers.rmsnorm import RMSNorm as Norm
 from src.models.transformer.configuration_internvl_chat import InternVLChatConfig
 from src.models.transformer.modeling_intern_vit import InternVisionModel
 from src.models.transformer.configuration_intern_vit import InternVisionConfig
 from torchvision.transforms import Normalize
 from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
-from timm.data.constants import OPENAI_CLIP_MEAN, OPENAI_CLIP_STD
-import torch.nn.functional as F
+
+# from timm.data.constants import OPENAI_CLIP_MEAN, OPENAI_CLIP_STD
+# import torch.nn.functional as F
 
 
 def modulate(x, shift, scale):
     return x * (1 + scale) + shift
+
+
+class RMSNorm(nn.Module):
+    def __init__(self, hidden_size, eps=1e-6):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(hidden_size))
+        self.variance_epsilon = eps
+
+    def forward(self, hidden_states):
+        input_dtype = hidden_states.dtype
+        hidden_states = hidden_states.to(torch.float32)
+        variance = hidden_states.pow(2).mean(-1, keepdim=True)
+        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+        return self.weight * hidden_states.to(input_dtype)
 
 
 class Attention(nn.Module):
@@ -43,8 +59,8 @@ class Attention(nn.Module):
         self.scale = self.head_dim**-0.5
         self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
 
-        self.q_norm = Norm(self.head_dim)
-        self.k_norm = Norm(self.head_dim)
+        self.q_norm = RMSNorm(self.head_dim)
+        self.k_norm = RMSNorm(self.head_dim)
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
@@ -82,9 +98,9 @@ class FlattenDiTBlock(nn.Module):
         mlp_ratio=4,
     ):
         super().__init__()
-        self.norm1 = Norm(hidden_size, eps=1e-6)
+        self.norm1 = RMSNorm(hidden_size, eps=1e-6)
         self.attn = Attention(hidden_size, num_heads=groups, qkv_bias=False)
-        self.norm2 = Norm(hidden_size, eps=1e-6)
+        self.norm2 = RMSNorm(hidden_size, eps=1e-6)
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
         self.mlp = FeedForward(hidden_size, mlp_hidden_dim)
         self.adaLN_modulation = nn.Sequential(
@@ -130,7 +146,7 @@ class NerfEmbedder(nn.Module):
 class ResidualMLPBlock(nn.Module):
     def __init__(self, hidden_size, expansion_ratio=4):
         super().__init__()
-        self.norm = Norm(hidden_size)
+        self.norm = RMSNorm(hidden_size)
         self.mlp = nn.Sequential(
             nn.Linear(hidden_size, hidden_size * expansion_ratio),
             nn.SiLU(),
@@ -333,9 +349,10 @@ class PixelDecoder(nn.Module):
         # Learnable tokens for DiT (replacing text condition)
         num_learnable_tokens = 16  # Can be adjusted
         self.learnable_tokens = nn.Parameter(
-            torch.randn(1, num_learnable_tokens, hidden_size), requires_grad=True
+            torch.zeros(1, num_learnable_tokens, hidden_size), requires_grad=True
         )
-        nn.init.xavier_uniform_(self.learnable_tokens)
+        # Use smaller initialization to prevent instability
+        nn.init.normal_(self.learnable_tokens, mean=0.0, std=0.02)
 
         # Embedders
         self.s_embedder = Embed(self.latent_channel, hidden_size, bias=True)
