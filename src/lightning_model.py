@@ -119,7 +119,8 @@ class LightningModel(pl.LightningModule):
         msg = self.denoiser.vision_model.load_state_dict(
             model.vision_model.state_dict(), strict=False
         )
-        print(f"Loaded vision_model and mlp1 from {pretrained_model_path}: {msg}")
+        if self.global_rank == 0:
+            print(f"Loaded vision_model and mlp1 from {pretrained_model_path}: {msg}")
         self.denoiser.mlp1.load_state_dict(model.mlp1.state_dict())
 
         # 如果不进行蒸馏，则冻结 vision_model 和 mlp1
