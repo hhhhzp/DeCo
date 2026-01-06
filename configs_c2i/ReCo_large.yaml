@@ -10,7 +10,7 @@ trainer:
   strategy: auto
   devices: auto
   num_nodes: 1
-  precision: bf16
+  precision: bf16-mixed
   gradient_clip_val: 1.0  # 添加梯度裁剪
   gradient_clip_algorithm: norm
   logger:
@@ -89,6 +89,7 @@ model:
     init_args:
       lr: 2e-4
       weight_decay: 0.0
+      betas: [0.9, 0.95]
   eval_original_model: true
 data:
   train_dataset:
