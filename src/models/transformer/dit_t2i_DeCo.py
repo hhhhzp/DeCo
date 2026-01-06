@@ -684,6 +684,7 @@ class PixNerDiT(nn.Module):
                 pixel_values=pixel_values, output_hidden_states=True, return_dict=True
             ).hidden_states[self.select_layer]
         vit_embeds = vit_embeds[:, 1:, :]  # Remove CLS token
+        print(self.select_layer)
         return vit_embeds
 
     def extract_feature(self, pixel_values):
