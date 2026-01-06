@@ -413,7 +413,7 @@ class PixelDecoder(nn.Module):
 
         y = self.learnable_tokens.expand(B, -1, -1)
 
-        cond = nn.functional.silu(self.condition_proj(latent.mean(dim=1, keepdim=True)))
+        cond = nn.functional.silu(self.condition_proj(latent))
         cond = cond.expand(-1, latent.shape[1], -1)
 
         # DiT Block iteration
@@ -568,7 +568,6 @@ class PixNerDiT(nn.Module):
             pixel_values=pixel_values, output_hidden_states=False, return_dict=True
         ).last_hidden_state
         vit_embeds = vit_embeds[:, 1:, :]  # Remove CLS token
-        print(f"[extract_vision_feature] Using select_layer: {self.select_layer}")
         return vit_embeds
 
     def extract_feature(self, pixel_values):
@@ -580,7 +579,6 @@ class PixNerDiT(nn.Module):
         pixel_values = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(
             pixel_values * 0.5 + 0.5
         )
-        print(f"[extract_feature] Using select_layer: {self.select_layer}")
         if self.select_layer == -1:
             vit_embeds = self.vision_model(
                 pixel_values=pixel_values, output_hidden_states=False, return_dict=True
@@ -605,7 +603,6 @@ class PixNerDiT(nn.Module):
         :param vit_embeds: pre-extracted vision features (optional)
         :return: condition features [B, N, hidden_size]
         """
-        print(f"[forward_condition] Current select_layer: {self.select_layer}")
         # Extract features and project to latent space [B, N, latent_channel]
         if vit_embeds is None:
             latent = self.latent_projector(self.extract_vision_feature(x))
