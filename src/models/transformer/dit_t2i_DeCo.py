@@ -457,7 +457,7 @@ class PixelDecoder(nn.Module):
         self.patch_size = patch_size
 
         # Learnable tokens for DiT (replacing text condition)
-        num_learnable_tokens = 64  # Can be adjusted
+        num_learnable_tokens = 16  # Can be adjusted
         self.learnable_tokens = nn.Parameter(
             torch.randn(1, num_learnable_tokens, hidden_size), requires_grad=True
         )
@@ -684,7 +684,7 @@ class PixNerDiT(nn.Module):
                 pixel_values=pixel_values, output_hidden_states=True, return_dict=True
             ).hidden_states[self.select_layer]
         vit_embeds = vit_embeds[:, 1:, :]  # Remove CLS token
-        print(self.select_layer)
+        print(f"[extract_vision_feature] Using select_layer: {self.select_layer}")
         return vit_embeds
 
     def extract_feature(self, pixel_values):
@@ -696,6 +696,7 @@ class PixNerDiT(nn.Module):
         pixel_values = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(
             pixel_values * 0.5 + 0.5
         )
+        print(f"[extract_feature] Using select_layer: {self.select_layer}")
         if self.select_layer == -1:
             vit_embeds = self.vision_model(
                 pixel_values=pixel_values, output_hidden_states=False, return_dict=True
@@ -720,6 +721,7 @@ class PixNerDiT(nn.Module):
         :param vit_embeds: pre-extracted vision features (optional)
         :return: condition features [B, N, hidden_size]
         """
+        print(f"[forward_condition] Current select_layer: {self.select_layer}")
         # Extract features and project to latent space [B, N, latent_channel]
         if vit_embeds is None:
             latent = self.latent_projector(self.extract_vision_feature(x))
