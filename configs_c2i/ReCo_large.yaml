@@ -10,7 +10,7 @@ trainer:
   strategy: auto
   devices: auto
   num_nodes: 1
-  precision: bf16-mixed
+  precision: bf16
   gradient_clip_val: 1.0  # 添加梯度裁剪
   gradient_clip_algorithm: norm
   logger:
