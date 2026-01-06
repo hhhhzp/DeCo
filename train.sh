@@ -23,5 +23,4 @@ export NODE_RANK=${NODE_RANK:-0}
 python main.py fit -c configs_c2i/ReCo_large.yaml \
     --trainer.num_nodes=4 \
     --trainer.devices=8 \
-    --trainer.strategy=ddp \
-    --ckpt_path=internvit_flow_decoder/exp_internvit_layer_24/epoch=9-step=25000.ckpt
+    --trainer.strategy=ddp
