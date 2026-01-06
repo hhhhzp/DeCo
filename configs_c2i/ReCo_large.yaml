@@ -19,7 +19,7 @@ trainer:
         save_dir: ./internvit_flow_decoder
         name: *exp
   num_sanity_val_steps: 0
-  max_steps: 200000
+  max_steps: 50100
   val_check_interval: 2500
   check_val_every_n_epoch: null
   log_every_n_steps: 10
