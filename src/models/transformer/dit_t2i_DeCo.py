@@ -349,7 +349,7 @@ class PixelDecoder(nn.Module):
         # Learnable tokens for DiT (replacing text condition)
         num_learnable_tokens = 16  # Can be adjusted
         self.learnable_tokens = nn.Parameter(
-            torch.zeros(1, num_learnable_tokens, hidden_size), requires_grad=True
+            torch.randn(1, num_learnable_tokens, hidden_size), requires_grad=True
         )
         # Use smaller initialization to prevent instability
         nn.init.normal_(self.learnable_tokens, mean=0.0, std=0.02)
@@ -400,11 +400,6 @@ class PixelDecoder(nn.Module):
         # Initialize timestep embedding MLP:
         nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
         nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
-
-        # Zero-out adaLN modulation layers in DiT blocks
-        for block in self.blocks:
-            nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
-            nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
 
     def forward_condition(self, latent, device):
         """
