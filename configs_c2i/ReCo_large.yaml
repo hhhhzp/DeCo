@@ -56,7 +56,6 @@ model:
         num_encoder_blocks: 6
         num_decoder_blocks: 3
         config_path: /apdcephfs/share_300000800/datamultimodal/models/InternVL3-2B
-        select_layer: 12
   diffusion_trainer:
     class_path: src.diffusion.flow_matching.training_repa_DeCo.REPATrainer
     init_args:
