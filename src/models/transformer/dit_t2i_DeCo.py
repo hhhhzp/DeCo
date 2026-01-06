@@ -355,9 +355,6 @@ class PixelDecoder(nn.Module):
         self.x_embedder = NerfEmbedder(in_channels, hidden_size_x, max_freqs=8)
         self.t_embedder = TimestepEmbedder(hidden_size)
 
-        # Condition projector to map latent_channel to hidden_size
-        self.condition_proj = nn.Linear(self.latent_channel, hidden_size)
-
         # DiT blocks
         self.blocks = nn.ModuleList(
             [
