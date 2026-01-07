@@ -30,7 +30,7 @@ for layer in 1 2 7 9 11; do
         --model.denoiser.init_args.select_layer=${layer} \
         --tags.exp=internvit_layer_${layer} \
         --trainer.logger.init_args.name=internvit_layer_${layer} \
-        --trainer.max_steps=5100 \
+        --trainer.max_steps=10100 \
         --trainer.num_nodes=4 \
         --trainer.devices=8 \
         --trainer.strategy=ddp
