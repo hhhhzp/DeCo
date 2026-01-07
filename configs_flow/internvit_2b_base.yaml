@@ -80,6 +80,7 @@ model:
       w_scheduler: src.diffusion.flow_matching.scheduling.LinearScheduler
       guidance_fn: src.diffusion.base.guidance.simple_guidance_fn
       step_fn: src.diffusion.flow_matching.sampling.ode_step_fn
+      num_steps: 1
   ema_tracker:
     class_path: src.callbacks.simple_ema.SimpleEMA
     init_args:
