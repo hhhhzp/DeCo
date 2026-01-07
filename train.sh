@@ -23,16 +23,6 @@ export NODE_RANK=${NODE_RANK:-0}
 echo "=== Starting experiments from layer 24 to layer 6 ==="
 for layer in 2 4; do
     echo "Running experiment for layer ${layer}..."
-    
-    # Set WANDB_RUN_ID based on layer
-    if [ ${layer} -eq 2 ]; then
-        export WANDB_RESUME=auto
-        export WANDB_RUN_ID=wk50j3id
-    elif [ ${layer} -eq 4 ]; then
-        export WANDB_RESUME=auto
-        export WANDB_RUN_ID=2a2ycd7u
-    fi
-    
     python main.py fit -c configs_flow/internvit_2b_base.yaml \
         --model.denoiser.init_args.select_layer=${layer} \
         --tags.exp=internvit_layer_${layer} \
