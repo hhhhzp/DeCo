@@ -27,8 +27,7 @@ for layer in 24; do
     echo "Running experiment for layer ${layer}..."
     python main.py fit -c configs_flow/internvit_2b_base.yaml \
         --model.denoiser.init_args.select_layer=${layer} \
-        --tags.exp=internvit_unfreeze_layer_${layer} \
-        --trainer.logger.init_args.name=internvit_d16_layer_${layer} \
+        --tags.exp=internvit_d16_layer_${layer} \
         --trainer.max_steps 5100 \
         --trainer.num_nodes=4 \
         --trainer.devices=8 \
