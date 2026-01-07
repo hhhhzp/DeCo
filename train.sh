@@ -12,6 +12,8 @@ export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
 export SETUPTOOLS_USE_DISTUTILS=stdlib
 # export WANDB_RESUME=auto
 # export WANDB_RUN_ID=uzh3m4s6
+export http_proxy="http://star-proxy.oa.com:3128"
+export https_proxy="http://star-proxy.oa.com:3128"
 
 # multi-node training in lightning style, e.g., 4 nodes
 export MASTER_ADDR=29.111.44.202
