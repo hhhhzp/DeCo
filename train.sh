@@ -36,7 +36,7 @@ for layer in 3 4 5 7 8; do
         --trainer.strategy=ddp
     echo "Completed layer ${layer}"
     echo "---"
-    sleep 30
+    sleep 10
 done
 
 echo "=== All experiments completed! ==="
