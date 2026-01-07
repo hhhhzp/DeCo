@@ -24,7 +24,7 @@ export NODE_RANK=${NODE_RANK:-0}
 # Phase 1: interval of 4 (22, 18, 14, 10, 6)
 # Phase 2: remaining layers (24, 20, 16, 12, 8)
 echo "=== Starting experiments from layer 24 to layer 6 ==="
-for layer in 24 20 16 8 22 18 14 10 6 12; do
+for layer in 10 6; do
     echo "Running experiment for layer ${layer}..."
     python main.py fit -c configs_flow/internvit_2b_layer${layer}.yaml \
         --trainer.num_nodes=4 \
