@@ -21,7 +21,7 @@ export NGPUS_PER_NODE=8
 export NODE_RANK=${NODE_RANK:-0}
 
 echo "=== Starting experiments from layer 24 to layer 6 ==="
-for layer in 2 4; do
+for layer in 4 6; do
     echo "Running experiment for layer ${layer}..."
     python main.py fit -c configs_flow/internvit_2b_base.yaml \
         --model.denoiser.init_args.select_layer=${layer} \
@@ -32,5 +32,5 @@ for layer in 2 4; do
         --trainer.strategy=ddp
     echo "Completed layer ${layer}"
     echo "---"
-    sleep 10
+    sleep 30
 done
