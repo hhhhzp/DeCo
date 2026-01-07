@@ -20,32 +20,28 @@ export NNODES=4
 export NGPUS_PER_NODE=8
 export NODE_RANK=${NODE_RANK:-0}
 
-layer=0
-python main.py fit -c configs_flow/internvit_2b_base.yaml \
+echo "=== Starting experiments from layer 24 to layer 6 ==="
+for layer in 2 4; do
+    echo "Running experiment for layer ${layer}..."
+    
+    # Set WANDB_RUN_ID based on layer
+    if [ ${layer} -eq 2 ]; then
+        export WANDB_RESUME=auto
+        export WANDB_RUN_ID=wk50j3id
+    elif [ ${layer} -eq 4 ]; then
+        export WANDB_RESUME=auto
+        export WANDB_RUN_ID=2a2ycd7u
+    fi
+    
+    python main.py fit -c configs_flow/internvit_2b_base.yaml \
         --model.denoiser.init_args.select_layer=${layer} \
         --tags.exp=internvit_layer_${layer} \
         --trainer.logger.init_args.name=internvit_layer_${layer} \
-        --trainer.max_steps=10100 \
         --trainer.num_nodes=4 \
         --trainer.devices=8 \
-        --trainer.strategy=ddp
-# Run experiments from coarse to fine (reversed order)
-# Phase 1: interval of 4 (22, 18, 14, 10, 6)
-# Phase 2: remaining layers (24, 20, 16, 12, 8)
-# echo "=== Starting experiments from layer 24 to layer 6 ==="
-# for layer in 1 2 3 4 5 6 7 9 11; do
-#     echo "Running experiment for layer ${layer}..."
-#     python main.py fit -c configs_flow/internvit_2b_base.yaml \
-#         --model.denoiser.init_args.select_layer=${layer} \
-#         --tags.exp=internvit_layer_${layer} \
-#         --trainer.logger.init_args.name=internvit_layer_${layer} \
-#         --trainer.max_steps=10100 \
-#         --trainer.num_nodes=4 \
-#         --trainer.devices=8 \
-#         --trainer.strategy=ddp
-#     echo "Completed layer ${layer}"
-#     echo "---"
-#     sleep 10
-# done
-
-# echo "=== All experiments completed! ==="
+        --trainer.strategy=ddp \
+        --ckpt_path=internvit_flow_decoder/exp_internvit_layer_${layer}/last.ckpt
+    echo "Completed layer ${layer}"
+    echo "---"
+    sleep 10
+done
