@@ -29,7 +29,7 @@ for layer in 4 6; do
         --model.denoiser.init_args.select_layer=${layer} \
         --tags.exp=internvit_1024d_layer_${layer} \
         --trainer.logger.init_args.name=internvit_1024d_layer_${layer} \
-        --trainer.max_steps 
+        --trainer.max_steps 10100 \
         --trainer.num_nodes=4 \
         --trainer.devices=8 \
         --trainer.strategy=ddp
