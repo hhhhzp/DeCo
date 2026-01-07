@@ -29,8 +29,7 @@ for layer in 2 4; do
         --trainer.logger.init_args.name=internvit_layer_${layer} \
         --trainer.num_nodes=4 \
         --trainer.devices=8 \
-        --trainer.strategy=ddp \
-        --ckpt_path=internvit_flow_decoder/exp_internvit_layer_${layer}/last.ckpt
+        --trainer.strategy=ddp
     echo "Completed layer ${layer}"
     echo "---"
     sleep 10
