@@ -87,6 +87,9 @@ class LightningModel(pl.LightningModule):
         no_grad(self.vae)
         # no_grad(self.diffusion_sampler)
         no_grad(self.ema_denoiser)
+        if not self.distill:
+            no_grad(self.denoiser.vision_model)
+            no_grad(self.denoiser.mlp1)
 
         if self.distill:
             self.teacher_denoiser = torch.compile(self.teacher_denoiser)
@@ -124,9 +127,6 @@ class LightningModel(pl.LightningModule):
         self.denoiser.mlp1.load_state_dict(model.mlp1.state_dict())
 
         # 如果不进行蒸馏，则冻结 vision_model 和 mlp1
-        if not self.distill:
-            no_grad(self.denoiser.vision_model)
-            no_grad(self.denoiser.mlp1)
 
     def init_teacher_model(
         self,
