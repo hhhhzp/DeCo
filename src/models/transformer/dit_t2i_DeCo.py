@@ -542,7 +542,7 @@ class PixNerDiT(nn.Module):
         # ============================================================
         self.pixel_decoder = PixelDecoder(
             in_channels=in_channels,
-            latent_channel=vit_hidden_size,
+            latent_channel=self.latent_channel,
             hidden_size=hidden_size,
             hidden_size_x=hidden_size_x,
             num_groups=num_groups,
