@@ -533,8 +533,8 @@ class PixNerDiT(nn.Module):
         self.latent_projector = nn.Sequential(
             nn.LayerNorm(vit_hidden_size),
             nn.Linear(vit_hidden_size, vit_hidden_size),
-            nn.GELU(),
-            nn.Linear(vit_hidden_size, self.latent_channel),
+            # nn.GELU(),
+            # nn.Linear(vit_hidden_size, self.latent_channel),
         )
 
         # ============================================================
@@ -542,7 +542,7 @@ class PixNerDiT(nn.Module):
         # ============================================================
         self.pixel_decoder = PixelDecoder(
             in_channels=in_channels,
-            latent_channel=self.latent_channel,
+            latent_channel=vit_hidden_size,
             hidden_size=hidden_size,
             hidden_size_x=hidden_size_x,
             num_groups=num_groups,
