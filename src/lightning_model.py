@@ -87,6 +87,7 @@ class LightningModel(pl.LightningModule):
         no_grad(self.vae)
         # no_grad(self.diffusion_sampler)
         no_grad(self.ema_denoiser)
+        no_grad(self.denoiser.mlp1)
         # if not self.distill:
         #     no_grad(self.denoiser.vision_model)
         #     no_grad(self.denoiser.mlp1)
