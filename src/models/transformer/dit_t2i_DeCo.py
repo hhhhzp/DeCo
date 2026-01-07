@@ -103,16 +103,10 @@ class FlattenDiTBlock(nn.Module):
         self.norm2 = RMSNorm(hidden_size, eps=1e-6)
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
         self.mlp = FeedForward(hidden_size, mlp_hidden_dim)
-        self.adaLN_modulation = nn.Sequential(
-            nn.Linear(hidden_size, 6 * hidden_size, bias=True)
-        )
 
     def forward(self, x, pos):
-        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
-            self.adaLN_modulation(x).chunk(6, dim=-1)
-        )
-        x = x + gate_msa * self.attn(modulate(self.norm1(x), shift_msa, scale_msa), pos)
-        x = x + gate_mlp * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
+        x = x + self.attn(self.norm1(x), pos)
+        x = x + self.mlp(self.norm2(x))
         return x
 
 
