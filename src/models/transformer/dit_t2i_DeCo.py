@@ -525,7 +525,7 @@ class PixNerDiT(nn.Module):
 
         # Second connector: llm hidden size -> latent space
         self.latent_projector = nn.Sequential(
-            RMSNorm(vit_hidden_size),
+            # RMSNorm(vit_hidden_size),
             nn.Linear(vit_hidden_size, vit_hidden_size),
             nn.GELU(),
             nn.Linear(vit_hidden_size, self.latent_channel),
