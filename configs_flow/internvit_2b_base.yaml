@@ -51,8 +51,8 @@ model:
         num_groups: 16
         hidden_size: &hidden_dim 1024
         hidden_size_x: 32
-        num_encoder_blocks: 16
-        num_decoder_blocks: 3
+        num_encoder_blocks: 6
+        num_decoder_blocks: 12
         config_path: /apdcephfs/share_300000800/datamultimodal/models/InternVL3-2B
         select_layer: 24
   diffusion_trainer:
