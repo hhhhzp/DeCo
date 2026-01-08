@@ -41,7 +41,6 @@ trainer:
     - src.plugins.bd_env.BDEnvironment
 
 model:
-  class_path: src.lightning_uniflow_model.LightningUniFlowModel
   config_path: src/models/uniflow/config.json
   
   # EMA configuration
