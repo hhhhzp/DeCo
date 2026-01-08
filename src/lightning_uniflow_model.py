@@ -141,19 +141,15 @@ class LightningUniFlowModel(pl.LightningModule):
 
     def on_validation_start(self) -> None:
         """Prepare for validation"""
-        if self.use_ema:
-            self.ema_model.to(torch.float32)
         self._logged_images_count = 0
 
     def on_predict_start(self) -> None:
         """Prepare for prediction"""
-        if self.use_ema:
-            self.ema_model.to(torch.float32)
         self._logged_images_count = 0
 
     def on_train_start(self) -> None:
         """Setup EMA tracking before training"""
-        if self.use_ema:
+        if self.use_ema and self.ema_model is not None:
             self.ema_model.to(torch.float32)
             if self.ema_tracker is not None:
                 self.ema_tracker.setup_models(net=self.model, ema_net=self.ema_model)
