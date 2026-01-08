@@ -28,7 +28,7 @@ from transformers.utils import logging
 from .configuration_uniflow import UniFlowVisionConfig
 
 try:
-    from flash_attention import FlashAttention
+    from src.models.uniflow.flash_attention import FlashAttention
 
     has_flash_attn = True
 except Exception as e:
