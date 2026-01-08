@@ -1,0 +1,90 @@
+# lightning.pytorch==2.4.0
+seed_everything: true
+tags:
+  exp: &exp uniflow_internvit_2b_base
+torch_hub_dir: ~/.cache/torch/hub
+huggingface_cache_dir: null
+
+trainer:
+  default_root_dir: ./uniflow_internvit_2b
+  accelerator: auto
+  strategy: auto
+  devices: auto
+  num_nodes: 1
+  precision: bf16-mixed
+  gradient_clip_val: 1.0
+  gradient_clip_algorithm: norm
+  logger:
+      class_path: lightning.pytorch.loggers.WandbLogger
+      init_args:
+        save_dir: ./uniflow_internvit_2b
+        name: *exp
+  num_sanity_val_steps: 0
+  max_steps: 200100
+  val_check_interval: 2500
+  check_val_every_n_epoch: null
+  log_every_n_steps: 10
+  deterministic: null
+  inference_mode: true
+  use_distributed_sampler: false
+  callbacks:
+    - class_path: src.callbacks.model_checkpoint.CheckpointHook
+      init_args:
+        every_n_train_steps: 25000
+        save_top_k: -1
+        save_last: true
+    - class_path: src.callbacks.compute_metrics.ComputeMetricsHook
+      init_args:
+         compute_fid: true
+         fid_feature_dim: 2048
+  plugins:
+    - src.plugins.bd_env.BDEnvironment
+
+model:
+  class_path: src.lightning_uniflow_model.LightningUniFlowModel
+  init_args:
+    # Load model from config.json
+    config_path: src/models/uniflow/config.json
+    
+    # EMA tracker
+    ema_tracker:
+      class_path: src.callbacks.simple_ema.SimpleEMA
+      init_args:
+        decay: 0.9999
+    
+    # Optimizer
+    optimizer:
+      class_path: torch.optim.AdamW
+      init_args:
+        lr: 2e-4
+        weight_decay: 0.0
+        betas: [0.9, 0.95]
+    
+    # Learning rate scheduler
+    lr_scheduler:
+      class_path: transformers.get_constant_schedule_with_warmup
+      init_args:
+        num_warmup_steps: 1000
+    
+    # Training configuration
+    use_ema: true
+    eval_original_model: false
+    pretrain_model_path: null
+
+data:
+  train_dataset:
+    class_path: src.data.dataset.imagenet.PixHFDataset
+    init_args:
+      root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k
+      resolution: 448
+      split: train
+  eval_dataset:
+    class_path: src.data.dataset.imagenet.PixHFDataset
+    init_args:
+      root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k
+      resolution: 448
+      split: validation
+  train_batch_size: 16
+  train_num_workers: 8
+  pred_batch_size: 32
+  pred_num_workers: 1
