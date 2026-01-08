@@ -52,8 +52,8 @@ class ComputeMetricsHook(Callback):
                 self.fid = self.fid.to(pl_module.device)
 
             # Set dtype to float64 for all metrics
-            # self.psnr.set_dtype(torch.float64)
-            # self.ssim.set_dtype(torch.float64)
+            self.psnr.set_dtype(torch.float64)
+            self.ssim.set_dtype(torch.float64)
             if self.compute_fid:
                 self.fid.set_dtype(torch.float64)
 
