@@ -27,7 +27,7 @@ for layer in 4; do
     echo "Running experiment for layer ${layer}..."
     python main.py fit -c configs_flow/internvit_2b_base.yaml \
         --model.denoiser.init_args.select_layer=${layer} \
-        --tags.exp=internvit_unfreeze_layer_${layer} \
+        --tags.exp=internvit_448px_unfreeze_layer_${layer} \
         --trainer.max_steps -1 \
         --trainer.num_nodes=4 \
         --trainer.devices=8 \
@@ -36,10 +36,3 @@ for layer in 4; do
     echo "---"
     sleep 30
 done
-
-python main.py validate -c configs_flow/internvit_2b_base.yaml \
-        --model.denoiser.init_args.select_layer=24 \
-        --tags.exp=internvit_unfreeze_layer_24 \
-        --trainer.max_steps -1 \
-        --trainer.devices=1 \
-        --ckpt_path=internvit_flow_decoder/exp_internvit_unfreeze_layer_24/epoch=9-step=25000.ckpt
