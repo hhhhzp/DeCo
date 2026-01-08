@@ -13,12 +13,18 @@ from torch.optim import Optimizer
 from lightning.pytorch.callbacks import Callback
 from transformers import get_constant_schedule_with_warmup
 
+from src.models.autoencoder.base import fp2uint8
 from src.models.uniflow.modeling_uniflow import UniFlowVisionModel
 from src.models.uniflow.configuration_uniflow import UniFlowVisionConfig
 from src.callbacks.simple_ema import SimpleEMA
 from src.utils.no_grad import no_grad, filter_nograd_tensors
 from src.utils.copy import copy_params
 from transformers import AutoModel, AutoConfig, get_constant_schedule_with_warmup
+
+# Log to wandb
+import wandb
+import numpy as np
+
 
 OptimizerCallable = Callable[[Iterable], Optimizer]
 LRSchedulerCallable = Callable[[Optimizer], LRScheduler]
@@ -198,37 +204,24 @@ class LightningUniFlowModel(pl.LightningModule):
 
         with torch.no_grad():
             # Forward pass to reconstruct images
-            reconstructed_img = model(img)
+            samples = model(img)
 
             # Log first 6 images comparison (original vs reconstructed)
             if self._logged_images_count < 6:
                 num_to_log = min(6 - self._logged_images_count, img.shape[0])
-
-                # Convert images from [-1, 1] to [0, 1] for visualization
-                original_imgs = (img[:num_to_log] + 1.0) / 2.0
-                reconstructed_imgs = (reconstructed_img[:num_to_log] + 1.0) / 2.0
-
-                # Clamp to valid range
-                original_imgs = torch.clamp(original_imgs, 0, 1)
-                reconstructed_imgs = torch.clamp(reconstructed_imgs, 0, 1)
-
-                # Log to wandb
-                import wandb
-                import numpy as np
+                # Convert images from [-1, 1] to [0, 255] uint8
+                original_imgs = fp2uint8(img[:num_to_log])
+                reconstructed_imgs = fp2uint8(samples[:num_to_log])
 
                 for i in range(num_to_log):
                     # Convert to numpy format [H, W, C]
-                    orig_np = (
-                        original_imgs[i].cpu().permute(1, 2, 0).numpy() * 255
-                    ).astype(np.uint8)
-                    recon_np = (
-                        reconstructed_imgs[i].cpu().permute(1, 2, 0).numpy() * 255
-                    ).astype(np.uint8)
+                    orig_np = original_imgs[i].cpu().permute(1, 2, 0).numpy()
+                    recon_np = reconstructed_imgs[i].cpu().permute(1, 2, 0).numpy()
 
                     # Concatenate horizontally (left: original, right: reconstructed)
                     combined_np = np.concatenate([orig_np, recon_np], axis=1)
 
-                    # Log to wandb
+                    # Log to wandb with unique key
                     self.logger.experiment.log(
                         {
                             f"reconstruction/sample_{self._logged_images_count + i}": wandb.Image(
@@ -240,8 +233,7 @@ class LightningUniFlowModel(pl.LightningModule):
                     )
 
                 self._logged_images_count += num_to_log
-
-        return reconstructed_img
+        return samples
 
     def validation_step(self, batch, batch_idx):
         """Validation step - same as prediction"""
