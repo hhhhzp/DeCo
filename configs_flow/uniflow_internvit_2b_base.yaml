@@ -43,12 +43,7 @@ trainer:
 model:
   config_path: src/models/uniflow/config.json
   
-  # EMA configuration
-  ema_tracker:
-    class_path: src.callbacks.simple_ema.SimpleEMA
-    init_args:
-      decay: 0.9999
-  use_ema: true
+  use_ema: false
   eval_original_model: true
   
   optimizer:
