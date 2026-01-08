@@ -31,7 +31,8 @@ try:
     from flash_attention import FlashAttention
 
     has_flash_attn = True
-except:
+except Exception as e:
+    print(e)
     print('FlashAttention is not installed.')
     has_flash_attn = False
 

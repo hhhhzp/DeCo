@@ -4,8 +4,14 @@ import torch.nn as nn
 from einops import rearrange
 from flash_attn.bert_padding import pad_input, unpad_input
 
-from flash_attn.bert_padding import pad_input, unpad_input
-from flash_attn.flash_attn_interface import flash_attn_varlen_qkvpacked_func
+try:
+    from flash_attn.bert_padding import pad_input, unpad_input
+    from flash_attn.flash_attn_interface import flash_attn_varlen_qkvpacked_func
+
+    has_flash_attn = True
+except:
+    print('FlashAttention2 is not installed.')
+    has_flash_attn = False
 
 
 class FlashAttention(nn.Module):
