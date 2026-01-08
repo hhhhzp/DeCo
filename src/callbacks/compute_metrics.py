@@ -54,8 +54,8 @@ class ComputeMetricsHook(Callback):
             # Set dtype to float64 for all metrics
             # self.psnr.set_dtype(torch.float64)
             # self.ssim.set_dtype(torch.float64)
-            if self.compute_fid:
-                self.fid.set_dtype(torch.float64)
+            # if self.compute_fid:
+            #     self.fid.set_dtype(torch.float64)
 
     def _update_metrics(self, pl_module, outputs, batch):
         # 提取数据 (假设 batch 格式为 [img, label, metadata])
