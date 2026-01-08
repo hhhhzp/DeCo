@@ -51,20 +51,12 @@ model:
   use_ema: true
   eval_original_model: false
   
-  # Optimizer
   optimizer:
     class_path: torch.optim.AdamW
     init_args:
       lr: 2e-4
       weight_decay: 0.0
       betas: [0.9, 0.95]
-  
-  # Learning rate scheduler
-  lr_scheduler:
-    class_path: transformers.get_constant_schedule_with_warmup
-    init_args:
-      num_warmup_steps: 1000
-  
   # Pretrained model path
   pretrain_model_path: null
 
