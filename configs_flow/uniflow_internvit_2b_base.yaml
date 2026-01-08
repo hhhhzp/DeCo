@@ -48,8 +48,8 @@ model:
     class_path: src.callbacks.simple_ema.SimpleEMA
     init_args:
       decay: 0.9999
-  use_ema: true
-  eval_original_model: false
+  use_ema: false
+  eval_original_model: true
   
   optimizer:
     class_path: torch.optim.AdamW
