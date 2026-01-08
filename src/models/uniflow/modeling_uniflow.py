@@ -16,9 +16,11 @@ import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 import numpy as np
 from einops import rearrange
+from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from timm.models.layers import DropPath, trunc_normal_
 from timm.models.registry import register_model
 from timm.models.vision_transformer import Block
+from torchvision.transforms import Normalize
 from transformers.activations import ACT2FN
 from transformers.modeling_outputs import BaseModelOutput, BaseModelOutputWithPooling
 from transformers.modeling_utils import PreTrainedModel
@@ -1000,18 +1002,23 @@ class UniFlowVisionModel(PreTrainedModel):
         )  # match JAX implementation of full BxB matrix
         return torch.log(torch.exp(-diff).mean())  # calculate loss
 
-    def forward_loss(self, pixel_values):
+    def forward_loss(self, target_pixel_values):
         """
         Training forward pass with flow matching loss.
         Args:
-            pixel_values: input images [B, C, H, W]
+            pixel_values: input images [B, C, H, W] in range [-1, 1] (0.5, 0.5 normalized)
         Returns:
             loss_dict: dictionary containing losses
         """
-        if len(pixel_values.shape) != 4:
-            raise ValueError(f'wrong pixel_values size: {pixel_values.shape}')
+        if len(target_pixel_values.shape) != 4:
+            raise ValueError(f'wrong pixel_values size: {target_pixel_values.shape}')
 
-        B, C_img, H, W = pixel_values.shape
+        B, C_img, H, W = target_pixel_values.shape
+
+        # Convert from [-1, 1] to ImageNet normalization for vision encoder
+        pixel_values = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(
+            target_pixel_values * 0.5 + 0.5
+        )
 
         # Encode image to get condition tokens
         hidden_states = self.embeddings(pixel_values)
@@ -1021,9 +1028,8 @@ class UniFlowVisionModel(PreTrainedModel):
             inputs_embeds=hidden_states,
             output_hidden_states=True,
         )
-        last_hidden_state = encoder_outputs.last_hidden_state[
-            :, 1:, :
-        ]  # drop cls token
+        last_hidden_state = encoder_outputs.last_hidden_state[:, 1:, :]
+        # drop cls token
 
         # Get latent tokens and condition tokens
         if self.use_chal_proj:
@@ -1045,8 +1051,10 @@ class UniFlowVisionModel(PreTrainedModel):
         # Add decoder position embedding
         decoder_pos_embed = self.decoder_pos_embed.repeat(B, 1, 1).view(B, -1, C)
         condition_tokens = condition_tokens + decoder_pos_embed[:, :N]
+
+        # Use original pixel_values ([-1, 1]) as training target
         target_tokens = p2l_transform_tensor(
-            pixel_values, patch_size=self.config.patch_size
+            target_pixel_values, patch_size=self.config.patch_size
         )
 
         # Compute flow matching loss
@@ -1054,24 +1062,23 @@ class UniFlowVisionModel(PreTrainedModel):
 
         loss_dict = {'flow_loss': flow_loss}
 
-        # Add dispersive loss if enabled
-        if self.use_disp_loss:
-            disp_loss = self.disp_loss(latent_tokens)
-            loss_dict['disp_loss'] = disp_loss
-
         return loss_dict
 
     def forward(self, pixel_values):
         """
         Inference forward pass for image reconstruction.
         Args:
-            pixel_values: input images [B, C, H, W]
+            pixel_values: input images [B, C, H, W] in range [-1, 1] (0.5, 0.5 normalized)
         Returns:
-            reconstructed_image: reconstructed images [B, C, H, W]
+            reconstructed_image: reconstructed images [B, C, H, W] in range [-1, 1]
         """
         if len(pixel_values.shape) == 4:
+            # Convert from [-1, 1] to ImageNet normalization for vision encoder
+            pixel_values_normalized = Normalize(
+                IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
+            )(pixel_values * 0.5 + 0.5)
             # [B,C,H,W] -> [B,N,C]
-            hidden_states = self.embeddings(pixel_values)
+            hidden_states = self.embeddings(pixel_values_normalized)
             B, N, C = hidden_states.shape
         else:
             raise ValueError(f'wrong pixel_values size: {pixel_values.shape}')
