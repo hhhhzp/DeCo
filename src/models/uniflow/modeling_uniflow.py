@@ -1246,7 +1246,6 @@ class UniFlowVisionModel(PreTrainedModel):
                     ]
                 )
             )
-        self.mask_token = nn.Parameter(torch.randn(1, 1, vit_hidden_size))
         # global transformer blocks
         self.global_blocks_depth = config.global_blocks_depth
         self.global_block_pos_embed = nn.Parameter(
@@ -1375,7 +1374,9 @@ class UniFlowVisionModel(PreTrainedModel):
         pos_embed = self._get_pos_embed(
             self.global_block_pos_embed, grid_size, grid_size
         )
-        mask_tokens = self.mask_token.expand(B, N_spatial, -1) + pos_embed
+        mask_tokens = (
+            latents.mean(1, keepdim=True).expand(-1, N_spatial, -1) + pos_embed
+        )
 
         # 4. 联合建模 (Latents + Mask) -> 输出
         # 拼接: [Condition Latents, Mask Tokens]
