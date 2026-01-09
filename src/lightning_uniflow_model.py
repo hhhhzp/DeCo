@@ -112,9 +112,9 @@ class LightningUniFlowModel(pl.LightningModule):
             copy_params(src_model=self.model, dst_model=self.ema_model)
 
         # Compile models for better performance
-        # self.model = torch.compile(self.model)
-        # if self.use_ema:
-        #     self.ema_model = torch.compile(self.ema_model)
+        self.model = torch.compile(self.model)
+        if self.use_ema:
+            self.ema_model = torch.compile(self.ema_model)
 
     def configure_callbacks(self) -> Union[Sequence[Callback], Callback]:
         """Configure EMA callback"""
