@@ -1164,6 +1164,7 @@ class UniFlowVisionModel(PreTrainedModel):
         llm_hidden_size = config.llm_hidden_size
         self.use_disp_loss = config.use_disp_loss
         self.image_size = config.image_size
+        self.patch_size = config.patch_size
 
         # vit encoder
         self.embeddings = UniFlowVisionEmbeddings(config)
