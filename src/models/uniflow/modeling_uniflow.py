@@ -1116,10 +1116,8 @@ class UniFlowVisionModel(PreTrainedModel):
         self.embeddings = UniFlowVisionEmbeddings(config)
         self.encoder = UniFlowVisionEncoder(config)
         self.mlp1 = nn.Sequential(
-            nn.LayerNorm(vit_hidden_size * int(1 / self.downsample_ratio) ** 2),
-            nn.Linear(
-                vit_hidden_size * int(1 / self.downsample_ratio) ** 2, llm_hidden_size
-            ),
+            nn.LayerNorm(vit_hidden_size * int(1 / 0.5) ** 2),
+            nn.Linear(vit_hidden_size * int(1 / 0.5) ** 2, llm_hidden_size),
             nn.GELU(),
             nn.Linear(llm_hidden_size, llm_hidden_size),
         )
