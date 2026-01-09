@@ -60,13 +60,13 @@ data:
     class_path: src.data.dataset.imagenet.PixHFDataset
     init_args:
       root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k
-      resolution: 448
+      resolution: 224
       split: train
   eval_dataset:
     class_path: src.data.dataset.imagenet.PixHFDataset
     init_args:
       root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k
-      resolution: 448
+      resolution: 224
       split: validation
   train_batch_size: 16
   train_num_workers: 8
