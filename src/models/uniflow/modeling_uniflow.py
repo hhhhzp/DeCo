@@ -1172,12 +1172,12 @@ class UniFlowVisionModel(PreTrainedModel):
                     ]
                 )
             )
-            self.sem_proj = nn.Sequential(
+            self.sem_unproj = nn.Sequential(
                 OrderedDict(
                     [
-                        ("c_fc", nn.Linear(vit_hidden_size, vit_hidden_size)),
+                        ("c_fc", nn.Linear(self.latent_ch, vit_hidden_size)),
                         ("gelu", nn.GELU()),
-                        ("c_proj", nn.Linear(vit_hidden_size, self.latent_ch)),
+                        ("c_proj", nn.Linear(vit_hidden_size, vit_hidden_size)),
                     ]
                 )
             )
