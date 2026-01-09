@@ -404,12 +404,17 @@ class MultiScaleCompressionModule(nn.Module):
         self.num_query_per_layer = num_query_per_layer
         self.total_queries = sum(num_query_per_layer)
 
-        # Project concatenated multi-scale features to hidden_size
+        # 1. Context Projector: Project concatenated multi-scale features to hidden_size
+        # Used as Key/Value in Cross Attention
         self.feature_proj = nn.Linear(self.hidden_size * num_layers, self.hidden_size)
-
-        # Initialize learnable query tokens
-        self.query_tokens = nn.Parameter(
-            torch.randn(1, self.total_queries, self.hidden_size)
+        self.query_adapters = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.LayerNorm(self.hidden_size),
+                    nn.Linear(self.hidden_size, self.hidden_size),
+                )
+                for _ in range(num_layers)
+            ]
         )
 
         # Compression block with causal self-attn + cross-attn
@@ -419,6 +424,36 @@ class MultiScaleCompressionModule(nn.Module):
             mlp_ratio=4.0,
         )
 
+    def _spatial_downsample(self, feature, target_num_query):
+        """
+        Spatially downsample feature to get query tokens
+        Args:
+            feature: [B, N, C] where N = H*W
+            target_num_query: int, must be a square number (e.g. 64, 49)
+        Returns:
+            query: [B, target_num_query, C]
+        """
+        B, N, C = feature.shape
+        H = W = int(math.sqrt(N))
+
+        target_h = target_w = int(math.sqrt(target_num_query))
+        assert (
+            target_h * target_w == target_num_query
+        ), "num_query must be a square number"
+
+        # [B, N, C] -> [B, C, N] -> [B, C, H, W]
+        feature_2d = feature.transpose(1, 2).reshape(B, C, H, W)
+
+        # Downsample using bilinear interpolation
+        # [B, C, th, tw]
+        feature_down = F.interpolate(
+            feature_2d, size=(target_h, target_w), mode='bilinear', align_corners=False
+        )
+
+        # [B, C, th, tw] -> [B, C, target_N] -> [B, target_N, C]
+        query = feature_down.flatten(2).transpose(1, 2)
+        return query
+
     def forward(self, multi_scale_features):
         """
         Args:
@@ -426,17 +461,29 @@ class MultiScaleCompressionModule(nn.Module):
         Returns:
             compressed_latent: [B, total_queries, C]
         """
-        B = multi_scale_features[0].shape[0]
-
+        # 1. Prepare Context (Key/Value)
         # Concatenate multi-scale features along feature dimension
         features_concat = torch.cat(multi_scale_features, dim=-1)
         # Project to hidden_size
         context = self.feature_proj(features_concat)  # [B, N, C]
 
-        # Get learnable query tokens
-        queries = self.query_tokens.expand(B, -1, -1)  # [B, total_queries, C]
+        # 2. [修改] Prepare Queries (from downsampling)
+        all_queries = []
+        for i, (feature, num_q) in enumerate(
+            zip(multi_scale_features, self.num_query_per_layer)
+        ):
+            # 下采样: [B, N, C] -> [B, num_q, C]
+            query = self._spatial_downsample(feature, num_q)
 
-        # Apply compression block: causal self-attn + cross-attn
+            # 适配/投影: 让特征转换到 Query 空间
+            query = self.query_adapters[i](query)
+
+            all_queries.append(query)
+
+        # Concatenate queries from all layers: [B, sum(num_qs), C]
+        queries = torch.cat(all_queries, dim=1)
+
+        # 3. Apply compression block: causal self-attn + cross-attn
         compressed_latent = self.compression_block(queries, context)
 
         return compressed_latent
