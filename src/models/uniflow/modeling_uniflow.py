@@ -1008,6 +1008,94 @@ class SimpleMLPAdaLN(nn.Module):
         return self.final_layer(x, y)
 
 
+class SpatialGatedFusion(nn.Module):
+    """
+    修改后的 SimpleMLPAdaLN：
+    1. 移除了 TimestepEmbedder 和 t 输入
+    2. 专门用于 Token-wise 的空间门控融合
+    """
+
+    def __init__(
+        self,
+        in_channels,  # 语义特征通道数
+        model_channels,  # 内部隐藏层维度
+        out_channels,  # 输出通道数
+        z_channels,  # 细节/条件特征通道数
+        num_res_blocks,
+        grad_checkpointing=False,
+    ):
+        super().__init__()
+
+        self.in_channels = in_channels
+        self.model_channels = model_channels
+        self.out_channels = out_channels
+        self.num_res_blocks = num_res_blocks
+        self.grad_checkpointing = grad_checkpointing
+
+        # 【改动1】移除 self.time_embed
+
+        # 映射条件 (细节特征) 到模型维度
+        self.cond_embed = nn.Linear(z_channels, model_channels)
+
+        # 映射输入 (语义特征) 到模型维度
+        self.input_proj = nn.Linear(in_channels, model_channels)
+
+        res_blocks = []
+        for i in range(num_res_blocks):
+            # 复用你原有的 ResBlock，无需改动
+            res_blocks.append(ResBlock(model_channels))
+
+        self.res_blocks = nn.ModuleList(res_blocks)
+        # 复用你原有的 FinalLayer，无需改动
+        self.final_layer = FinalLayer(model_channels, out_channels)
+
+        self.initialize_weights()
+
+    def initialize_weights(self):
+        def _basic_init(module):
+            if isinstance(module, nn.Linear):
+                torch.nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0)
+
+        self.apply(_basic_init)
+
+        # 【改动2】移除 time_embed 的初始化
+
+        # 保持 Zero-Init 逻辑不变，这对你的“语义优先”策略至关重要
+        for block in self.res_blocks:
+            nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
+            nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
+
+        nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
+        nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
+        nn.init.constant_(self.final_layer.linear.weight, 0)
+        nn.init.constant_(self.final_layer.linear.bias, 0)
+
+    def forward(self, x, c):
+        """
+        Args:
+            x: [B, N, in_channels] - 语义特征 (Main stream)
+            c: [B, N, z_channels]  - 细节特征 (Condition stream)
+        注意：这里移除了 t 参数
+        """
+        x = self.input_proj(x)  # [B, N, model_channels]
+        c = self.cond_embed(c)  # [B, N, model_channels]
+
+        # 【改动3】不再叠加时间步，直接用 c 作为 condition
+        # 因为 c 是 [B, N, C]，传入 ResBlock 后会进行 Token-wise 的自适应调节
+        y = c
+
+        if self.grad_checkpointing and not torch.jit.is_scripting():
+            for block in self.res_blocks:
+                x = torch.utils.checkpoint.checkpoint(block, x, y)
+        else:
+            for block in self.res_blocks:
+                x = block(x, y)
+
+        return self.final_layer(x, y)
+
+
 #############################################################
 #                 UniFlowVisionModel
 #############################################################
@@ -1028,6 +1116,44 @@ class UniFlowVisionModel(PreTrainedModel):
         self.embeddings = UniFlowVisionEmbeddings(config)
         self.encoder = UniFlowVisionEncoder(config)
 
+        self.fusion_layers = [4]
+        self.fusion_module = SpatialGatedFusion(
+            in_channels=vit_hidden_size,
+            model_channels=vit_hidden_size,
+            out_channels=vit_hidden_size,
+            z_channels=vit_hidden_size,
+            num_res_blocks=6,  # 轻量级融合
+        )
+
+        # 3. 【新增】Unified Blocks (融合后的深层处理)
+        # 你要求的 3 层 Block，用于充分混合语义和细节
+        self.unified_depth = 3
+        self.sem_blocks = nn.ModuleList(
+            [
+                Block(
+                    dim=vit_hidden_size,
+                    num_heads=16,
+                    mlp_ratio=4.0,
+                    qkv_bias=True,
+                    norm_layer=nn.LayerNorm,
+                    init_values=0.0,
+                )
+                for _ in range(self.unified_depth)
+            ]
+        )
+        self.gen_blocks = nn.ModuleList(
+            [
+                Block(
+                    dim=vit_hidden_size,
+                    num_heads=16,
+                    mlp_ratio=4.0,
+                    qkv_bias=True,
+                    norm_layer=nn.LayerNorm,
+                    init_values=0.0,
+                )
+                for _ in range(self.unified_depth)
+            ]
+        )
         # chal.proj, chal.unporj
         self.use_chal_proj = config.use_chal_proj
         self.latent_ch = config.latent_ch
@@ -1069,9 +1195,6 @@ class UniFlowVisionModel(PreTrainedModel):
             ]
         )
         # token-level flow head
-        # self.decoder_pos_embed = nn.Parameter(
-        #     torch.randn(1, self.embeddings.num_patches, vit_hidden_size)
-        # )
         self.flow_head = FlowDecoder(
             target_channels=3 * config.patch_size * config.patch_size,
             z_channels=config.vit_hidden_size,
@@ -1126,156 +1249,87 @@ class UniFlowVisionModel(PreTrainedModel):
             self.precompute_pos[(height, width)] = pos
             return pos
 
-    def resize_pos_embeddings(self, old_size, new_size, patch_size):
-        pos_emb = self.embeddings.position_embedding
-        _, num_positions, embed_dim = pos_emb.shape
-        cls_emb = pos_emb[:, :1, :]
-        pos_emb = (
-            pos_emb[:, 1:, :]
-            .reshape(1, old_size // patch_size, old_size // patch_size, -1)
-            .permute(0, 3, 1, 2)
-        )
-        pos_emb = F.interpolate(
-            pos_emb.float(),
-            size=new_size // patch_size,
-            mode='bicubic',
-            align_corners=False,
-        )
-        pos_emb = pos_emb.to(cls_emb.dtype).reshape(1, embed_dim, -1).permute(0, 2, 1)
-        pos_emb = torch.cat([cls_emb, pos_emb], dim=1)
-        self.embeddings.position_embedding = nn.Parameter(pos_emb)
-        self.embeddings.image_size = new_size
-        logger.info(
-            'Resized position embeddings from {} to {}'.format(old_size, new_size)
-        )
+    def forward_condition(self, x, return_distill_loss=False):
+        """
+        Encode images -> Split into Semantic & Gen branches.
+        """
+        assert x.ndim == 4, f'wrong pixel_values size: {x.shape}'
 
-    def get_input_embeddings(self):
-        return self.embeddings
+        # 1. Norm & Embed
+        x = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(x * 0.5 + 0.5)
+        x = self.embeddings(x)
 
-    def disp_loss(self, z):
-        # Dispersive Loss implementation (InfoNCE-L2 variant)
-        z = z.reshape((z.shape[0], -1))  # [B,L,C] flatten to [B,C]
-        diff = torch.nn.functional.pdist(z).pow(2) / z.shape[1]  # pairwise distance
-        diff = torch.concat(
-            (diff, diff, torch.zeros(z.shape[0]).cuda())
-        )  # match JAX implementation of full BxB matrix
-        return torch.log(torch.exp(-diff).mean())  # calculate loss
+        # 2. Extract Features
+        encoder_outputs = self.encoder(
+            inputs_embeds=x,
+            output_hidden_states=True,
+        )
+        feat_low = encoder_outputs.hidden_states[self.fusion_layers[0]][:, 1:]
+        feat_high = encoder_outputs.last_hidden_state[:, 1:]
+
+        # 3. 门控融合 -> z
+        z = self.fusion_module(x=feat_high, c=feat_low)
+
+        # 4. 【分叉】Y-Branch Processing
+
+        # --- 分支 A: 语义对齐 (Semantic Branch) ---
+        sem_feat = z
+        for block in self.sem_blocks:
+            sem_feat = block(sem_feat)  # 迭代更新 sem_feat
+
+        # --- 分支 B: 像素生成 (Generation Branch) ---
+        gen_feat = z
+        # 【修正】这里必须用 gen_blocks，不要用 sem_blocks
+        for block in self.gen_blocks:
+            gen_feat = block(gen_feat)  # 迭代更新 gen_feat
+
+        # 5. 后续处理 (仅针对生成分支 gen_feat)
+        if self.use_chal_proj:
+            gen_feat = self.chal_unproj(self.chal_proj(gen_feat))
+
+        # 6. Global Blocks (RoPE)
+        B, N, C = gen_feat.shape
+        gen_feat = gen_feat + self.global_block_pos_embed[:, :N]
+
+        grid = int(N**0.5)
+        pos = self.fetch_pos(grid, grid, gen_feat.device)
+
+        for block in self.global_blocks:
+            gen_feat = block(gen_feat, pos)
+
+        # 7. 返回逻辑
+        if return_distill_loss:
+            # 计算语义 Loss:
+            # 比较 (语义分支的输出 sem_feat) vs (原始高层语义 feat_high)
+            distill_loss = F.mse_loss(sem_feat, feat_high.detach())
+
+            # 返回: (用于生成的特征, 蒸馏Loss)
+            return gen_feat, distill_loss
+        else:
+            # 推理时只返回生成特征
+            return gen_feat
 
     def forward_loss(self, target_pixel_values):
-        """
-        Training forward pass with flow matching loss.
-        Args:
-            pixel_values: input images [B, C, H, W] in range [-1, 1] (0.5, 0.5 normalized)
-        Returns:
-            loss_dict: dictionary containing losses
-        """
-        if len(target_pixel_values.shape) != 4:
-            raise ValueError(f'wrong pixel_values size: {target_pixel_values.shape}')
-
-        B, C_img, H, W = target_pixel_values.shape
-
-        # Convert from [-1, 1] to ImageNet normalization for vision encoder
-        pixel_values = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(
-            target_pixel_values * 0.5 + 0.5
+        # 1. Get Condition & Distill Loss
+        z, distill_loss = self.forward_condition(
+            target_pixel_values, return_distill_loss=True
         )
 
-        # Encode image to get condition tokens
-        hidden_states = self.embeddings(pixel_values)
-        B, N, C = hidden_states.shape
+        # 2. Prepare Target
+        t = p2l_transform_tensor(target_pixel_values, self.config.patch_size)
 
-        encoder_outputs = self.encoder(
-            inputs_embeds=hidden_states,
-            output_hidden_states=True,
-        )
-        last_hidden_state = encoder_outputs.last_hidden_state[:, 1:, :]
-        # drop cls token
+        # 3. Compute Flow Loss
+        flow_loss = self.flow_head.forward_train(x1=t, z=z)
 
-        # Get latent tokens and condition tokens
-        if self.use_chal_proj:
-            latent_tokens = self.chal_proj(last_hidden_state)
-            condition_tokens = self.chal_unproj(latent_tokens)
-        else:
-            latent_tokens = last_hidden_state
-            condition_tokens = last_hidden_state
-
-        # Apply global blocks
-        _, N, _ = condition_tokens.shape
-        global_block_pos_embed = self.global_block_pos_embed.repeat(B, 1, 1).view(
-            B, -1, C
-        )
-        condition_tokens = condition_tokens + global_block_pos_embed[:, :N]
-
-        # Get RoPE position embeddings for FlattenDiTBlock
-        grid_size = int(N**0.5)
-        pos = self.fetch_pos(grid_size, grid_size, condition_tokens.device)
-
-        for block in self.global_blocks:
-            condition_tokens = block(condition_tokens, pos)
-
-        # Add decoder position embedding
-        # decoder_pos_embed = self.decoder_pos_embed.repeat(B, 1, 1).view(B, -1, C)
-        # condition_tokens = condition_tokens + decoder_pos_embed[:, :N]
-
-        # Use original pixel_values ([-1, 1]) as training target
-        target_tokens = p2l_transform_tensor(
-            target_pixel_values, patch_size=self.config.patch_size
-        )
-
-        # Compute flow matching loss
-        flow_loss = self.flow_head.forward_train(x1=target_tokens, z=condition_tokens)
-
-        loss_dict = {'flow_loss': flow_loss}
-
-        return loss_dict
+        # 4. Total Loss
+        # 可以添加权重系数，例如: flow_loss + 0.5 * distill_loss
+        return {
+            'loss': flow_loss + distill_loss,
+            'flow_loss': flow_loss,
+            'distill_loss': distill_loss,
+        }
 
     def forward(self, pixel_values):
-        """
-        Inference forward pass for image reconstruction.
-        Args:
-            pixel_values: input images [B, C, H, W] in range [-1, 1] (0.5, 0.5 normalized)
-        Returns:
-            reconstructed_image: reconstructed images [B, C, H, W] in range [-1, 1]
-        """
-        if len(pixel_values.shape) == 4:
-            # Convert from [-1, 1] to ImageNet normalization for vision encoder
-            pixel_values_normalized = Normalize(
-                IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
-            )(pixel_values * 0.5 + 0.5)
-            # [B,C,H,W] -> [B,N,C]
-            hidden_states = self.embeddings(pixel_values_normalized)
-            B, N, C = hidden_states.shape
-        else:
-            raise ValueError(f'wrong pixel_values size: {pixel_values.shape}')
-
-        encoder_outputs = self.encoder(
-            inputs_embeds=hidden_states,
-            output_hidden_states=True,
-        )
-        last_hidden_state = encoder_outputs.last_hidden_state[
-            :, 1:, :
-        ]  # drop cls token
-
-        if self.use_chal_proj:
-            latent_tokens = self.chal_proj(last_hidden_state)
-            condition_tokens = self.chal_unproj(latent_tokens)
-        else:
-            condition_tokens = last_hidden_state
-
-        _, N, _ = condition_tokens.shape
-        global_block_pos_embed = self.global_block_pos_embed.repeat(B, 1, 1).view(
-            B, -1, C
-        )
-        condition_tokens = condition_tokens + global_block_pos_embed[:, :N]
-
-        # Get RoPE position embeddings for FlattenDiTBlock
-        grid_size = int(N**0.5)
-        pos = self.fetch_pos(grid_size, grid_size, condition_tokens.device)
-
-        for block in self.global_blocks:
-            condition_tokens = block(condition_tokens, pos)
-
-        # decoder_pos_embed = self.decoder_pos_embed.repeat(B, 1, 1).view(B, -1, C)
-        # condition_tokens = condition_tokens + decoder_pos_embed[:, :N]
-        # [B, N, C] -> [B, C, H, W]
-        reconstructed_image = self.flow_head(z=condition_tokens)
-        return reconstructed_image
+        # Inference: return_distill_loss=False
+        z = self.forward_condition(pixel_values, return_distill_loss=False)
+        return self.flow_head(z=z)
