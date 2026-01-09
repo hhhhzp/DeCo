@@ -665,7 +665,7 @@ class FlowDecoder(nn.Module):
         sampled_image = l2p_transform_tensor(
             sampled_token.reshape(b, n, self.in_channels),
             patch_size=self.patch_size,
-            img_size=self.img_size,
+            img_size=(n**0.5) * self.patch_size,
         )
         return sampled_image
 
