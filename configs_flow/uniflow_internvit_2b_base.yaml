@@ -68,7 +68,7 @@ data:
       root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k
       resolution: 224
       split: validation
-  train_batch_size: 64
+  train_batch_size: 16
   train_num_workers: 8
   pred_batch_size: 32
   pred_num_workers: 1
