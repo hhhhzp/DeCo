@@ -213,36 +213,27 @@ class Attention(nn.Module):
 
     def forward(self, x: torch.Tensor, pos=None, N_cond=0) -> torch.Tensor:
         B, N, C = x.shape
+        # [B, N, 3*C] -> [B, N, 3, H, D] -> [3, B, H, N, D]
         qkv = (
             self.qkv(x)
             .reshape(B, N, 3, self.num_heads, C // self.num_heads)
             .permute(2, 0, 3, 1, 4)
         )
         q, k, v = qkv[0], qkv[1], qkv[2]
-
-        # Apply RoPE if enabled and pos is provided
+        q = self.q_norm(q)
+        k = self.k_norm(k)
         if self.use_rope and pos is not None:
             if N_cond > 0:
-                q_cond, q_x = q[:, :, :N_cond], q[:, :, N_cond:]
-                k_cond, k_x = k[:, :, :N_cond], k[:, :, N_cond:]
-                q_x, k_x = apply_rotary_emb(q_x, k_x, freqs_cis=pos)
-                q = torch.cat([q_cond, q_x], dim=2)
-                k = torch.cat([k_cond, k_x], dim=2)
+                q_cond, q_spatial = q[:, :, :N_cond], q[:, :, N_cond:]
+                k_cond, k_spatial = k[:, :, :N_cond], k[:, :, N_cond:]
+                q_spatial, k_spatial = apply_rotary_emb(
+                    q_spatial, k_spatial, freqs_cis=pos
+                )
+                q = torch.cat([q_cond, q_spatial], dim=2)
+                k = torch.cat([k_cond, k_spatial], dim=2)
             else:
                 q, k = apply_rotary_emb(q, k, freqs_cis=pos)
-
-        q = self.q_norm(q.contiguous())
-        k = self.k_norm(k.contiguous())
-
-        if self.use_rope and pos is not None:
-            q, k = apply_rotary_emb(q, k, freqs_cis=pos)
-
-        q = q.view(B, self.num_heads, -1, C // self.num_heads)  # B, H, N, Hc
-        k = k.view(B, self.num_heads, -1, C // self.num_heads).contiguous()
-        v = v.view(B, self.num_heads, -1, C // self.num_heads).contiguous()
-
         x = attention(q, k, v, is_causal=self.causal)
-
         x = x.transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)

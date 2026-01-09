@@ -42,7 +42,7 @@ class UniFlowVisionConfig(PretrainedConfig):
         num_sampling_steps='100',
         use_disp_loss=False,
         compression_layers=[-1, 4],
-        num_query_per_layer=[64, 192],
+        num_query_per_layer=[64, 191],
         **kwargs,
     ):
         super().__init__(**kwargs)
