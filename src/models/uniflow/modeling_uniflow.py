@@ -389,7 +389,9 @@ class CompressionBlock(nn.Module):
 
 
 class MultiScaleCompressionModule(nn.Module):
-    """Simplified multi-scale compression with causal attention and cross attention"""
+    """
+    Multi-scale compression with Sequential Interaction (Cascaded Refinement)
+    """
 
     def __init__(
         self,
@@ -404,34 +406,65 @@ class MultiScaleCompressionModule(nn.Module):
         self.num_query_per_layer = num_query_per_layer
         self.total_queries = sum(num_query_per_layer)
 
-        # 1. Context Projector: Project concatenated multi-scale features to hidden_size
-        # Used as Key/Value in Cross Attention
-        self.feature_proj = nn.Linear(self.hidden_size * num_layers, self.hidden_size)
+        # ------------------------------------------------------------------
+        # 1. Query Adapters (保持不变)
+        # ------------------------------------------------------------------
         self.query_adapters = nn.ModuleList(
             [
                 nn.Sequential(
-                    nn.LayerNorm(self.hidden_size),
                     nn.Linear(self.hidden_size, self.hidden_size),
+                    nn.LayerNorm(self.hidden_size),  # 或 UniFlowRMSNorm
                 )
                 for _ in range(num_layers)
             ]
         )
 
-        # Compression block with causal self-attn + cross-attn
-        self.compression_block = CompressionBlock(
-            hidden_size=self.hidden_size,
-            num_heads=config.compression_num_heads,
-            mlp_ratio=4.0,
+        # ------------------------------------------------------------------
+        # 2. Context Adapters & Positional Embedding (新增)
+        # ------------------------------------------------------------------
+        # 为每一层特征准备适配器，确保进入 CrossAttn 前处于正确的 Latent 空间
+        self.context_adapters = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(self.hidden_size, self.hidden_size),
+                    nn.LayerNorm(self.hidden_size),
+                )
+                for _ in range(num_layers)
+            ]
+        )
+
+        # 关键：为 Context 注入 2D 绝对位置编码
+        # 如果没有这个，逐层交互时模型会丢失 ViT 特征的空间结构
+        self.context_pos_embed = nn.Parameter(
+            torch.randn(
+                1,
+                config.image_size
+                // config.patch_size
+                * config.image_size
+                // config.patch_size,
+                self.hidden_size,
+            )
+        )
+        trunc_normal_(self.context_pos_embed, std=0.02)
+
+        # ------------------------------------------------------------------
+        # 3. Cascaded Compression Blocks (修改：单层 -> 多层)
+        # ------------------------------------------------------------------
+        # 每个 Block 负责处理一层特征的交互
+        self.compression_blocks = nn.ModuleList(
+            [
+                CompressionBlock(
+                    hidden_size=self.hidden_size,
+                    num_heads=config.compression_num_heads,
+                    mlp_ratio=4.0,
+                )
+                for _ in range(num_layers)
+            ]
         )
 
     def _spatial_downsample(self, feature, target_num_query):
         """
         Spatially downsample feature to get query tokens
-        Args:
-            feature: [B, N, C] where N = H*W
-            target_num_query: int, must be a square number (e.g. 64, 49)
-        Returns:
-            query: [B, target_num_query, C]
         """
         B, N, C = feature.shape
         H = W = int(math.sqrt(N))
@@ -441,52 +474,83 @@ class MultiScaleCompressionModule(nn.Module):
             target_h * target_w == target_num_query
         ), "num_query must be a square number"
 
-        # [B, N, C] -> [B, C, N] -> [B, C, H, W]
         feature_2d = feature.transpose(1, 2).reshape(B, C, H, W)
 
-        # Downsample using bilinear interpolation
-        # [B, C, th, tw]
         feature_down = F.interpolate(
             feature_2d, size=(target_h, target_w), mode='bilinear', align_corners=False
         )
 
-        # [B, C, th, tw] -> [B, C, target_N] -> [B, target_N, C]
         query = feature_down.flatten(2).transpose(1, 2)
         return query
+
+    def _get_interpolated_pos_embed(self, pos_embed, target_N):
+        """Helper to resize context pos embed if feature map size varies"""
+        # 假设 context_pos_embed 是针对最大分辨率的
+        # 如果你的 multi_scale_features 分辨率都一样，可以直接相加
+        # 这里写一个简单的 resize 逻辑以防万一
+        B, N_src, C = pos_embed.shape
+        if N_src == target_N:
+            return pos_embed
+
+        size_src = int(math.sqrt(N_src))
+        size_tgt = int(math.sqrt(target_N))
+
+        pos_embed = pos_embed.reshape(1, size_src, size_src, C).permute(0, 3, 1, 2)
+        pos_embed = F.interpolate(
+            pos_embed, size=(size_tgt, size_tgt), mode='bicubic', align_corners=False
+        )
+        pos_embed = pos_embed.flatten(2).transpose(1, 2)
+        return pos_embed
 
     def forward(self, multi_scale_features):
         """
         Args:
             multi_scale_features: list of [B, N, C] features from different encoder layers
-        Returns:
-            compressed_latent: [B, total_queries, C]
+            注意：请确保传入顺序符合你的期望（例如：Semantics -> Details）
         """
-        # 1. Prepare Context (Key/Value)
-        # Concatenate multi-scale features along feature dimension
-        features_concat = torch.cat(multi_scale_features, dim=-1)
-        # Project to hidden_size
-        context = self.feature_proj(features_concat)  # [B, N, C]
+        B = multi_scale_features[0].shape[0]
 
-        # 2. [修改] Prepare Queries (from downsampling)
-        all_queries = []
+        # ------------------------------------------------------------------
+        # Step 1: Initialize Queries (Multi-Scale Grid Anchors)
+        # ------------------------------------------------------------------
+        scale_queries = []
         for i, (feature, num_q) in enumerate(
             zip(multi_scale_features, self.num_query_per_layer)
         ):
-            # 下采样: [B, N, C] -> [B, num_q, C]
+            # 下采样做 Anchor
             query = self._spatial_downsample(feature, num_q)
-
-            # 适配/投影: 让特征转换到 Query 空间
+            # 投影适配
             query = self.query_adapters[i](query)
+            scale_queries.append(query)
 
-            all_queries.append(query)
+        # 拼接所有尺度的 Query 形成初始 Latent Sequence
+        # [B, total_queries, C]
+        latents = torch.cat(scale_queries, dim=1)
 
-        # Concatenate queries from all layers: [B, sum(num_qs), C]
-        queries = torch.cat(all_queries, dim=1)
+        # ------------------------------------------------------------------
+        # Step 2: Cascaded Interaction (逐层交互)
+        # ------------------------------------------------------------------
+        # Latent 序列像流水线一样，依次流经每一个 Compression Block
+        # 每一层 Block 只“看”对应层级的 Context
 
-        # 3. Apply compression block: causal self-attn + cross-attn
-        compressed_latent = self.compression_block(queries, context)
+        for i, (feature, block) in enumerate(
+            zip(multi_scale_features, self.compression_blocks)
+        ):
+            # 1. 准备 Context
+            context = self.context_adapters[i](feature)  # [B, N, C]
 
-        return compressed_latent
+            # 2. 注入位置编码 (Crucial for 2D->1D mapping)
+            pos_emb = self._get_interpolated_pos_embed(
+                self.context_pos_embed, context.shape[1]
+            )
+            context = context + pos_emb
+
+            # 3. 交互: Latent 自我整理 (Self-Attn) + 吸收当前层特征 (Cross-Attn)
+            # 注意：这里的 latents 是包含“所有尺度”Query 的全集
+            # 这意味着：Scale-1 的 Query 也可以在这一层看到 Scale-2 的 Context
+            latents = block(latents, context)
+
+        return latents
 
 
 class UniFlowVisionEmbeddings(nn.Module):
