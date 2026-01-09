@@ -1293,7 +1293,7 @@ class UniFlowVisionModel(PreTrainedModel):
         for block in self.unified_blocks:
             z = block(z)  # 迭代更新 sem_feat
         latent = self.chal_proj(z)
-        sem_feat = self.sem_proj(latent)
+        sem_feat = self.sem_unproj(latent)
         for block in self.sem_blocks:
             sem_feat = block(sem_feat)  # 迭代更新 sem_feat
 
