@@ -1254,6 +1254,26 @@ class UniFlowVisionModel(PreTrainedModel):
         # Initialize RoPE position cache for FlattenDiTBlock
         self.precompute_pos = dict()
 
+    def _get_pos_embed(self, pos_embed, H, W):
+        target_dtype = pos_embed.dtype
+        pos_embed = (
+            pos_embed.float()
+            .reshape(
+                1,
+                self.image_size // self.patch_size,
+                self.image_size // self.patch_size,
+                -1,
+            )
+            .permute(0, 3, 1, 2)
+        )
+        pos_embed = (
+            F.interpolate(pos_embed, size=(H, W), mode='bicubic', align_corners=False)
+            .reshape(1, -1, H * W)
+            .permute(0, 2, 1)
+            .to(target_dtype)
+        )
+        return pos_embed
+
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=0.02)
@@ -1279,32 +1299,6 @@ class UniFlowVisionModel(PreTrainedModel):
             pos = precompute_freqs_cis_2d(head_dim, height, width).to(device)
             self.precompute_pos[(height, width)] = pos
             return pos
-
-    def resize_pos_embeddings(self, old_size, new_size, patch_size):
-        pos_emb = self.embeddings.position_embedding
-        _, num_positions, embed_dim = pos_emb.shape
-        cls_emb = pos_emb[:, :1, :]
-        pos_emb = (
-            pos_emb[:, 1:, :]
-            .reshape(1, old_size // patch_size, old_size // patch_size, -1)
-            .permute(0, 3, 1, 2)
-        )
-        pos_emb = F.interpolate(
-            pos_emb.float(),
-            size=new_size // patch_size,
-            mode='bicubic',
-            align_corners=False,
-        )
-        pos_emb = pos_emb.to(cls_emb.dtype).reshape(1, embed_dim, -1).permute(0, 2, 1)
-        pos_emb = torch.cat([cls_emb, pos_emb], dim=1)
-        self.embeddings.position_embedding = nn.Parameter(pos_emb)
-        self.embeddings.image_size = new_size
-        logger.info(
-            'Resized position embeddings from {} to {}'.format(old_size, new_size)
-        )
-
-    def get_input_embeddings(self):
-        return self.embeddings
 
     def forward_condition(self, pixel_values):
         """
@@ -1345,11 +1339,13 @@ class UniFlowVisionModel(PreTrainedModel):
         cond_tokens = (
             self.chal_unproj(self.chal_proj(queries)) if self.use_chal_proj else queries
         )
-
+        global_block_pos_embed = self._get_pos_embed(
+            self.global_block_pos_embed, int((N - 1) ** 0.5), int((N - 1) ** 0.5)
+        )
         # Prepare and concatenate tokens
         mask_tokens = self.mask_token.expand(
             B, N - 1, -1
-        ) + self.global_block_pos_embed.repeat(B, 1, 1).view(B, -1, C)
+        ) + global_block_pos_embed.repeat(B, 1, 1).view(B, -1, C)
 
         N_cond = cond_tokens.shape[1]
         combined_tokens = torch.cat([cond_tokens, mask_tokens], dim=1)
