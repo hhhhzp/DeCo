@@ -1337,12 +1337,13 @@ class UniFlowVisionModel(PreTrainedModel):
         #     gen_feat = self.chal_unproj(self.chal_proj(gen_feat))
 
         # 6. Global Blocks (RoPE)
+        gen_feat = sem_feat.clone()
         B, N, C = gen_feat.shape
         grid = int(N**0.5)
         pos_embed_resised = self._get_pos_embed(self.global_block_pos_embed, grid, grid)
 
         # 安全相加 (Clone 建议依然保留，为了安全性)
-        gen_feat = sem_feat.clone() + pos_embed_resised
+        gen_feat = gen_feat + pos_embed_resised
 
         gen_feat = gen_feat + self.global_block_pos_embed[:, :N]
 
