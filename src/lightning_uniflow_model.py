@@ -246,7 +246,6 @@ class LightningUniFlowModel(pl.LightningModule):
         for key, value in model_state.items():
             destination[prefix + "model." + key] = value
 
-        # Save mlp1 separately
         if hasattr(self, 'mlp1'):
             mlp1_state = self.mlp1.state_dict(keep_vars=keep_vars)
             for key, value in mlp1_state.items():
