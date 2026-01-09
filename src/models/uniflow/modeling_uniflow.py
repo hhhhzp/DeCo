@@ -1111,6 +1111,8 @@ class UniFlowVisionModel(PreTrainedModel):
         vit_hidden_size = config.vit_hidden_size
         llm_hidden_size = config.llm_hidden_size
         self.use_disp_loss = config.use_disp_loss
+        self.image_size = config.image_size
+        self.patch_size = config.patch_size
 
         # vit encoder
         self.embeddings = UniFlowVisionEmbeddings(config)
@@ -1270,6 +1272,26 @@ class UniFlowVisionModel(PreTrainedModel):
         vit_embeds = self.mlp1(vit_embeds)
         return vit_embeds
 
+    def _get_pos_embed(self, pos_embed, H, W):
+        target_dtype = pos_embed.dtype
+        pos_embed = (
+            pos_embed.float()
+            .reshape(
+                1,
+                self.image_size // self.patch_size,
+                self.image_size // self.patch_size,
+                -1,
+            )
+            .permute(0, 3, 1, 2)
+        )
+        pos_embed = (
+            F.interpolate(pos_embed, size=(H, W), mode='bicubic', align_corners=False)
+            .reshape(1, -1, H * W)
+            .permute(0, 2, 1)
+            .to(target_dtype)
+        )
+        return pos_embed
+
     def forward_condition(self, x, return_distill_loss=False):
         """
         Encode images -> Split into Semantic & Gen branches.
@@ -1315,11 +1337,15 @@ class UniFlowVisionModel(PreTrainedModel):
         #     gen_feat = self.chal_unproj(self.chal_proj(gen_feat))
 
         # 6. Global Blocks (RoPE)
-        gen_feat = sem_feat
         B, N, C = gen_feat.shape
+        grid = int(N**0.5)
+        pos_embed_resised = self._get_pos_embed(self.global_block_pos_embed, grid, grid)
+
+        # 安全相加 (Clone 建议依然保留，为了安全性)
+        gen_feat = sem_feat.clone() + pos_embed_resised
+
         gen_feat = gen_feat + self.global_block_pos_embed[:, :N]
 
-        grid = int(N**0.5)
         pos = self.fetch_pos(grid, grid, gen_feat.device)
 
         for block in self.global_blocks:
