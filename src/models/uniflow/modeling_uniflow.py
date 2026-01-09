@@ -1340,12 +1340,10 @@ class UniFlowVisionModel(PreTrainedModel):
         gen_feat = sem_feat.clone()
         B, N, C = gen_feat.shape
         grid = int(N**0.5)
-        pos_embed_resised = self._get_pos_embed(self.global_block_pos_embed, grid, grid)
+        pos_embed = self._get_pos_embed(self.global_block_pos_embed, grid, grid)
 
         # 安全相加 (Clone 建议依然保留，为了安全性)
-        gen_feat = gen_feat + pos_embed_resised
-
-        gen_feat = gen_feat + self.global_block_pos_embed[:, :N]
+        gen_feat = gen_feat + pos_embed
 
         pos = self.fetch_pos(grid, grid, gen_feat.device)
 
