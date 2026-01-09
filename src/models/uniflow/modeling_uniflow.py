@@ -1133,6 +1133,19 @@ class UniFlowVisionModel(PreTrainedModel):
         # 3. 【新增】Unified Blocks (融合后的深层处理)
         # 你要求的 3 层 Block，用于充分混合语义和细节
         self.unified_depth = 3
+        self.unified_blocks = nn.ModuleList(
+            [
+                Block(
+                    dim=vit_hidden_size,
+                    num_heads=16,
+                    mlp_ratio=4.0,
+                    qkv_bias=True,
+                    norm_layer=nn.LayerNorm,
+                    init_values=0.0,
+                )
+                for _ in range(self.unified_depth)
+            ]
+        )
         self.sem_blocks = nn.ModuleList(
             [
                 Block(
@@ -1146,25 +1159,20 @@ class UniFlowVisionModel(PreTrainedModel):
                 for _ in range(self.unified_depth)
             ]
         )
-        self.gen_blocks = nn.ModuleList(
-            [
-                Block(
-                    dim=vit_hidden_size,
-                    num_heads=16,
-                    mlp_ratio=4.0,
-                    qkv_bias=True,
-                    norm_layer=nn.LayerNorm,
-                    init_values=0.0,
-                )
-                for _ in range(self.unified_depth)
-            ]
-        )
-        # chal.proj, chal.unporj
         self.use_chal_proj = config.use_chal_proj
         self.latent_ch = config.latent_ch
         if self.use_chal_proj:
             # down project to latent_size
             self.chal_proj = nn.Sequential(
+                OrderedDict(
+                    [
+                        ("c_fc", nn.Linear(vit_hidden_size, vit_hidden_size)),
+                        ("gelu", nn.GELU()),
+                        ("c_proj", nn.Linear(vit_hidden_size, self.latent_ch)),
+                    ]
+                )
+            )
+            self.sem_proj = nn.Sequential(
                 OrderedDict(
                     [
                         ("c_fc", nn.Linear(vit_hidden_size, vit_hidden_size)),
@@ -1282,23 +1290,30 @@ class UniFlowVisionModel(PreTrainedModel):
 
         # 3. 门控融合 -> z
         z = self.fusion_module(x=feat_high, c=feat_low)
-
-        # 4. 【分叉】Y-Branch Processing
-
-        # --- 分支 A: 语义对齐 (Semantic Branch) ---
-        sem_feat = z
+        for block in self.unified_blocks:
+            z = block(z)  # 迭代更新 sem_feat
+        latent = self.chal_proj(z)
+        sem_feat = self.sem_proj(latent)
         for block in self.sem_blocks:
             sem_feat = block(sem_feat)  # 迭代更新 sem_feat
 
-        # --- 分支 B: 像素生成 (Generation Branch) ---
-        gen_feat = z
-        # 【修正】这里必须用 gen_blocks，不要用 sem_blocks
-        for block in self.gen_blocks:
-            gen_feat = block(gen_feat)  # 迭代更新 gen_feat
+        gen_feat = self.chal_unproj(latent)
+        # # 4. 【分叉】Y-Branch Processing
 
-        # 5. 后续处理 (仅针对生成分支 gen_feat)
-        if self.use_chal_proj:
-            gen_feat = self.chal_unproj(self.chal_proj(gen_feat))
+        # # --- 分支 A: 语义对齐 (Semantic Branch) ---
+        # sem_feat = z
+        # for block in self.sem_blocks:
+        #     sem_feat = block(sem_feat)  # 迭代更新 sem_feat
+
+        # # --- 分支 B: 像素生成 (Generation Branch) ---
+        # gen_feat = z
+        # # 【修正】这里必须用 gen_blocks，不要用 sem_blocks
+        # for block in self.gen_blocks:
+        #     gen_feat = block(gen_feat)  # 迭代更新 gen_feat
+
+        # # 5. 后续处理 (仅针对生成分支 gen_feat)
+        # if self.use_chal_proj:
+        #     gen_feat = self.chal_unproj(self.chal_proj(gen_feat))
 
         # 6. Global Blocks (RoPE)
         B, N, C = gen_feat.shape
