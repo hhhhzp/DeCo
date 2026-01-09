@@ -1172,15 +1172,15 @@ class UniFlowVisionModel(PreTrainedModel):
                     ]
                 )
             )
-            self.sem_unproj = nn.Sequential(
-                OrderedDict(
-                    [
-                        ("c_fc", nn.Linear(self.latent_ch, vit_hidden_size)),
-                        ("gelu", nn.GELU()),
-                        ("c_proj", nn.Linear(vit_hidden_size, vit_hidden_size)),
-                    ]
-                )
-            )
+            # self.sem_unproj = nn.Sequential(
+            #     OrderedDict(
+            #         [
+            #             ("c_fc", nn.Linear(self.latent_ch, vit_hidden_size)),
+            #             ("gelu", nn.GELU()),
+            #             ("c_proj", nn.Linear(vit_hidden_size, vit_hidden_size)),
+            #         ]
+            #     )
+            # )
             # up project to hidden_size
             self.chal_unproj = nn.Sequential(
                 OrderedDict(
@@ -1292,12 +1292,11 @@ class UniFlowVisionModel(PreTrainedModel):
         z = self.fusion_module(x=feat_high, c=feat_low)
         for block in self.unified_blocks:
             z = block(z)  # 迭代更新 sem_feat
-        latent = self.chal_proj(z)
-        sem_feat = self.sem_unproj(latent)
+        latent = self.chal_unproj(self.chal_proj(z))
+
+        sem_feat = latent
         for block in self.sem_blocks:
             sem_feat = block(sem_feat)  # 迭代更新 sem_feat
-
-        gen_feat = self.chal_unproj(latent)
         # # 4. 【分叉】Y-Branch Processing
 
         # # --- 分支 A: 语义对齐 (Semantic Branch) ---
@@ -1316,6 +1315,7 @@ class UniFlowVisionModel(PreTrainedModel):
         #     gen_feat = self.chal_unproj(self.chal_proj(gen_feat))
 
         # 6. Global Blocks (RoPE)
+        gen_feat = sem_feat
         B, N, C = gen_feat.shape
         gen_feat = gen_feat + self.global_block_pos_embed[:, :N]
 
