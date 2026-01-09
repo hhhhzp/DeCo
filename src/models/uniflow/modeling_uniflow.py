@@ -182,7 +182,7 @@ NORM2FN = {
 
 
 class Attention(nn.Module):
-    """Attention module with optional causal mask and RoPE"""
+    """Attention module for FlattenDiTBlock"""
 
     def __init__(
         self,
@@ -191,8 +191,6 @@ class Attention(nn.Module):
         qkv_bias: bool = False,
         attn_drop: float = 0.0,
         proj_drop: float = 0.0,
-        causal: bool = False,
-        use_rope: bool = True,
     ) -> None:
         super().__init__()
         assert dim % num_heads == 0, 'dim should be divisible by num_heads'
@@ -202,8 +200,6 @@ class Attention(nn.Module):
         self.head_dim = dim // num_heads
         self.scale = self.head_dim**-0.5
         self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
-        self.causal = causal
-        self.use_rope = use_rope
 
         self.q_norm = UniFlowRMSNorm(self.head_dim)
         self.k_norm = UniFlowRMSNorm(self.head_dim)
@@ -211,96 +207,26 @@ class Attention(nn.Module):
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
-    def forward(self, x: torch.Tensor, pos=None, N_cond=0) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, pos) -> torch.Tensor:
         B, N, C = x.shape
-        # [B, N, 3*C] -> [B, N, 3, H, D] -> [3, B, H, N, D]
         qkv = (
             self.qkv(x)
             .reshape(B, N, 3, self.num_heads, C // self.num_heads)
             .permute(2, 0, 3, 1, 4)
         )
         q, k, v = qkv[0], qkv[1], qkv[2]
-        q = self.q_norm(q)
-        k = self.k_norm(k)
-        if self.use_rope and pos is not None:
-            if N_cond > 0:
-                q_cond, q_spatial = q[:, :, :N_cond], q[:, :, N_cond:]
-                k_cond, k_spatial = k[:, :, :N_cond], k[:, :, N_cond:]
-                q_spatial, k_spatial = apply_rotary_emb(
-                    q_spatial, k_spatial, freqs_cis=pos
-                )
-                q = torch.cat([q_cond, q_spatial], dim=2)
-                k = torch.cat([k_cond, k_spatial], dim=2)
-            else:
-                q, k = apply_rotary_emb(q, k, freqs_cis=pos)
-        x = attention(q, k, v, is_causal=self.causal)
-        x = x.transpose(1, 2).reshape(B, N, C)
-        x = self.proj(x)
-        x = self.proj_drop(x)
-        return x
-
-
-class CrossAttention(nn.Module):
-    """Cross attention module"""
-
-    def __init__(
-        self,
-        dim: int,
-        num_heads: int = 8,
-        qkv_bias: bool = False,
-        attn_drop: float = 0.0,
-        proj_drop: float = 0.0,
-    ) -> None:
-        super().__init__()
-        assert dim % num_heads == 0, 'dim should be divisible by num_heads'
-
-        self.dim = dim
-        self.num_heads = num_heads
-        self.head_dim = dim // num_heads
-        self.scale = self.head_dim**-0.5
-
-        self.q_proj = nn.Linear(dim, dim, bias=qkv_bias)
-        self.k_proj = nn.Linear(dim, dim, bias=qkv_bias)
-        self.v_proj = nn.Linear(dim, dim, bias=qkv_bias)
-
-        self.q_norm = UniFlowRMSNorm(self.head_dim)
-        self.k_norm = UniFlowRMSNorm(self.head_dim)
-        self.attn_drop = nn.Dropout(attn_drop)
-        self.proj = nn.Linear(dim, dim)
-        self.proj_drop = nn.Dropout(proj_drop)
-
-    def forward(self, x: torch.Tensor, context: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x: query tokens [B, N_q, C]
-            context: key/value tokens [B, N_kv, C]
-        """
-        B, N_q, C = x.shape
-        N_kv = context.shape[1]
-
-        # Project Q from x, K/V from context
-        q = (
-            self.q_proj(x)
-            .reshape(B, N_q, self.num_heads, self.head_dim)
-            .permute(0, 2, 1, 3)
-        )
-        k = (
-            self.k_proj(context)
-            .reshape(B, N_kv, self.num_heads, self.head_dim)
-            .permute(0, 2, 1, 3)
-        )
-        v = (
-            self.v_proj(context)
-            .reshape(B, N_kv, self.num_heads, self.head_dim)
-            .permute(0, 2, 1, 3)
-        )
-
         q = self.q_norm(q.contiguous())
         k = self.k_norm(k.contiguous())
+        q, k = apply_rotary_emb(q, k, freqs_cis=pos)
 
-        # Standard attention (no causal mask for cross attention)
+        q = q.view(B, self.num_heads, -1, C // self.num_heads)  # B, H, N, Hc
+        k = k.view(
+            B, self.num_heads, -1, C // self.num_heads
+        ).contiguous()  # B, H, N, Hc
+        v = v.view(B, self.num_heads, -1, C // self.num_heads).contiguous()
+
         x = attention(q, k, v)
-        x = x.transpose(1, 2).reshape(B, N_q, C)
+        x = x.transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
@@ -339,215 +265,10 @@ class FlattenDiTBlock(nn.Module):
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
         self.mlp = FeedForward(hidden_size, mlp_hidden_dim)
 
-    def forward(self, x, pos, N_cond=0):
-        x = x + self.attn(self.norm1(x), pos, N_cond)
+    def forward(self, x, pos):
+        x = x + self.attn(self.norm1(x), pos)
         x = x + self.mlp(self.norm2(x))
         return x
-
-
-class CompressionBlock(nn.Module):
-    """Compression block with causal self-attention and cross-attention"""
-
-    def __init__(self, hidden_size, num_heads, mlp_ratio=4.0):
-        super().__init__()
-        self.norm1 = UniFlowRMSNorm(hidden_size, eps=1e-6)
-        self.self_attn = Attention(
-            hidden_size,
-            num_heads=num_heads,
-            qkv_bias=False,
-            causal=True,
-            use_rope=False,  # No RoPE for query tokens
-        )
-
-        self.norm2 = UniFlowRMSNorm(hidden_size, eps=1e-6)
-        self.cross_attn = CrossAttention(
-            hidden_size,
-            num_heads=num_heads,
-            qkv_bias=False,
-        )
-
-        self.norm3 = UniFlowRMSNorm(hidden_size, eps=1e-6)
-        mlp_hidden_dim = int(hidden_size * mlp_ratio)
-        self.mlp = FeedForward(hidden_size, mlp_hidden_dim)
-
-    def forward(self, query, context):
-        """
-        Args:
-            query: [B, N_q, C] query tokens
-            context: [B, N_ctx, C] context tokens (multi-scale features)
-        """
-        # Causal self-attention on queries
-        query = query + self.self_attn(self.norm1(query))
-
-        # Cross-attention: query attends to context
-        query = query + self.cross_attn(self.norm2(query), context)
-
-        # FFN
-        query = query + self.mlp(self.norm3(query))
-
-        return query
-
-
-class MultiScaleCompressionModule(nn.Module):
-    """
-    Cascaded multi-scale compression with Anchor Grid Sampling.
-    """
-
-    def __init__(
-        self,
-        config: UniFlowVisionConfig,
-        num_layers,
-        num_query_per_layer,
-    ):
-        super().__init__()
-        self.config = config
-        self.hidden_size = config.vit_hidden_size
-        self.num_layers = num_layers
-        self.num_query_per_layer = num_query_per_layer
-        self.total_queries = sum(num_query_per_layer)
-
-        # 1. Query Adapters (Project sampled features to Query space)
-        self.query_adapters = nn.ModuleList(
-            [
-                nn.Sequential(
-                    nn.LayerNorm(self.hidden_size),
-                    nn.Linear(self.hidden_size, self.hidden_size),
-                )
-                for _ in range(num_layers)
-            ]
-        )
-
-        # 2. Cascaded Compression Blocks
-        self.compression_blocks = nn.ModuleList(
-            [
-                CompressionBlock(
-                    hidden_size=self.hidden_size,
-                    num_heads=config.compression_num_heads,
-                    mlp_ratio=4.0,
-                )
-                for _ in range(num_layers)
-            ]
-        )
-
-        # 3. Context Handling (Norm + Pos)
-        self.context_norms = nn.ModuleList(
-            [UniFlowRMSNorm(self.hidden_size) for _ in range(num_layers)]
-        )
-
-        num_patches = (config.image_size // config.patch_size) ** 2
-        self.context_pos_embed = nn.Parameter(
-            torch.zeros(1, num_patches, self.hidden_size)
-        )
-        trunc_normal_(self.context_pos_embed, std=0.02)
-
-    def _anchor_grid_sampling(self, feature, target_num_query):
-        """
-        Use F.grid_sample to extract features at specific anchor points.
-        Args:
-            feature: [B, N, C]
-            target_num_query: int (must be square)
-        Returns:
-            query: [B, target_num_query, C]
-        """
-        B, N, C = feature.shape
-        H = W = int(math.sqrt(N))
-        target_h = target_w = int(math.sqrt(target_num_query))
-        assert target_h * target_w == target_num_query
-
-        # 1. Reshape feature to image format [B, C, H, W]
-        feature_2d = feature.transpose(1, 2).reshape(B, C, H, W)
-
-        # 2. Generate Normalized Grid Coordinates [-1, 1]
-        # We want the center of the grid cells.
-        # Linspace for centers: -1 + 1/size ... 1 - 1/size
-        device = feature.device
-
-        # Create coordinates for H and W axes
-        # align_corners=False convention
-        step_h = 2.0 / target_h
-        step_w = 2.0 / target_w
-
-        y_coords = torch.linspace(
-            -1 + step_h / 2, 1 - step_h / 2, target_h, device=device
-        )
-        x_coords = torch.linspace(
-            -1 + step_w / 2, 1 - step_w / 2, target_w, device=device
-        )
-
-        # Create meshgrid
-        # indexing='ij' -> y_grid varies along H, x_grid varies along W
-        y_grid, x_grid = torch.meshgrid(y_coords, x_coords, indexing='ij')
-
-        # Stack to form (x, y) coordinates for grid_sample
-        # Shape: [target_h, target_w, 2]
-        grid = torch.stack([x_grid, y_grid], dim=-1)
-
-        # Expand to batch dimension: [B, target_h, target_w, 2]
-        grid = grid.unsqueeze(0).expand(B, -1, -1, -1)
-
-        # 3. Grid Sample
-        # [B, C, target_h, target_w]
-        sampled_feature = F.grid_sample(
-            feature_2d, grid, mode='bilinear', padding_mode='zeros', align_corners=False
-        )
-
-        # 4. Flatten back to tokens [B, target_N, C]
-        query = sampled_feature.flatten(2).transpose(1, 2)
-
-        return query
-
-    def forward(self, multi_scale_features):
-        """
-        Args:
-            multi_scale_features: list of [B, N, C] features from Deep to Shallow
-        """
-        # --- Phase 1: Initialize Queries via Anchor Sampling ---
-        all_queries = []
-        for i, (feature, num_q) in enumerate(
-            zip(multi_scale_features, self.num_query_per_layer)
-        ):
-            # 使用网格采样提取 Anchor Features
-            query = self._anchor_grid_sampling(feature, num_q)
-            # 适配投影
-            query = self.query_adapters[i](query)
-            all_queries.append(query)
-
-        # [B, Total_Queries, C]
-        queries = torch.cat(all_queries, dim=1)
-
-        # --- Phase 2: Cascaded Refinement ---
-        # 准备 Pos Embed
-        B, N_ctx, C = multi_scale_features[0].shape
-        pos_embed = self.context_pos_embed
-        if pos_embed.shape[1] != N_ctx:
-            pos_embed = self._resize_pos_embed(pos_embed, N_ctx)
-
-        for i, (feature, block) in enumerate(
-            zip(multi_scale_features, self.compression_blocks)
-        ):
-            # 1. 准备 Context
-            context = self.context_norms[i](feature)
-            context = context + pos_embed
-
-            # 2. 交互 (Block 内部含 Causal Self-Attn + Cross-Attn)
-            queries = block(queries, context)
-
-        return queries
-
-    def _resize_pos_embed(self, pos_embed, target_seq_len):
-        N = pos_embed.shape[1]
-        dim = pos_embed.shape[2]
-        size = int(math.sqrt(N))
-        target_size = int(math.sqrt(target_seq_len))
-        pos_embed = pos_embed.reshape(1, size, size, dim).permute(0, 3, 1, 2)
-        pos_embed = F.interpolate(
-            pos_embed,
-            size=(target_size, target_size),
-            mode='bicubic',
-            align_corners=False,
-        )
-        pos_embed = pos_embed.flatten(2).transpose(1, 2)
-        return pos_embed
 
 
 class UniFlowVisionEmbeddings(nn.Module):
@@ -621,13 +342,12 @@ class UniFlowVisionEmbeddings(nn.Module):
 class UniFlowAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
-    def __init__(self, config: UniFlowVisionConfig, causal: bool = False):
+    def __init__(self, config: UniFlowVisionConfig):
         super().__init__()
         self.config = config
         self.embed_dim = config.hidden_size
         self.num_heads = config.num_attention_heads
         self.use_flash_attn = config.use_flash_attn and has_flash_attn
-        self.causal = causal
         self.head_dim = self.embed_dim // self.num_heads
         if self.head_dim * self.num_heads != self.embed_dim:
             raise ValueError(
@@ -649,6 +369,47 @@ class UniFlowAttention(nn.Module):
         if self.use_flash_attn:
             self.inner_attn = FlashAttention(attention_dropout=config.attention_dropout)
         self.proj = nn.Linear(self.embed_dim, self.embed_dim)
+
+    def _naive_attn(
+        self,
+        x,
+        attn_mask=None,
+    ):
+        B, N, C = x.shape
+        qkv = (
+            self.qkv(x)
+            .reshape(B, N, 3, self.num_heads, C // self.num_heads)
+            .permute(2, 0, 3, 1, 4)
+        )
+        q, k, v = qkv.unbind(0)  # make torchscript happy (cannot use tensor as tuple)
+
+        if self.qk_normalization:
+            B_, H_, N_, D_ = q.shape
+            q = (
+                self.q_norm(q.transpose(1, 2).flatten(-2, -1))
+                .view(B_, N_, H_, D_)
+                .transpose(1, 2)
+            )
+            k = (
+                self.k_norm(k.transpose(1, 2).flatten(-2, -1))
+                .view(B_, N_, H_, D_)
+                .transpose(1, 2)
+            )
+
+        attn_bias = torch.zeros(N, N, dtype=q.dtype, device=q.device)
+        if attn_mask is not None:
+            assert attn_mask.dtype == torch.bool
+            attn_bias.masked_fill_(attn_mask.logical_not(), float("-inf"))
+
+        attn = (q * self.scale) @ k.transpose(-2, -1)
+        attn += attn_bias  # masking
+        attn = attn.softmax(dim=-1)
+        attn = self.attn_drop(attn)
+
+        x = (attn @ v).transpose(1, 2).reshape(B, N, C)
+        x = self.proj(x)
+        x = self.proj_drop(x)
+        return x
 
     def _flash_attn(
         self,
@@ -672,7 +433,7 @@ class UniFlowAttention(nn.Module):
             qkv,
             key_padding_mask=key_padding_mask,
             need_weights=need_weights,
-            causal=self.causal,
+            causal=False,
         )
         outs = self.proj(rearrange(context, 'b s h d -> b s (h d)'))
         outs = self.proj_drop(outs)
@@ -1262,8 +1023,6 @@ class UniFlowVisionModel(PreTrainedModel):
         vit_hidden_size = config.vit_hidden_size
         llm_hidden_size = config.llm_hidden_size
         self.use_disp_loss = config.use_disp_loss
-        self.image_size = config.image_size
-        self.patch_size = config.patch_size
 
         # vit encoder
         self.embeddings = UniFlowVisionEmbeddings(config)
@@ -1272,20 +1031,6 @@ class UniFlowVisionModel(PreTrainedModel):
         # chal.proj, chal.unporj
         self.use_chal_proj = config.use_chal_proj
         self.latent_ch = config.latent_ch
-
-        # compression module
-        self.use_compression = (
-            config.use_compression if hasattr(config, 'use_compression') else False
-        )
-        if self.use_compression:
-            self.compression_layers = config.compression_layers
-            self.num_query_per_layer = config.num_query_per_layer
-            self.compression_module = MultiScaleCompressionModule(
-                config=config,
-                num_layers=len(config.compression_layers),
-                num_query_per_layer=config.num_query_per_layer,
-            )
-
         if self.use_chal_proj:
             # down project to latent_size
             self.chal_proj = nn.Sequential(
@@ -1307,6 +1052,7 @@ class UniFlowVisionModel(PreTrainedModel):
                     ]
                 )
             )
+
         # global transformer blocks
         self.global_blocks_depth = config.global_blocks_depth
         self.global_block_pos_embed = nn.Parameter(
@@ -1354,26 +1100,6 @@ class UniFlowVisionModel(PreTrainedModel):
         # Initialize RoPE position cache for FlattenDiTBlock
         self.precompute_pos = dict()
 
-    def _get_pos_embed(self, pos_embed, H, W):
-        target_dtype = pos_embed.dtype
-        pos_embed = (
-            pos_embed.float()
-            .reshape(
-                1,
-                self.image_size // self.patch_size,
-                self.image_size // self.patch_size,
-                -1,
-            )
-            .permute(0, 3, 1, 2)
-        )
-        pos_embed = (
-            F.interpolate(pos_embed, size=(H, W), mode='bicubic', align_corners=False)
-            .reshape(1, -1, H * W)
-            .permute(0, 2, 1)
-            .to(target_dtype)
-        )
-        return pos_embed
-
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=0.02)
@@ -1400,70 +1126,95 @@ class UniFlowVisionModel(PreTrainedModel):
             self.precompute_pos[(height, width)] = pos
             return pos
 
-    def forward_condition(self, pixel_values):
-        B, _, H, W = pixel_values.shape
-
-        # 1. 图像预处理 (Norm)
-        pixel_values = pixel_values * 0.5 + 0.5
-        pixel_values = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(
-            pixel_values
+    def resize_pos_embeddings(self, old_size, new_size, patch_size):
+        pos_emb = self.embeddings.position_embedding
+        _, num_positions, embed_dim = pos_emb.shape
+        cls_emb = pos_emb[:, :1, :]
+        pos_emb = (
+            pos_emb[:, 1:, :]
+            .reshape(1, old_size // patch_size, old_size // patch_size, -1)
+            .permute(0, 3, 1, 2)
+        )
+        pos_emb = F.interpolate(
+            pos_emb.float(),
+            size=new_size // patch_size,
+            mode='bicubic',
+            align_corners=False,
+        )
+        pos_emb = pos_emb.to(cls_emb.dtype).reshape(1, embed_dim, -1).permute(0, 2, 1)
+        pos_emb = torch.cat([cls_emb, pos_emb], dim=1)
+        self.embeddings.position_embedding = nn.Parameter(pos_emb)
+        self.embeddings.image_size = new_size
+        logger.info(
+            'Resized position embeddings from {} to {}'.format(old_size, new_size)
         )
 
-        # 2. ViT 编码与 Latent 提取
-        embeds = self.embeddings(pixel_values)
-        outputs = self.encoder(
-            inputs_embeds=embeds, output_hidden_states=self.use_compression
-        )
+    def get_input_embeddings(self):
+        return self.embeddings
 
-        # 获取 Query (压缩后的或原始的)
-        if self.use_compression:
-            feats = [outputs.hidden_states[i][:, 1:] for i in self.compression_layers]
-            latents = self.compression_module(feats)
-        else:
-            latents = outputs.last_hidden_state[:, 1:]
-
-        # 投影 bottleneck (如果需要)
-        if self.use_chal_proj:
-            latents = self.chal_unproj(self.chal_proj(latents))
-
-        # 3. 准备 Mask Tokens (Decoder Target)
-        # 计算网格大小用于位置编码
-        N_spatial = embeds.shape[1] - 1  # 去掉CLS
-        grid_size = int(N_spatial**0.5)
-
-        # 注入绝对位置编码到 Mask Token
-        pos_embed = self._get_pos_embed(
-            self.global_block_pos_embed, grid_size, grid_size
-        )
-        mask_tokens = (
-            latents.mean(1, keepdim=True).expand(-1, N_spatial, -1) + pos_embed
-        )
-
-        # 4. 联合建模 (Latents + Mask) -> 输出
-        # 拼接: [Condition Latents, Mask Tokens]
-        N_cond = latents.shape[1]
-        x = torch.cat([latents, mask_tokens], dim=1)
-
-        # 获取 RoPE (通常只作用于 spatial tokens)
-        rope_freqs = self.fetch_pos(grid_size, grid_size, x.device)
-
-        # 通过 Global Blocks
-        for block in self.global_blocks:
-            x = block(x, rope_freqs, N_cond=N_cond)
-
-        # 只返回由 Latent 驱动更新后的 Mask Tokens (即 Condition Tokens)
-        return x[:, N_cond:]
+    def disp_loss(self, z):
+        # Dispersive Loss implementation (InfoNCE-L2 variant)
+        z = z.reshape((z.shape[0], -1))  # [B,L,C] flatten to [B,C]
+        diff = torch.nn.functional.pdist(z).pow(2) / z.shape[1]  # pairwise distance
+        diff = torch.concat(
+            (diff, diff, torch.zeros(z.shape[0]).cuda())
+        )  # match JAX implementation of full BxB matrix
+        return torch.log(torch.exp(-diff).mean())  # calculate loss
 
     def forward_loss(self, target_pixel_values):
         """
         Training forward pass with flow matching loss.
         Args:
-            target_pixel_values: input images [B, C, H, W] in range [-1, 1] (0.5, 0.5 normalized)
+            pixel_values: input images [B, C, H, W] in range [-1, 1] (0.5, 0.5 normalized)
         Returns:
             loss_dict: dictionary containing losses
         """
-        # Get condition tokens from encoder
-        condition_tokens = self.forward_condition(target_pixel_values)
+        if len(target_pixel_values.shape) != 4:
+            raise ValueError(f'wrong pixel_values size: {target_pixel_values.shape}')
+
+        B, C_img, H, W = target_pixel_values.shape
+
+        # Convert from [-1, 1] to ImageNet normalization for vision encoder
+        pixel_values = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(
+            target_pixel_values * 0.5 + 0.5
+        )
+
+        # Encode image to get condition tokens
+        hidden_states = self.embeddings(pixel_values)
+        B, N, C = hidden_states.shape
+
+        encoder_outputs = self.encoder(
+            inputs_embeds=hidden_states,
+            output_hidden_states=True,
+        )
+        last_hidden_state = encoder_outputs.last_hidden_state[:, 1:, :]
+        # drop cls token
+
+        # Get latent tokens and condition tokens
+        if self.use_chal_proj:
+            latent_tokens = self.chal_proj(last_hidden_state)
+            condition_tokens = self.chal_unproj(latent_tokens)
+        else:
+            latent_tokens = last_hidden_state
+            condition_tokens = last_hidden_state
+
+        # Apply global blocks
+        _, N, _ = condition_tokens.shape
+        global_block_pos_embed = self.global_block_pos_embed.repeat(B, 1, 1).view(
+            B, -1, C
+        )
+        condition_tokens = condition_tokens + global_block_pos_embed[:, :N]
+
+        # Get RoPE position embeddings for FlattenDiTBlock
+        grid_size = int(N**0.5)
+        pos = self.fetch_pos(grid_size, grid_size, condition_tokens.device)
+
+        for block in self.global_blocks:
+            condition_tokens = block(condition_tokens, pos)
+
+        # Add decoder position embedding
+        # decoder_pos_embed = self.decoder_pos_embed.repeat(B, 1, 1).view(B, -1, C)
+        # condition_tokens = condition_tokens + decoder_pos_embed[:, :N]
 
         # Use original pixel_values ([-1, 1]) as training target
         target_tokens = p2l_transform_tensor(
@@ -1485,9 +1236,46 @@ class UniFlowVisionModel(PreTrainedModel):
         Returns:
             reconstructed_image: reconstructed images [B, C, H, W] in range [-1, 1]
         """
-        # Get condition tokens from encoder
-        condition_tokens = self.forward_condition(pixel_values)
+        if len(pixel_values.shape) == 4:
+            # Convert from [-1, 1] to ImageNet normalization for vision encoder
+            pixel_values_normalized = Normalize(
+                IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
+            )(pixel_values * 0.5 + 0.5)
+            # [B,C,H,W] -> [B,N,C]
+            hidden_states = self.embeddings(pixel_values_normalized)
+            B, N, C = hidden_states.shape
+        else:
+            raise ValueError(f'wrong pixel_values size: {pixel_values.shape}')
 
-        # Generate reconstructed image
+        encoder_outputs = self.encoder(
+            inputs_embeds=hidden_states,
+            output_hidden_states=True,
+        )
+        last_hidden_state = encoder_outputs.last_hidden_state[
+            :, 1:, :
+        ]  # drop cls token
+
+        if self.use_chal_proj:
+            latent_tokens = self.chal_proj(last_hidden_state)
+            condition_tokens = self.chal_unproj(latent_tokens)
+        else:
+            condition_tokens = last_hidden_state
+
+        _, N, _ = condition_tokens.shape
+        global_block_pos_embed = self.global_block_pos_embed.repeat(B, 1, 1).view(
+            B, -1, C
+        )
+        condition_tokens = condition_tokens + global_block_pos_embed[:, :N]
+
+        # Get RoPE position embeddings for FlattenDiTBlock
+        grid_size = int(N**0.5)
+        pos = self.fetch_pos(grid_size, grid_size, condition_tokens.device)
+
+        for block in self.global_blocks:
+            condition_tokens = block(condition_tokens, pos)
+
+        # decoder_pos_embed = self.decoder_pos_embed.repeat(B, 1, 1).view(B, -1, C)
+        # condition_tokens = condition_tokens + decoder_pos_embed[:, :N]
+        # [B, N, C] -> [B, C, H, W]
         reconstructed_image = self.flow_head(z=condition_tokens)
         return reconstructed_image
