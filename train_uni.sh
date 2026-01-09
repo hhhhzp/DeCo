@@ -24,5 +24,4 @@ export NODE_RANK=${NODE_RANK:-0}
 
 python main.py fit -c  configs_flow/uniflow_internvit_2b_base.yaml \
     --trainer.num_nodes=4 \
-    --trainer.devices=8 \
-    --trainer.strategy=ddp
+    --trainer.devices=8
