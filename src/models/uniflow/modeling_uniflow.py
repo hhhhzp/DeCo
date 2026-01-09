@@ -1302,66 +1302,56 @@ class UniFlowVisionModel(PreTrainedModel):
             return pos
 
     def forward_condition(self, pixel_values):
-        """
-        Common forward pass to generate condition tokens from input images.
-        Args:
-            pixel_values: input images [B, C, H, W] in range [-1, 1] (0.5, 0.5 normalized)
-        Returns:
-            condition_tokens: [B, N, C] condition tokens for flow decoder
-        """
-        if len(pixel_values.shape) != 4:
-            raise ValueError(f'wrong pixel_values size: {pixel_values.shape}')
+        B, _, H, W = pixel_values.shape
 
-        # Convert from [-1, 1] to ImageNet normalization for vision encoder
-        pixel_values_normalized = Normalize(
-            IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
-        )(pixel_values * 0.5 + 0.5)
-
-        # Encode image to get condition tokens
-        hidden_states = self.embeddings(pixel_values_normalized)
-        B, N, C = hidden_states.shape
-
-        # Get encoder features and compress
-        encoder_outputs = self.encoder(
-            inputs_embeds=hidden_states,
-            output_hidden_states=True,
+        # 1. 图像预处理 (Norm)
+        pixel_values = pixel_values * 0.5 + 0.5
+        pixel_values = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(
+            pixel_values
         )
 
+        # 2. ViT 编码与 Latent 提取
+        embeds = self.embeddings(pixel_values)
+        outputs = self.encoder(
+            inputs_embeds=embeds, output_hidden_states=self.use_compression
+        )
+
+        # 获取 Query (压缩后的或原始的)
         if self.use_compression:
-            multi_scale_features = [
-                encoder_outputs.hidden_states[idx][:, 1:, :]
-                for idx in self.compression_layers
-            ]
-            queries = self.compression_module(multi_scale_features)
+            feats = [outputs.hidden_states[i][:, 1:] for i in self.compression_layers]
+            latents = self.compression_module(feats)
         else:
-            queries = encoder_outputs.last_hidden_state[:, 1:, :]
+            latents = outputs.last_hidden_state[:, 1:]
 
-        # Project to condition tokens
-        cond_tokens = (
-            self.chal_unproj(self.chal_proj(queries)) if self.use_chal_proj else queries
-        )
-        global_block_pos_embed = self._get_pos_embed(
-            self.global_block_pos_embed, int((N - 1) ** 0.5), int((N - 1) ** 0.5)
-        )
-        # Prepare and concatenate tokens
-        mask_tokens = self.mask_token.expand(
-            B, N - 1, -1
-        ) + global_block_pos_embed.repeat(B, 1, 1).view(B, -1, C)
+        # 投影 bottleneck (如果需要)
+        if self.use_chal_proj:
+            latents = self.chal_unproj(self.chal_proj(latents))
 
-        N_cond = cond_tokens.shape[1]
-        combined_tokens = torch.cat([cond_tokens, mask_tokens], dim=1)
-        pos = self.fetch_pos(
-            int((N - 1) ** 0.5), int((N - 1) ** 0.5), mask_tokens.device
-        )
+        # 3. 准备 Mask Tokens (Decoder Target)
+        # 计算网格大小用于位置编码
+        N_spatial = embeds.shape[1] - 1  # 去掉CLS
+        grid_size = int(N_spatial**0.5)
 
-        # Apply global blocks
+        # 注入绝对位置编码到 Mask Token
+        pos_embed = self._get_pos_embed(
+            self.global_block_pos_embed, grid_size, grid_size
+        )
+        mask_tokens = self.mask_token.expand(B, N_spatial, -1) + pos_embed
+
+        # 4. 联合建模 (Latents + Mask) -> 输出
+        # 拼接: [Condition Latents, Mask Tokens]
+        N_cond = latents.shape[1]
+        x = torch.cat([latents, mask_tokens], dim=1)
+
+        # 获取 RoPE (通常只作用于 spatial tokens)
+        rope_freqs = self.fetch_pos(grid_size, grid_size, x.device)
+
+        # 通过 Global Blocks
         for block in self.global_blocks:
-            combined_tokens = block(combined_tokens, pos, N_cond=N_cond)
+            x = block(x, rope_freqs, N_cond=N_cond)
 
-        # Extract mask tokens as final condition tokens
-        condition_tokens = combined_tokens[:, N_cond:, :]
-
-        return condition_tokens
+        # 只返回由 Latent 驱动更新后的 Mask Tokens (即 Condition Tokens)
+        return x[:, N_cond:]
 
     def forward_loss(self, target_pixel_values):
         """
