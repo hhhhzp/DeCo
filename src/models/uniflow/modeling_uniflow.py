@@ -1115,7 +1115,14 @@ class UniFlowVisionModel(PreTrainedModel):
         # vit encoder
         self.embeddings = UniFlowVisionEmbeddings(config)
         self.encoder = UniFlowVisionEncoder(config)
-
+        self.mlp1 = nn.Sequential(
+            nn.LayerNorm(vit_hidden_size * int(1 / self.downsample_ratio) ** 2),
+            nn.Linear(
+                vit_hidden_size * int(1 / self.downsample_ratio) ** 2, llm_hidden_size
+            ),
+            nn.GELU(),
+            nn.Linear(llm_hidden_size, llm_hidden_size),
+        )
         self.fusion_layers = [4]
         self.fusion_module = SpatialGatedFusion(
             in_channels=vit_hidden_size,
@@ -1249,6 +1256,14 @@ class UniFlowVisionModel(PreTrainedModel):
             self.precompute_pos[(height, width)] = pos
             return pos
 
+    def forward_feature(self, vit_embeds):
+        h = w = int(vit_embeds.shape[1] ** 0.5)
+        vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], h, w, -1)
+        vit_embeds = pixel_shuffle(vit_embeds, scale_factor=0.5)
+        vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], -1, vit_embeds.shape[-1])
+        vit_embeds = self.mlp1(vit_embeds)
+        return vit_embeds
+
     def forward_condition(self, x, return_distill_loss=False):
         """
         Encode images -> Split into Semantic & Gen branches.
@@ -1301,8 +1316,9 @@ class UniFlowVisionModel(PreTrainedModel):
         if return_distill_loss:
             # 计算语义 Loss:
             # 比较 (语义分支的输出 sem_feat) vs (原始高层语义 feat_high)
-            distill_loss = F.mse_loss(sem_feat, feat_high.detach())
-
+            distill_loss = F.mse_loss(
+                self.forward_feature(sem_feat), self.forward_feature(feat_high.detach())
+            )
             # 返回: (用于生成的特征, 蒸馏Loss)
             return gen_feat, distill_loss
         else:
@@ -1333,3 +1349,20 @@ class UniFlowVisionModel(PreTrainedModel):
         # Inference: return_distill_loss=False
         z = self.forward_condition(pixel_values, return_distill_loss=False)
         return self.flow_head(z=z)
+
+
+def pixel_shuffle(x, scale_factor=0.5):
+    n, w, h, c = x.size()
+    # N, W, H, C --> N, W, H * scale, C // scale
+    x = x.view(n, w, int(h * scale_factor), int(c / scale_factor))
+    # N, W, H * scale, C // scale --> N, H * scale, W, C // scale
+    x = x.permute(0, 2, 1, 3).contiguous()
+    # N, H * scale, W, C // scale --> N, H * scale, W * scale, C // (scale ** 2)
+    x = x.view(
+        n,
+        int(h * scale_factor),
+        int(w * scale_factor),
+        int(c / (scale_factor * scale_factor)),
+    )
+    x = x.permute(0, 2, 1, 3).contiguous()
+    return x

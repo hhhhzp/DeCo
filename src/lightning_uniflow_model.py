@@ -93,7 +93,7 @@ class LightningUniFlowModel(pl.LightningModule):
         msg = self.model.load_state_dict(model.vision_model.state_dict(), strict=False)
         if self.global_rank == 0:
             print(f"Loaded vision_model and mlp1 from {pretrained_model_path}: {msg}")
-        self.mlp1 = copy.deepcopy(model.mlp1)
+        self.model.mlp1.load_state_dict(model.mlp1.state_dict())
 
     def configure_model(self) -> None:
         """Initialize model weights and load pretrained checkpoints"""
@@ -101,7 +101,7 @@ class LightningUniFlowModel(pl.LightningModule):
         self.init_vision_model()
         no_grad(self.model.embeddings)
         no_grad(self.model.encoder)
-        no_grad(self.mlp1)
+        no_grad(self.model.mlp1)
         # Load pretrained weights if specified
         if self.pretrain_model_path is not None:
             checkpoint = torch.load(self.pretrain_model_path, map_location='cpu')
