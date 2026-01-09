@@ -614,6 +614,33 @@ class Distill_Adapter(nn.Module):
         return x
 
 
+class NerfEmbedder(nn.Module):
+    def __init__(self, in_channels, hidden_size_input, max_freqs):
+        super().__init__()
+        self.max_freqs = max_freqs
+        self.hidden_size_input = hidden_size_input
+        self.embedder = nn.Sequential(
+            nn.Linear(in_channels + max_freqs**2, hidden_size_input, bias=True),
+        )
+
+    @lru_cache
+    def fetch_pos(self, patch_size, device, dtype):
+        pos = precompute_freqs_cis_2d(self.max_freqs**2 * 2, patch_size, patch_size)
+        pos = pos[None, :, :].to(device=device, dtype=dtype)
+        return pos
+
+    def forward(self, inputs):
+        B, P2, C = inputs.shape
+        patch_size = int(P2**0.5)
+        device = inputs.device
+        dtype = inputs.dtype
+        dct = self.fetch_pos(patch_size, device, dtype)
+        dct = dct.repeat(B, 1, 1)
+        inputs = torch.cat([inputs, dct], dim=-1)
+        inputs = self.embedder(inputs)
+        return inputs
+
+
 class FlowDecoder(nn.Module):
     """patch-wise pixel flow decoder (rectified flow)"""
 
@@ -630,6 +657,7 @@ class FlowDecoder(nn.Module):
         noise_concat=False,
         patch_size=14,
         img_size=224,
+        max_freqs=8,
     ):
         super().__init__()
         self.patch_size = patch_size
@@ -648,6 +676,14 @@ class FlowDecoder(nn.Module):
         self.in_channels = (
             target_channels + z_channels if noise_concat else target_channels
         )
+
+        # NerfEmbedder for condition tokens
+        self.nerf_embedder = NerfEmbedder(
+            in_channels=z_channels,
+            hidden_size_input=z_channels,
+            max_freqs=max_freqs,
+        )
+
         self.net = SimpleMLPAdaLN(
             in_channels=target_channels,
             model_channels=width,
@@ -670,6 +706,9 @@ class FlowDecoder(nn.Module):
         assert (
             c == self.target_channels
         ), f"Expected {self.target_channels} channels, got {c}"
+
+        # Apply NerfEmbedder to condition tokens
+        z = self.nerf_embedder(z)
 
         # Flatten batch and sequence dimensions
         x1 = x1.reshape(b * n, c)
@@ -708,6 +747,10 @@ class FlowDecoder(nn.Module):
     def forward(self, z, schedule="linear", cfg=1.0, cfg_interval=None):
 
         b, n, c_z = z.shape
+
+        # Apply NerfEmbedder to condition tokens
+        z = self.nerf_embedder(z)
+
         z = z.reshape(b * n, c_z)
         sample_steps = self.num_sampling_steps
 
@@ -1026,9 +1069,9 @@ class UniFlowVisionModel(PreTrainedModel):
             ]
         )
         # token-level flow head
-        self.decoder_pos_embed = nn.Parameter(
-            torch.randn(1, self.embeddings.num_patches, vit_hidden_size)
-        )
+        # self.decoder_pos_embed = nn.Parameter(
+        #     torch.randn(1, self.embeddings.num_patches, vit_hidden_size)
+        # )
         self.flow_head = FlowDecoder(
             target_channels=3 * config.patch_size * config.patch_size,
             z_channels=config.vit_hidden_size,
@@ -1039,15 +1082,16 @@ class UniFlowVisionModel(PreTrainedModel):
             patch_size=config.patch_size,
             img_size=config.image_size,
             use_cfg=config.use_cfg,
+            max_freqs=8,
         )
 
         # init params
         logger.info("Init pos_embed from sincos pos_embed")
         pos_embed_spatial = get_2d_sincos_pos_embed(
-            self.decoder_pos_embed.shape[-1],
+            self.global_block_pos_embed.shape[-1],
             int(self.embeddings.num_patches**0.5),  # height or weight
         )
-        self.decoder_pos_embed.data.copy_(torch.from_numpy(pos_embed_spatial).float())
+        # self.decoder_pos_embed.data.copy_(torch.from_numpy(pos_embed_spatial).float())
         self.global_block_pos_embed.data.copy_(
             torch.from_numpy(pos_embed_spatial).float()
         )
@@ -1169,8 +1213,8 @@ class UniFlowVisionModel(PreTrainedModel):
             condition_tokens = block(condition_tokens, pos)
 
         # Add decoder position embedding
-        decoder_pos_embed = self.decoder_pos_embed.repeat(B, 1, 1).view(B, -1, C)
-        condition_tokens = condition_tokens + decoder_pos_embed[:, :N]
+        # decoder_pos_embed = self.decoder_pos_embed.repeat(B, 1, 1).view(B, -1, C)
+        # condition_tokens = condition_tokens + decoder_pos_embed[:, :N]
 
         # Use original pixel_values ([-1, 1]) as training target
         target_tokens = p2l_transform_tensor(
@@ -1230,8 +1274,8 @@ class UniFlowVisionModel(PreTrainedModel):
         for block in self.global_blocks:
             condition_tokens = block(condition_tokens, pos)
 
-        decoder_pos_embed = self.decoder_pos_embed.repeat(B, 1, 1).view(B, -1, C)
-        condition_tokens = condition_tokens + decoder_pos_embed[:, :N]
+        # decoder_pos_embed = self.decoder_pos_embed.repeat(B, 1, 1).view(B, -1, C)
+        # condition_tokens = condition_tokens + decoder_pos_embed[:, :N]
         # [B, N, C] -> [B, C, H, W]
         reconstructed_image = self.flow_head(z=condition_tokens)
         return reconstructed_image
