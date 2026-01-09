@@ -81,13 +81,20 @@ def p2l_transform_tensor(x, patch_size):
     )
 
 
-def l2p_transform_tensor(x, patch_size, img_size):
+def l2p_transform_tensor(x, patch_size, img_size=None):
     """
     Transform from latent space to pixel space
     [B, H//patch_size * W//patch_size, C*tubelet_size*patch_size*patch_size] -> [B, C, H, W]
     """
     B = x.shape[0]
+    num_patches = x.shape[1]
     C = x.shape[2] // (patch_size * patch_size)
+
+    # Auto-infer img_size from num_patches (assuming square image)
+    if img_size is None:
+        grid_size = int(num_patches**0.5)
+        img_size = grid_size * patch_size
+
     return rearrange(
         x,
         "b (h1 w1) (c h2 w2) -> b c (h1 h2) (w1 w2)",
@@ -665,7 +672,6 @@ class FlowDecoder(nn.Module):
         sampled_image = l2p_transform_tensor(
             sampled_token.reshape(b, n, self.in_channels),
             patch_size=self.patch_size,
-            img_size=(n**0.5) * self.patch_size,
         )
         return sampled_image
 
