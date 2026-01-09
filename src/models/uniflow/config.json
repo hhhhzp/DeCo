@@ -20,7 +20,7 @@
   "norm_type": "layer_norm",
   "num_attention_heads": 16,
   "num_channels": 3,
-  "num_hidden_layers": 4,
+  "num_hidden_layers": 24,
   "patch_size": 14,
   "qk_normalization": false,
   "qkv_bias": true,

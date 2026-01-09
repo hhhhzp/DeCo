@@ -99,6 +99,8 @@ class LightningUniFlowModel(pl.LightningModule):
         """Initialize model weights and load pretrained checkpoints"""
         self.trainer.strategy.barrier()
         self.init_vision_model()
+        no_grad(self.model.embeddings)
+        no_grad(self.model.encoder)
         no_grad(self.mlp1)
         # Load pretrained weights if specified
         if self.pretrain_model_path is not None:
