@@ -21,6 +21,11 @@ from timm.models.layers import DropPath, trunc_normal_
 from timm.models.registry import register_model
 from timm.models.vision_transformer import Block
 from torchvision.transforms import Normalize
+from src.models.layers.attention_op import attention
+from src.models.layers.rope import (
+    apply_rotary_emb,
+    precompute_freqs_cis_ex2d as precompute_freqs_cis_2d,
+)
 from transformers.activations import ACT2FN
 from transformers.modeling_outputs import BaseModelOutput, BaseModelOutputWithPooling
 from transformers.modeling_utils import PreTrainedModel
@@ -174,6 +179,96 @@ NORM2FN = {
     'rms_norm': UniFlowRMSNorm,
     'layer_norm': nn.LayerNorm,
 }
+
+
+class Attention(nn.Module):
+    """Attention module for FlattenDiTBlock"""
+
+    def __init__(
+        self,
+        dim: int,
+        num_heads: int = 8,
+        qkv_bias: bool = False,
+        attn_drop: float = 0.0,
+        proj_drop: float = 0.0,
+    ) -> None:
+        super().__init__()
+        assert dim % num_heads == 0, 'dim should be divisible by num_heads'
+
+        self.dim = dim
+        self.num_heads = num_heads
+        self.head_dim = dim // num_heads
+        self.scale = self.head_dim**-0.5
+        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+
+        self.q_norm = UniFlowRMSNorm(self.head_dim)
+        self.k_norm = UniFlowRMSNorm(self.head_dim)
+        self.attn_drop = nn.Dropout(attn_drop)
+        self.proj = nn.Linear(dim, dim)
+        self.proj_drop = nn.Dropout(proj_drop)
+
+    def forward(self, x: torch.Tensor, pos) -> torch.Tensor:
+        B, N, C = x.shape
+        qkv = (
+            self.qkv(x)
+            .reshape(B, N, 3, self.num_heads, C // self.num_heads)
+            .permute(2, 0, 3, 1, 4)
+        )
+        q, k, v = qkv[0], qkv[1], qkv[2]
+        q = self.q_norm(q.contiguous())
+        k = self.k_norm(k.contiguous())
+        q, k = apply_rotary_emb(q, k, freqs_cis=pos)
+
+        q = q.view(B, self.num_heads, -1, C // self.num_heads)  # B, H, N, Hc
+        k = k.view(
+            B, self.num_heads, -1, C // self.num_heads
+        ).contiguous()  # B, H, N, Hc
+        v = v.view(B, self.num_heads, -1, C // self.num_heads).contiguous()
+
+        x = attention(q, k, v)
+        x = x.transpose(1, 2).reshape(B, N, C)
+        x = self.proj(x)
+        x = self.proj_drop(x)
+        return x
+
+
+class FeedForward(nn.Module):
+    """FeedForward module for FlattenDiTBlock"""
+
+    def __init__(
+        self,
+        dim: int,
+        hidden_dim: int,
+    ):
+        super().__init__()
+        self.w12 = nn.Linear(dim, hidden_dim * 2, bias=False)
+        self.w3 = nn.Linear(hidden_dim, dim, bias=False)
+
+    def forward(self, x):
+        x1, x2 = self.w12(x).chunk(2, dim=-1)
+        return self.w3(torch.nn.functional.silu(x1) * x2)
+
+
+class FlattenDiTBlock(nn.Module):
+    """FlattenDiT Block with RMSNorm, Attention and FeedForward"""
+
+    def __init__(
+        self,
+        hidden_size,
+        groups,
+        mlp_ratio=4,
+    ):
+        super().__init__()
+        self.norm1 = UniFlowRMSNorm(hidden_size, eps=1e-6)
+        self.attn = Attention(hidden_size, num_heads=groups, qkv_bias=False)
+        self.norm2 = UniFlowRMSNorm(hidden_size, eps=1e-6)
+        mlp_hidden_dim = int(hidden_size * mlp_ratio)
+        self.mlp = FeedForward(hidden_size, mlp_hidden_dim)
+
+    def forward(self, x, pos):
+        x = x + self.attn(self.norm1(x), pos)
+        x = x + self.mlp(self.norm2(x))
+        return x
 
 
 class UniFlowVisionEmbeddings(nn.Module):
@@ -922,12 +1017,10 @@ class UniFlowVisionModel(PreTrainedModel):
         )
         self.global_blocks = nn.ModuleList(
             [
-                Block(
-                    dim=vit_hidden_size,
-                    num_heads=16,
+                FlattenDiTBlock(
+                    hidden_size=vit_hidden_size,
+                    groups=16,
                     mlp_ratio=4.0,
-                    qkv_bias=True,
-                    norm_layer=nn.LayerNorm,
                 )
                 for _ in range(self.global_blocks_depth)
             ]
@@ -960,6 +1053,9 @@ class UniFlowVisionModel(PreTrainedModel):
         )
         self.apply(self._init_weights)
 
+        # Initialize RoPE position cache for FlattenDiTBlock
+        self.precompute_pos = dict()
+
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=0.02)
@@ -973,6 +1069,18 @@ class UniFlowVisionModel(PreTrainedModel):
 
     def no_weight_decay(self):
         return {}
+
+    @lru_cache
+    def fetch_pos(self, height, width, device):
+        """Fetch or compute RoPE position embeddings for given spatial dimensions"""
+        if (height, width) in self.precompute_pos:
+            return self.precompute_pos[(height, width)].to(device)
+        else:
+            # Compute position embeddings based on head_dim
+            head_dim = self.config.vit_hidden_size // 16  # num_heads=16
+            pos = precompute_freqs_cis_2d(head_dim, height, width).to(device)
+            self.precompute_pos[(height, width)] = pos
+            return pos
 
     def resize_pos_embeddings(self, old_size, new_size, patch_size):
         pos_emb = self.embeddings.position_embedding
@@ -1052,8 +1160,13 @@ class UniFlowVisionModel(PreTrainedModel):
             B, -1, C
         )
         condition_tokens = condition_tokens + global_block_pos_embed[:, :N]
+
+        # Get RoPE position embeddings for FlattenDiTBlock
+        grid_size = int(N**0.5)
+        pos = self.fetch_pos(grid_size, grid_size, condition_tokens.device)
+
         for block in self.global_blocks:
-            condition_tokens = block(condition_tokens)
+            condition_tokens = block(condition_tokens, pos)
 
         # Add decoder position embedding
         decoder_pos_embed = self.decoder_pos_embed.repeat(B, 1, 1).view(B, -1, C)
@@ -1109,8 +1222,13 @@ class UniFlowVisionModel(PreTrainedModel):
             B, -1, C
         )
         condition_tokens = condition_tokens + global_block_pos_embed[:, :N]
+
+        # Get RoPE position embeddings for FlattenDiTBlock
+        grid_size = int(N**0.5)
+        pos = self.fetch_pos(grid_size, grid_size, condition_tokens.device)
+
         for block in self.global_blocks:
-            condition_tokens = block(condition_tokens)
+            condition_tokens = block(condition_tokens, pos)
 
         decoder_pos_embed = self.decoder_pos_embed.repeat(B, 1, 1).view(B, -1, C)
         condition_tokens = condition_tokens + decoder_pos_embed[:, :N]
