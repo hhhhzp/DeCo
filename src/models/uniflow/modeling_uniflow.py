@@ -390,7 +390,7 @@ class CompressionBlock(nn.Module):
 
 class MultiScaleCompressionModule(nn.Module):
     """
-    Multi-scale compression with Sequential Interaction (Cascaded Refinement)
+    Cascaded multi-scale compression with Anchor Grid Sampling.
     """
 
     def __init__(
@@ -406,51 +406,18 @@ class MultiScaleCompressionModule(nn.Module):
         self.num_query_per_layer = num_query_per_layer
         self.total_queries = sum(num_query_per_layer)
 
-        # ------------------------------------------------------------------
-        # 1. Query Adapters (保持不变)
-        # ------------------------------------------------------------------
+        # 1. Query Adapters (Project sampled features to Query space)
         self.query_adapters = nn.ModuleList(
             [
                 nn.Sequential(
-                    nn.Linear(self.hidden_size, self.hidden_size),
-                    nn.LayerNorm(self.hidden_size),  # 或 UniFlowRMSNorm
-                )
-                for _ in range(num_layers)
-            ]
-        )
-
-        # ------------------------------------------------------------------
-        # 2. Context Adapters & Positional Embedding (新增)
-        # ------------------------------------------------------------------
-        # 为每一层特征准备适配器，确保进入 CrossAttn 前处于正确的 Latent 空间
-        self.context_adapters = nn.ModuleList(
-            [
-                nn.Sequential(
-                    nn.Linear(self.hidden_size, self.hidden_size),
                     nn.LayerNorm(self.hidden_size),
+                    nn.Linear(self.hidden_size, self.hidden_size),
                 )
                 for _ in range(num_layers)
             ]
         )
 
-        # 关键：为 Context 注入 2D 绝对位置编码
-        # 如果没有这个，逐层交互时模型会丢失 ViT 特征的空间结构
-        self.context_pos_embed = nn.Parameter(
-            torch.randn(
-                1,
-                config.image_size
-                // config.patch_size
-                * config.image_size
-                // config.patch_size,
-                self.hidden_size,
-            )
-        )
-        trunc_normal_(self.context_pos_embed, std=0.02)
-
-        # ------------------------------------------------------------------
-        # 3. Cascaded Compression Blocks (修改：单层 -> 多层)
-        # ------------------------------------------------------------------
-        # 每个 Block 负责处理一层特征的交互
+        # 2. Cascaded Compression Blocks
         self.compression_blocks = nn.ModuleList(
             [
                 CompressionBlock(
@@ -462,95 +429,125 @@ class MultiScaleCompressionModule(nn.Module):
             ]
         )
 
-    def _spatial_downsample(self, feature, target_num_query):
+        # 3. Context Handling (Norm + Pos)
+        self.context_norms = nn.ModuleList(
+            [UniFlowRMSNorm(self.hidden_size) for _ in range(num_layers)]
+        )
+
+        num_patches = (config.image_size // config.patch_size) ** 2
+        self.context_pos_embed = nn.Parameter(
+            torch.zeros(1, num_patches, self.hidden_size)
+        )
+        trunc_normal_(self.context_pos_embed, std=0.02)
+
+    def _anchor_grid_sampling(self, feature, target_num_query):
         """
-        Spatially downsample feature to get query tokens
+        Use F.grid_sample to extract features at specific anchor points.
+        Args:
+            feature: [B, N, C]
+            target_num_query: int (must be square)
+        Returns:
+            query: [B, target_num_query, C]
         """
         B, N, C = feature.shape
         H = W = int(math.sqrt(N))
-
         target_h = target_w = int(math.sqrt(target_num_query))
-        assert (
-            target_h * target_w == target_num_query
-        ), "num_query must be a square number"
+        assert target_h * target_w == target_num_query
 
+        # 1. Reshape feature to image format [B, C, H, W]
         feature_2d = feature.transpose(1, 2).reshape(B, C, H, W)
 
-        feature_down = F.interpolate(
-            feature_2d, size=(target_h, target_w), mode='bilinear', align_corners=False
+        # 2. Generate Normalized Grid Coordinates [-1, 1]
+        # We want the center of the grid cells.
+        # Linspace for centers: -1 + 1/size ... 1 - 1/size
+        device = feature.device
+
+        # Create coordinates for H and W axes
+        # align_corners=False convention
+        step_h = 2.0 / target_h
+        step_w = 2.0 / target_w
+
+        y_coords = torch.linspace(
+            -1 + step_h / 2, 1 - step_h / 2, target_h, device=device
+        )
+        x_coords = torch.linspace(
+            -1 + step_w / 2, 1 - step_w / 2, target_w, device=device
         )
 
-        query = feature_down.flatten(2).transpose(1, 2)
+        # Create meshgrid
+        # indexing='ij' -> y_grid varies along H, x_grid varies along W
+        y_grid, x_grid = torch.meshgrid(y_coords, x_coords, indexing='ij')
+
+        # Stack to form (x, y) coordinates for grid_sample
+        # Shape: [target_h, target_w, 2]
+        grid = torch.stack([x_grid, y_grid], dim=-1)
+
+        # Expand to batch dimension: [B, target_h, target_w, 2]
+        grid = grid.unsqueeze(0).expand(B, -1, -1, -1)
+
+        # 3. Grid Sample
+        # [B, C, target_h, target_w]
+        sampled_feature = F.grid_sample(
+            feature_2d, grid, mode='bilinear', padding_mode='zeros', align_corners=False
+        )
+
+        # 4. Flatten back to tokens [B, target_N, C]
+        query = sampled_feature.flatten(2).transpose(1, 2)
+
         return query
-
-    def _get_interpolated_pos_embed(self, pos_embed, target_N):
-        """Helper to resize context pos embed if feature map size varies"""
-        # 假设 context_pos_embed 是针对最大分辨率的
-        # 如果你的 multi_scale_features 分辨率都一样，可以直接相加
-        # 这里写一个简单的 resize 逻辑以防万一
-        B, N_src, C = pos_embed.shape
-        if N_src == target_N:
-            return pos_embed
-
-        size_src = int(math.sqrt(N_src))
-        size_tgt = int(math.sqrt(target_N))
-
-        pos_embed = pos_embed.reshape(1, size_src, size_src, C).permute(0, 3, 1, 2)
-        pos_embed = F.interpolate(
-            pos_embed, size=(size_tgt, size_tgt), mode='bicubic', align_corners=False
-        )
-        pos_embed = pos_embed.flatten(2).transpose(1, 2)
-        return pos_embed
 
     def forward(self, multi_scale_features):
         """
         Args:
-            multi_scale_features: list of [B, N, C] features from different encoder layers
-            注意：请确保传入顺序符合你的期望（例如：Semantics -> Details）
+            multi_scale_features: list of [B, N, C] features from Deep to Shallow
         """
-        B = multi_scale_features[0].shape[0]
-
-        # ------------------------------------------------------------------
-        # Step 1: Initialize Queries (Multi-Scale Grid Anchors)
-        # ------------------------------------------------------------------
-        scale_queries = []
+        # --- Phase 1: Initialize Queries via Anchor Sampling ---
+        all_queries = []
         for i, (feature, num_q) in enumerate(
             zip(multi_scale_features, self.num_query_per_layer)
         ):
-            # 下采样做 Anchor
-            query = self._spatial_downsample(feature, num_q)
-            # 投影适配
+            # 使用网格采样提取 Anchor Features
+            query = self._anchor_grid_sampling(feature, num_q)
+            # 适配投影
             query = self.query_adapters[i](query)
-            scale_queries.append(query)
+            all_queries.append(query)
 
-        # 拼接所有尺度的 Query 形成初始 Latent Sequence
-        # [B, total_queries, C]
-        latents = torch.cat(scale_queries, dim=1)
+        # [B, Total_Queries, C]
+        queries = torch.cat(all_queries, dim=1)
 
-        # ------------------------------------------------------------------
-        # Step 2: Cascaded Interaction (逐层交互)
-        # ------------------------------------------------------------------
-        # Latent 序列像流水线一样，依次流经每一个 Compression Block
-        # 每一层 Block 只“看”对应层级的 Context
+        # --- Phase 2: Cascaded Refinement ---
+        # 准备 Pos Embed
+        B, N_ctx, C = multi_scale_features[0].shape
+        pos_embed = self.context_pos_embed
+        if pos_embed.shape[1] != N_ctx:
+            pos_embed = self._resize_pos_embed(pos_embed, N_ctx)
 
         for i, (feature, block) in enumerate(
             zip(multi_scale_features, self.compression_blocks)
         ):
             # 1. 准备 Context
-            context = self.context_adapters[i](feature)  # [B, N, C]
+            context = self.context_norms[i](feature)
+            context = context + pos_embed
 
-            # 2. 注入位置编码 (Crucial for 2D->1D mapping)
-            pos_emb = self._get_interpolated_pos_embed(
-                self.context_pos_embed, context.shape[1]
-            )
-            context = context + pos_emb
+            # 2. 交互 (Block 内部含 Causal Self-Attn + Cross-Attn)
+            queries = block(queries, context)
 
-            # 3. 交互: Latent 自我整理 (Self-Attn) + 吸收当前层特征 (Cross-Attn)
-            # 注意：这里的 latents 是包含“所有尺度”Query 的全集
-            # 这意味着：Scale-1 的 Query 也可以在这一层看到 Scale-2 的 Context
-            latents = block(latents, context)
+        return queries
 
-        return latents
+    def _resize_pos_embed(self, pos_embed, target_seq_len):
+        N = pos_embed.shape[1]
+        dim = pos_embed.shape[2]
+        size = int(math.sqrt(N))
+        target_size = int(math.sqrt(target_seq_len))
+        pos_embed = pos_embed.reshape(1, size, size, dim).permute(0, 3, 1, 2)
+        pos_embed = F.interpolate(
+            pos_embed,
+            size=(target_size, target_size),
+            mode='bicubic',
+            align_corners=False,
+        )
+        pos_embed = pos_embed.flatten(2).transpose(1, 2)
+        return pos_embed
 
 
 class UniFlowVisionEmbeddings(nn.Module):
