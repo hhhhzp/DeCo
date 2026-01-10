@@ -30,7 +30,7 @@ trainer:
   callbacks:
     - class_path: src.callbacks.model_checkpoint.CheckpointHook
       init_args:
-        every_n_train_steps: 25000
+        every_n_train_steps: 10000
         save_top_k: -1
         save_last: true
     - class_path: src.callbacks.compute_metrics.ComputeMetricsHook
