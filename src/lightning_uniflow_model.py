@@ -288,8 +288,32 @@ class LightningUniFlowModel(pl.LightningModule):
         )
 
         with torch.no_grad():
-            # Forward pass to reconstruct images
-            samples = model(img)
+            # Apply padding if dimensions are not divisible by 28
+            _, _, h, w = img.shape
+            pad_h = (28 - h % 28) % 28
+            pad_w = (28 - w % 28) % 28
+
+            if pad_h > 0 or pad_w > 0:
+                # Apply uniform padding on all sides
+                pad_top = pad_h // 2
+                pad_bottom = pad_h - pad_top
+                pad_left = pad_w // 2
+                pad_right = pad_w - pad_left
+                img_padded = torch.nn.functional.pad(
+                    img,
+                    (pad_left, pad_right, pad_top, pad_bottom),
+                    mode='constant',
+                    value=0,
+                )
+
+                # Forward pass to reconstruct images
+                samples = model(img_padded)
+
+                # Remove padding from output
+                samples = samples[:, :, pad_top : pad_top + h, pad_left : pad_left + w]
+            else:
+                # Forward pass to reconstruct images
+                samples = model(img)
 
             # Log first 6 images comparison (original vs reconstructed)
             if self._logged_images_count < 6:

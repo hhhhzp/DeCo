@@ -23,5 +23,4 @@ export NODE_RANK=${NODE_RANK:-0}
 
 python main.py fit -c  configs_flow/uniflow_internvit_2b_base_448px.yaml \
     --trainer.num_nodes=4 \
-    --trainer.devices=8 \
-    --ckpt_path=uniflow_internvit_2b/exp_uniflow_internvit_2b_new/epoch=19-step=50000.ckpt
+    --trainer.devices=8

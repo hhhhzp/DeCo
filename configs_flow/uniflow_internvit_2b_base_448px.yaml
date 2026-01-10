@@ -53,7 +53,8 @@ model:
       weight_decay: 0.0
       betas: [0.9, 0.95]
   # Pretrained model path
-  pretrain_model_path: null
+  pretrain_model_path: uniflow_internvit_2b/exp_uniflow_internvit_2b_new/epoch=19-step=50000.ckpt
+  distill: true
 
 data:
   train_dataset:
@@ -66,7 +67,7 @@ data:
     class_path: src.data.dataset.imagenet.PixHFDataset
     init_args:
       root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k
-      resolution: 448
+      resolution: 256
       split: validation
   train_batch_size: 16
   train_num_workers: 8

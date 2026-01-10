@@ -191,6 +191,7 @@ class Attention(nn.Module):
         qkv_bias: bool = False,
         attn_drop: float = 0.0,
         proj_drop: float = 0.0,
+        is_causal=False,
     ) -> None:
         super().__init__()
         assert dim % num_heads == 0, 'dim should be divisible by num_heads'
@@ -206,6 +207,7 @@ class Attention(nn.Module):
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
+        self.is_causal = is_causal
 
     def forward(self, x: torch.Tensor, pos) -> torch.Tensor:
         B, N, C = x.shape
@@ -225,7 +227,7 @@ class Attention(nn.Module):
         ).contiguous()  # B, H, N, Hc
         v = v.view(B, self.num_heads, -1, C // self.num_heads).contiguous()
 
-        x = attention(q, k, v)
+        x = attention(q, k, v, is_causal=self.is_causal)
         x = x.transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
@@ -252,15 +254,12 @@ class FeedForward(nn.Module):
 class FlattenDiTBlock(nn.Module):
     """FlattenDiT Block with RMSNorm, Attention and FeedForward"""
 
-    def __init__(
-        self,
-        hidden_size,
-        groups,
-        mlp_ratio=4,
-    ):
+    def __init__(self, hidden_size, groups, mlp_ratio=4, is_causal=False):
         super().__init__()
         self.norm1 = UniFlowRMSNorm(hidden_size, eps=1e-6)
-        self.attn = Attention(hidden_size, num_heads=groups, qkv_bias=False)
+        self.attn = Attention(
+            hidden_size, num_heads=groups, qkv_bias=False, is_causal=is_causal
+        )
         self.norm2 = UniFlowRMSNorm(hidden_size, eps=1e-6)
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
         self.mlp = FeedForward(hidden_size, mlp_hidden_dim)
