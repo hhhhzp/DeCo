@@ -138,8 +138,6 @@ class LightningUniFlowModel(pl.LightningModule):
         """Initialize model weights and load pretrained checkpoints"""
         self.trainer.strategy.barrier()
         self.init_vision_model()
-        if self.distill:
-            self.init_teacher_model()
 
         # Load pretrained weights if specified
         if self.pretrain_model_path is not None:
@@ -151,6 +149,9 @@ class LightningUniFlowModel(pl.LightningModule):
         # Copy parameters to EMA model
         if self.use_ema:
             copy_params(src_model=self.model, dst_model=self.ema_model)
+
+        if self.distill:
+            self.init_teacher_model()
 
         # Compile models for better performance
         # self.model = torch.compile(self.model)
