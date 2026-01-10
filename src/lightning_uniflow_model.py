@@ -167,9 +167,39 @@ class LightningUniFlowModel(pl.LightningModule):
         return []
 
     def configure_optimizers(self) -> OptimizerLRScheduler:
-        """Configure optimizer and learning rate scheduler"""
-        params = filter_nograd_tensors(self.model.parameters())
-        optimizer: torch.optim.Optimizer = self.optimizer(params)
+        """Configure optimizer and learning rate scheduler with different learning rates"""
+        # Define prefixes for vision encoder components (embeddings, encoder, mlp1)
+        vision_encoder_prefixes = (
+            'embeddings.',
+            'encoder.',
+            'mlp1.',
+            '_orig_mod.embeddings.',
+            '_orig_mod.encoder.',
+            '_orig_mod.mlp1.',
+        )
+
+        # Separate vision encoder parameters
+        vision_encoder_params = []
+        other_params = []
+
+        for name, param in self.model.named_parameters():
+            if not param.requires_grad:
+                continue
+            if name.startswith(vision_encoder_prefixes):
+                vision_encoder_params.append(param)
+            else:
+                other_params.append(param)
+
+        # Build parameter groups
+        param_groups = [
+            {"params": other_params},  # Default learning rate
+            {
+                "params": vision_encoder_params,
+                "lr": 2e-5,
+            },  # Lower learning rate for vision encoder
+        ]
+
+        optimizer: torch.optim.Optimizer = self.optimizer(param_groups)
 
         if self.lr_scheduler is not None:
             lr_scheduler = self.lr_scheduler(optimizer)
