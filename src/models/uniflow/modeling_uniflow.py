@@ -1325,7 +1325,7 @@ class UniFlowVisionModel(PreTrainedModel):
 
     def forward(self, pixel_values):
         # Inference: return_distill_loss=False
-        z = self.forward_condition(pixel_values, return_distill_loss=False)
+        z, _ = self.forward_condition(pixel_values)
         return self.flow_head(z=z)
 
 
