@@ -241,10 +241,13 @@ class FeedForward(nn.Module):
         self,
         dim: int,
         hidden_dim: int,
+        out_dim: int = None,
     ):
         super().__init__()
+        if out_dim is None:
+            out_dim = dim
         self.w12 = nn.Linear(dim, hidden_dim * 2, bias=False)
-        self.w3 = nn.Linear(hidden_dim, dim, bias=False)
+        self.w3 = nn.Linear(hidden_dim, out_dim, bias=False)
 
     def forward(self, x):
         x1, x2 = self.w12(x).chunk(2, dim=-1)
@@ -875,11 +878,12 @@ class ResBlock(nn.Module):
         self.channels = channels
 
         self.in_ln = nn.LayerNorm(channels, eps=1e-6)
-        self.mlp = nn.Sequential(
-            nn.Linear(channels, channels, bias=True),
-            nn.SiLU(),
-            nn.Linear(channels, channels, bias=True),
-        )
+        self.mlp = FeedForward(channels, channels)
+        # nn.Sequential(
+        #     nn.Linear(channels, channels, bias=True),
+        #     nn.SiLU(),
+        #     nn.Linear(channels, channels, bias=True),
+        # )
 
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(), nn.Linear(channels, 3 * channels, bias=True)
@@ -1007,92 +1011,68 @@ class SimpleMLPAdaLN(nn.Module):
         return self.final_layer(x, y)
 
 
-class SpatialGatedFusion(nn.Module):
+class ChannelProjector(nn.Module):
     """
-    修改后的 SimpleMLPAdaLN：
-    1. 移除了 TimestepEmbedder 和 t 输入
-    2. 专门用于 Token-wise 的空间门控融合
+    Channel projector with 2x spatial downsampling (Space-to-Depth) and upsampling.
+    Using Linear layers for channel alignment after reshaping.
     """
 
-    def __init__(
-        self,
-        in_channels,  # 语义特征通道数
-        model_channels,  # 内部隐藏层维度
-        out_channels,  # 输出通道数
-        z_channels,  # 细节/条件特征通道数
-        num_res_blocks,
-        grad_checkpointing=False,
-    ):
+    def __init__(self, vit_hidden_size, latent_ch, use_mlp=False):
         super().__init__()
+        self.vit_hidden_size = vit_hidden_size
+        self.latent_ch = latent_ch
 
-        self.in_channels = in_channels
-        self.model_channels = model_channels
-        self.out_channels = out_channels
-        self.num_res_blocks = num_res_blocks
-        self.grad_checkpointing = grad_checkpointing
+        # Space-to-Depth 会使通道数变为 4 倍
+        in_dim_down = vit_hidden_size * 4
+        out_dim_up = vit_hidden_size * 4
 
-        # 【改动1】移除 self.time_embed
+        # 建议默认使用 Linear 以节省显存，除非确实需要非线性变换能力
+        self.down_proj = FeedForward(
+                dim=in_dim_down, hidden_dim=in_dim_down, out_dim=latent_ch
+            )
+        self.up_proj = FeedForward(
+            dim=latent_ch, hidden_dim=out_dim_up, out_dim=out_dim_up
+        )
 
-        # 映射条件 (细节特征) 到模型维度
-        self.cond_embed = nn.Linear(z_channels, model_channels)
-
-        # 映射输入 (语义特征) 到模型维度
-        self.input_proj = nn.Linear(in_channels, model_channels)
-
-        res_blocks = []
-        for i in range(num_res_blocks):
-            # 复用你原有的 ResBlock，无需改动
-            res_blocks.append(ResBlock(model_channels))
-
-        self.res_blocks = nn.ModuleList(res_blocks)
-        # 复用你原有的 FinalLayer，无需改动
-        self.final_layer = FinalLayer(model_channels, out_channels)
-
-        self.initialize_weights()
-
-    def initialize_weights(self):
-        def _basic_init(module):
-            if isinstance(module, nn.Linear):
-                torch.nn.init.xavier_uniform_(module.weight)
-                if module.bias is not None:
-                    nn.init.constant_(module.bias, 0)
-
-        self.apply(_basic_init)
-
-        # 【改动2】移除 time_embed 的初始化
-
-        # 保持 Zero-Init 逻辑不变，这对你的“语义优先”策略至关重要
-        for block in self.res_blocks:
-            nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
-            nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
-
-        nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
-        nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
-        nn.init.constant_(self.final_layer.linear.weight, 0)
-        nn.init.constant_(self.final_layer.linear.bias, 0)
-
-    def forward(self, x, c):
+    def downsample_and_project(self, x):
         """
         Args:
-            x: [B, N, in_channels] - 语义特征 (Main stream)
-            c: [B, N, z_channels]  - 细节特征 (Condition stream)
-        注意：这里移除了 t 参数
+            x: [B, N, C]
+            img_size: tuple (H, W) corresponding to N = H*W
         """
-        x = self.input_proj(x)  # [B, N, model_channels]
-        c = self.cond_embed(c)  # [B, N, model_channels]
+        H, W = int(N**0.5), int(N**0.5)
+        B, N, C = x.shape
+        x = rearrange(x, 'b (h w) c -> b (h w) c', h=H, w=W)  # 确保是 B N C
+        x_spatial = rearrange(
+            x, 'b (h h2) (w w2) c -> b (h w) (c h2 w2)', h2=2, w2=2, h=H // 2, w=W // 2
+        )
+        x_latent = self.down_proj(x_spatial)
 
-        # 【改动3】不再叠加时间步，直接用 c 作为 condition
-        # 因为 c 是 [B, N, C]，传入 ResBlock 后会进行 Token-wise 的自适应调节
-        y = c
+        return x_latent
 
-        if self.grad_checkpointing and not torch.jit.is_scripting():
-            for block in self.res_blocks:
-                x = torch.utils.checkpoint.checkpoint(block, x, y)
-        else:
-            for block in self.res_blocks:
-                x = block(x, y)
+    def project_and_upsample(self, x_latent, target_img_size):
+        """
+        Args:
+            x_latent: [B, N/4, latent_ch]
+            target_img_size: tuple (H, W) - final target resolution
+        """
+        target_H, target_W = target_img_size
 
-        return self.final_layer(x, y)
+        # 1. Projection: [B, N/4, latent_ch] -> [B, N/4, 4*C]
+        x_up = self.up_proj(x_latent)
+
+        # 2. Depth-to-Space: [B, H/2, W/2, 4*C] -> [B, H, W, C]
+        # 逆操作
+        x = rearrange(
+            x_up,
+            'b (h w) (c h2 w2) -> b (h h2 w w2) c',
+            h=target_H // 2,
+            w=target_W // 2,
+            h2=2,
+            w2=2,
+        )
+
+        return x
 
 
 #############################################################
@@ -1125,25 +1105,9 @@ class UniFlowVisionModel(PreTrainedModel):
         self.use_chal_proj = config.use_chal_proj
         self.latent_ch = config.latent_ch
         if self.use_chal_proj:
-            # down project to latent_size
-            self.chal_proj = nn.Sequential(
-                OrderedDict(
-                    [
-                        ("c_fc", nn.Linear(vit_hidden_size, vit_hidden_size)),
-                        ("gelu", nn.GELU()),
-                        ("c_proj", nn.Linear(vit_hidden_size, self.latent_ch)),
-                    ]
-                )
-            )
-            # up project to hidden_size
-            self.chal_unproj = nn.Sequential(
-                OrderedDict(
-                    [
-                        ("c_fc", nn.Linear(self.latent_ch, vit_hidden_size)),
-                        ("gelu", nn.GELU()),
-                        ("c_proj", nn.Linear(vit_hidden_size, vit_hidden_size)),
-                    ]
-                )
+            # Channel projector with 2x downsampling and upsampling
+            self.channel_projector = ChannelProjector(
+                vit_hidden_size=vit_hidden_size, latent_ch=self.latent_ch
             )
 
         # global transformer blocks
@@ -1269,8 +1233,14 @@ class UniFlowVisionModel(PreTrainedModel):
         )
         sem_feat = encoder_outputs.last_hidden_state[:, 1:]  # Remove CLS token
 
-        # 3. Channel projection for generation branch
-        gen_feat = self.chal_unproj(self.chal_proj(sem_feat))
+        # 3. Channel projection for generation branch with 2x downsampling and upsampling
+        B, N, C = sem_feat.shape
+        grid = int(N**0.5)
+
+        # Downsample and project
+        gen_feat_latent = self.channel_projector.downsample_and_project(sem_feat)
+        # Project and upsample
+        gen_feat = self.channel_projector.project_and_upsample(gen_feat_latent, grid)
 
         # 4. Apply global blocks with RoPE
         B, N, C = gen_feat.shape
