@@ -1362,7 +1362,7 @@ class UniFlowVisionModel(PreTrainedModel):
             if teacher_feat is not None:
                 # 使用 teacher model 的特征作为蒸馏目标
                 distill_loss = F.mse_loss(
-                    self.forward_feature(feat_high.detach()), teacher_feat.detach()
+                    self.forward_feature(sem_feat), teacher_feat.detach()
                 )
             else:
                 # 原始逻辑：比较 (语义分支的输出 sem_feat) vs (原始高层语义 feat_high)
