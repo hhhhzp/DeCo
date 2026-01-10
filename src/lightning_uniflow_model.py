@@ -153,11 +153,12 @@ class LightningUniFlowModel(pl.LightningModule):
         # self.model = torch.compile(self.model)
         # if self.use_ema:
         #     self.ema_model = torch.compile(self.ema_model)
-        no_grad(self.model.embeddings)
-        no_grad(self.model.encoder)
-        no_grad(self.model.mlp1)
         if self.distill:
             no_grad(self.teacher_model)
+        else:
+            no_grad(self.model.embeddings)
+            no_grad(self.model.encoder)
+            no_grad(self.model.mlp1)
 
     def configure_callbacks(self) -> Union[Sequence[Callback], Callback]:
         """Configure EMA callback"""
