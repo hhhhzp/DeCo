@@ -1041,13 +1041,13 @@ class ChannelProjector(nn.Module):
         self.down_model = nn.Sequential(
             nn.Linear(dim_4c, dim_2c, bias=False),
             ProjectorBlock(dim=dim_2c, hidden_dim=dim_2c),
-            ProjectorBlock(dim=dim_2c, hidden_dim=dim_2c),
-            ProjectorBlock(dim=dim_2c, hidden_dim=dim_2c),
             UniFlowRMSNorm(dim_2c, eps=1e-6),
             nn.Linear(dim_2c, latent_ch, bias=False),
         )
         self.up_model = nn.Sequential(
-            nn.Linear(latent_ch, dim_4c, bias=False),  # 64 -> 2048
+            nn.Linear(latent_ch, dim_2c, bias=False),  # 64 -> 2048
+            ProjectorBlock(dim=dim_2c, hidden_dim=dim_2c),
+            nn.Linear(dim_2c, dim_4c, bias=False),
             UniFlowRMSNorm(dim_4c, eps=1e-6),  # Stabilize before PixelShuffle
         )
 
