@@ -10,8 +10,8 @@ export NCCL_SOCKET_IFNAME=bond1
 # export NCCL_DEBUG=INFO
 export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
 export SETUPTOOLS_USE_DISTUTILS=stdlib
-# export WANDB_RESUME=auto
-# export WANDB_RUN_ID=uzh3m4s6
+export WANDB_RESUME=auto
+export WANDB_RUN_ID=f7wp6p2f
 export http_proxy="http://star-proxy.oa.com:3128"
 export https_proxy="http://star-proxy.oa.com:3128"
 # multi-node training in lightning style, e.g., 4 nodes
@@ -23,4 +23,5 @@ export NODE_RANK=${NODE_RANK:-0}
 
 python main.py fit -c  configs_flow/uniflow_internvit_2b_base.yaml \
     --trainer.num_nodes=4 \
-    --trainer.devices=8
+    --trainer.devices=8 \
+    --ckpt_path=uniflow_internvit_2b/exp_uniflow_internvit_2b_r28/epoch=9-step=25000.ckpt
