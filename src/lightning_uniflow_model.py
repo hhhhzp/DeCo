@@ -127,7 +127,6 @@ class LightningUniFlowModel(pl.LightningModule):
         )
 
         # Freeze teacher model
-        no_grad(self.teacher_model)
 
         if self.global_rank == 0:
             print(f"Initialized frozen teacher model from {pretrained_model_path}")
@@ -135,9 +134,6 @@ class LightningUniFlowModel(pl.LightningModule):
     def configure_model(self) -> None:
         """Initialize model weights and load pretrained checkpoints"""
         self.trainer.strategy.barrier()
-        no_grad(self.model.embeddings)
-        no_grad(self.model.encoder)
-        no_grad(self.model.mlp1)
         # Initialize teacher model if distillation is enabled
         if self.distill:
             self.init_teacher_model()
@@ -157,6 +153,11 @@ class LightningUniFlowModel(pl.LightningModule):
         # self.model = torch.compile(self.model)
         # if self.use_ema:
         #     self.ema_model = torch.compile(self.ema_model)
+        no_grad(self.model.embeddings)
+        no_grad(self.model.encoder)
+        no_grad(self.model.mlp1)
+        if self.distill:
+            no_grad(self.teacher_model)
 
     def configure_callbacks(self) -> Union[Sequence[Callback], Callback]:
         """Configure EMA callback"""
