@@ -1292,9 +1292,14 @@ class UniFlowVisionModel(PreTrainedModel):
         )
         return pos_embed
 
-    def forward_condition(self, x, return_distill_loss=False):
+    def forward_condition(self, x, return_distill_loss=False, teacher_feat=None):
         """
         Encode images -> Split into Semantic & Gen branches.
+
+        Args:
+            x: input images
+            return_distill_loss: whether to return distillation loss
+            teacher_feat: teacher model features for distillation (optional)
         """
         assert x.ndim == 4, f'wrong pixel_values size: {x.shape}'
 
@@ -1353,20 +1358,26 @@ class UniFlowVisionModel(PreTrainedModel):
         # 7. 返回逻辑
         if return_distill_loss:
             # 计算语义 Loss:
-            # 比较 (语义分支的输出 sem_feat) vs (原始高层语义 feat_high)
-            distill_loss = F.mse_loss(
-                self.forward_feature(sem_feat), self.forward_feature(feat_high.detach())
-            )
+            # 如果提供了 teacher_feat，使用 teacher 特征；否则使用 feat_high
+            if teacher_feat is not None:
+                # 使用 teacher model 的特征作为蒸馏目标
+                distill_loss = F.mse_loss(feat_high, teacher_feat.detach())
+            else:
+                # 原始逻辑：比较 (语义分支的输出 sem_feat) vs (原始高层语义 feat_high)
+                distill_loss = F.mse_loss(
+                    self.forward_feature(sem_feat),
+                    self.forward_feature(feat_high.detach()),
+                )
             # 返回: (用于生成的特征, 蒸馏Loss)
             return gen_feat, distill_loss
         else:
             # 推理时只返回生成特征
             return gen_feat
 
-    def forward_loss(self, target_pixel_values):
+    def forward_loss(self, target_pixel_values, teacher_feat=None):
         # 1. Get Condition & Distill Loss
         z, distill_loss = self.forward_condition(
-            target_pixel_values, return_distill_loss=True
+            target_pixel_values, return_distill_loss=True, teacher_feat=teacher_feat
         )
 
         # 2. Prepare Target

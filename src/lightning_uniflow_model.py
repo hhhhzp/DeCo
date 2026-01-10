@@ -12,7 +12,8 @@ from torch.optim.lr_scheduler import LRScheduler
 from torch.optim import Optimizer
 from lightning.pytorch.callbacks import Callback
 from transformers import get_constant_schedule_with_warmup
-
+from torchvision.transforms import Normalize
+from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from src.models.autoencoder.base import fp2uint8
 from src.models.uniflow.modeling_uniflow import UniFlowVisionModel
 from src.models.uniflow.configuration_uniflow import UniFlowVisionConfig
@@ -45,11 +46,13 @@ class LightningUniFlowModel(pl.LightningModule):
         eval_original_model: bool = False,
         pretrain_model_path: str = None,
         use_ema: bool = True,
+        distill: bool = True,
     ):
         super().__init__()
         config = UniFlowVisionConfig.from_pretrained(config_path)
         self.model = UniFlowVisionModel(config)
         self.use_ema = use_ema
+        self.distill = distill
 
         # Create EMA model if enabled
         if self.use_ema:
@@ -57,6 +60,12 @@ class LightningUniFlowModel(pl.LightningModule):
             no_grad(self.ema_model)
         else:
             self.ema_model = None
+
+        # Create teacher model if distillation is enabled
+        if self.distill:
+            self.teacher_model = None  # Will be initialized in configure_model
+        else:
+            self.teacher_model = None
 
         self.ema_tracker = ema_tracker
         self.optimizer = optimizer
@@ -95,6 +104,34 @@ class LightningUniFlowModel(pl.LightningModule):
             print(f"Loaded vision_model and mlp1 from {pretrained_model_path}: {msg}")
         self.model.mlp1.load_state_dict(model.mlp1.state_dict())
 
+    def init_teacher_model(
+        self,
+        pretrained_model_path: str = "/apdcephfs/share_300000800/datamultimodal/models/InternVL3-2B",
+    ):
+        """
+        Initialize frozen teacher model for distillation
+
+        Args:
+            pretrained_model_path: 预训练模型路径
+        """
+        # 从预训练模型加载 InternVLChatModel
+        config = AutoConfig.from_pretrained(
+            pretrained_model_path, trust_remote_code=True
+        )
+        config.vision_config.drop_path_rate = 0.0
+        self.teacher_model = AutoModel.from_pretrained(
+            pretrained_model_path,
+            config=config,
+            dtype=torch.bfloat16,
+            trust_remote_code=True,
+        )
+
+        # Freeze teacher model
+        no_grad(self.teacher_model)
+
+        if self.global_rank == 0:
+            print(f"Initialized frozen teacher model from {pretrained_model_path}")
+
     def configure_model(self) -> None:
         """Initialize model weights and load pretrained checkpoints"""
         self.trainer.strategy.barrier()
@@ -102,6 +139,10 @@ class LightningUniFlowModel(pl.LightningModule):
         no_grad(self.model.embeddings)
         no_grad(self.model.encoder)
         no_grad(self.model.mlp1)
+        # Initialize teacher model if distillation is enabled
+        if self.distill:
+            self.init_teacher_model()
+
         # Load pretrained weights if specified
         if self.pretrain_model_path is not None:
             checkpoint = torch.load(self.pretrain_model_path, map_location='cpu')
@@ -164,13 +205,22 @@ class LightningUniFlowModel(pl.LightningModule):
         # Unpack batch: input image is both source and target for reconstruction
         img, _, metadata = batch
 
+        # Get teacher features if distillation is enabled
+        teacher_feat = None
+        if self.distill and self.teacher_model is not None:
+            with torch.no_grad():
+                teacher_img = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(
+                    img * 0.5 + 0.5
+                )
+                teacher_feat = self.teacher_model.extract_feature(teacher_img)
+
         # Forward pass with flow matching loss
         # The model internally:
         # 1. Encodes image to get condition tokens
         # 2. Converts target image to patch tokens
         # 3. Samples noise and timestep
         # 4. Computes flow matching loss (velocity prediction)
-        loss_dict = self.model.forward_loss(img)
+        loss_dict = self.model.forward_loss(img, teacher_feat=teacher_feat)
 
         # Compute total loss
         total_loss = sum(loss_dict.values())
