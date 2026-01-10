@@ -159,7 +159,7 @@ class LightningUniFlowModel(pl.LightningModule):
         #     self.ema_model = torch.compile(self.ema_model)
         if self.distill:
             no_grad(self.teacher_model)
-            no_grad(self.model.embeddings.position_embedding)
+            self.model.embeddings.position_embedding.requires_grad_(False)
         else:
             no_grad(self.model.embeddings)
             no_grad(self.model.encoder)
