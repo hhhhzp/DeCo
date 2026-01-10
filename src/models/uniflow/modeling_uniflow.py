@@ -1013,20 +1013,21 @@ class SimpleMLPAdaLN(nn.Module):
 
 class ChannelProjector(nn.Module):
     """
-    Channel projector with 2x spatial downsampling (Space-to-Depth) and upsampling.
-    Using Linear layers for channel alignment after reshaping.
+    Channel projector assuming SQUARE images.
+    Features:
+    1. 2x spatial downsampling (Space-to-Depth) -> Projection
+    2. Projection -> 2x spatial upsampling (Depth-to-Space)
     """
 
-    def __init__(self, vit_hidden_size, latent_ch, use_mlp=False):
+    def __init__(self, vit_hidden_size, latent_ch):
         super().__init__()
         self.vit_hidden_size = vit_hidden_size
         self.latent_ch = latent_ch
 
-        # Space-to-Depth 会使通道数变为 4 倍
+        # Space-to-Depth 导致通道数变 4 倍
         in_dim_down = vit_hidden_size * 4
         out_dim_up = vit_hidden_size * 4
 
-        # 建议默认使用 Linear 以节省显存，除非确实需要非线性变换能力
         self.down_proj = FeedForward(
             dim=in_dim_down, hidden_dim=in_dim_down, out_dim=latent_ch
         )
@@ -1038,36 +1039,43 @@ class ChannelProjector(nn.Module):
         """
         Args:
             x: [B, N, C]
-            img_size: tuple (H, W) corresponding to N = H*W
+        Returns:
+            x_latent: [B, N/4, latent_ch]
         """
         B, N, C = x.shape
-        H, W = int(N**0.5), int(N**0.5)
-        x = rearrange(x, 'b (h w) c -> b (h w) c', h=H, w=W)  # 确保是 B N C
-        x_spatial = rearrange(
-            x, 'b (h h2) (w w2) c -> b (h w) (c h2 w2)', h2=2, w2=2, h=H // 2, w=W // 2
-        )
-        x_latent = self.down_proj(x_spatial)
+        # 既然是正方形，直接开方
+        H = W = int(N**0.5)
 
+        # 1. Space-to-Depth: [B, H, W, C] -> [B, H/2, W/2, 4C] -> [B, N/4, 4C]
+        # 这里 h 和 w 是下采样后特征图的高宽 (H/2)
+        x = rearrange(
+            x, 'b (h h2 w w2) c -> b (h w) (c h2 w2)', h=H // 2, w=W // 2, h2=2, w2=2
+        )
+
+        # 2. Projection
+        x_latent = self.down_proj(x)
         return x_latent
 
-    def project_and_upsample(self, x_latent, target_img_size):
+    def project_and_upsample(self, x_latent):
         """
         Args:
             x_latent: [B, N/4, latent_ch]
-            target_img_size: tuple (H, W) - final target resolution
+        Returns:
+            x: [B, N, C]
         """
-        target_H, target_W = target_img_size
+        B, N_latent, C_latent = x_latent.shape
+        # 从 latent 倒推当前的 grid size
+        H_latent = W_latent = int(N_latent**0.5)
 
-        # 1. Projection: [B, N/4, latent_ch] -> [B, N/4, 4*C]
+        # 1. Projection
         x_up = self.up_proj(x_latent)
 
-        # 2. Depth-to-Space: [B, H/2, W/2, 4*C] -> [B, H, W, C]
-        # 逆操作
+        # 2. Depth-to-Space: [B, H_lat, W_lat, 4C] -> [B, H_lat*2, W_lat*2, C]
         x = rearrange(
             x_up,
             'b (h w) (c h2 w2) -> b (h h2 w w2) c',
-            h=target_H // 2,
-            w=target_W // 2,
+            h=H_latent,
+            w=W_latent,
             h2=2,
             w2=2,
         )
@@ -1240,7 +1248,7 @@ class UniFlowVisionModel(PreTrainedModel):
         # Downsample and project
         gen_feat_latent = self.channel_projector.downsample_and_project(sem_feat)
         # Project and upsample
-        gen_feat = self.channel_projector.project_and_upsample(gen_feat_latent, grid)
+        gen_feat = self.channel_projector.project_and_upsample(gen_feat_latent)
 
         # 4. Apply global blocks with RoPE
         B, N, C = gen_feat.shape
