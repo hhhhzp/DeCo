@@ -1123,44 +1123,6 @@ class UniFlowVisionModel(PreTrainedModel):
             nn.GELU(),
             nn.Linear(llm_hidden_size, llm_hidden_size),
         )
-        self.fusion_layers = [4]
-        self.fusion_module = SpatialGatedFusion(
-            in_channels=vit_hidden_size,
-            model_channels=vit_hidden_size,
-            out_channels=vit_hidden_size,
-            z_channels=vit_hidden_size,
-            num_res_blocks=6,  # 轻量级融合
-        )
-
-        # 3. 【新增】Unified Blocks (融合后的深层处理)
-        # 你要求的 3 层 Block，用于充分混合语义和细节
-        self.unified_depth = 3
-        self.unified_blocks = nn.ModuleList(
-            [
-                Block(
-                    dim=vit_hidden_size,
-                    num_heads=16,
-                    mlp_ratio=4.0,
-                    qkv_bias=True,
-                    norm_layer=nn.LayerNorm,
-                    init_values=0.0,
-                )
-                for _ in range(self.unified_depth)
-            ]
-        )
-        self.sem_blocks = nn.ModuleList(
-            [
-                Block(
-                    dim=vit_hidden_size,
-                    num_heads=16,
-                    mlp_ratio=4.0,
-                    qkv_bias=True,
-                    norm_layer=nn.LayerNorm,
-                    init_values=0.0,
-                )
-                for _ in range(self.unified_depth)
-            ]
-        )
         self.use_chal_proj = config.use_chal_proj
         self.latent_ch = config.latent_ch
         if self.use_chal_proj:
@@ -1174,15 +1136,6 @@ class UniFlowVisionModel(PreTrainedModel):
                     ]
                 )
             )
-            # self.sem_unproj = nn.Sequential(
-            #     OrderedDict(
-            #         [
-            #             ("c_fc", nn.Linear(self.latent_ch, vit_hidden_size)),
-            #             ("gelu", nn.GELU()),
-            #             ("c_proj", nn.Linear(vit_hidden_size, vit_hidden_size)),
-            #         ]
-            #     )
-            # )
             # up project to hidden_size
             self.chal_unproj = nn.Sequential(
                 OrderedDict(
@@ -1292,104 +1245,79 @@ class UniFlowVisionModel(PreTrainedModel):
         )
         return pos_embed
 
-    def forward_condition(self, x, return_distill_loss=False, teacher_feat=None):
+    def forward_condition(self, x, teacher_feat=None):
         """
-        Encode images -> Split into Semantic & Gen branches.
+        Encode images and extract features for generation.
 
         Args:
-            x: input images
-            return_distill_loss: whether to return distillation loss
+            x: input images [B, C, H, W]
             teacher_feat: teacher model features for distillation (optional)
+
+        Returns:
+            gen_feat: generation features [B, N, C]
+            distill_loss: distillation loss (if teacher_feat is provided)
         """
         assert x.ndim == 4, f'wrong pixel_values size: {x.shape}'
 
-        # 1. Norm & Embed
+        # 1. Normalize and embed
         x = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(x * 0.5 + 0.5)
         x = self.embeddings(x)
 
-        # 2. Extract Features
+        # 2. Extract features from encoder
         encoder_outputs = self.encoder(
             inputs_embeds=x,
             output_hidden_states=True,
         )
-        feat_low = encoder_outputs.hidden_states[self.fusion_layers[0]][:, 1:]
-        feat_high = encoder_outputs.last_hidden_state[:, 1:]
+        sem_feat = encoder_outputs.last_hidden_state[:, 1:]  # Remove CLS token
 
-        # 3. 门控融合 -> z
-        z = self.fusion_module(x=feat_high, c=feat_low)
-        for block in self.unified_blocks:
-            z = block(z)  # 迭代更新 sem_feat
-        latent = self.chal_unproj(self.chal_proj(z))
+        # 3. Channel projection for generation branch
+        gen_feat = self.chal_unproj(self.chal_proj(sem_feat))
 
-        sem_feat = latent
-        for block in self.sem_blocks:
-            sem_feat = block(sem_feat)  # 迭代更新 sem_feat
-        # # 4. 【分叉】Y-Branch Processing
-
-        # # --- 分支 A: 语义对齐 (Semantic Branch) ---
-        # sem_feat = z
-        # for block in self.sem_blocks:
-        #     sem_feat = block(sem_feat)  # 迭代更新 sem_feat
-
-        # # --- 分支 B: 像素生成 (Generation Branch) ---
-        # gen_feat = z
-        # # 【修正】这里必须用 gen_blocks，不要用 sem_blocks
-        # for block in self.gen_blocks:
-        #     gen_feat = block(gen_feat)  # 迭代更新 gen_feat
-
-        # # 5. 后续处理 (仅针对生成分支 gen_feat)
-        # if self.use_chal_proj:
-        #     gen_feat = self.chal_unproj(self.chal_proj(gen_feat))
-
-        # 6. Global Blocks (RoPE)
-        gen_feat = sem_feat.clone()
+        # 4. Apply global blocks with RoPE
         B, N, C = gen_feat.shape
         grid = int(N**0.5)
         pos_embed = self._get_pos_embed(self.global_block_pos_embed, grid, grid)
-
-        # 安全相加 (Clone 建议依然保留，为了安全性)
         gen_feat = gen_feat + pos_embed
 
         pos = self.fetch_pos(grid, grid, gen_feat.device)
-
         for block in self.global_blocks:
             gen_feat = block(gen_feat, pos)
 
-        # 7. 返回逻辑
-        if return_distill_loss:
-            # 计算语义 Loss:
-            # 如果提供了 teacher_feat，使用 teacher 特征；否则使用 feat_high
-            if teacher_feat is not None:
-                # 使用 teacher model 的特征作为蒸馏目标
-                distill_loss = F.mse_loss(
-                    self.forward_feature(sem_feat), teacher_feat.detach()
-                )
-            else:
-                # 原始逻辑：比较 (语义分支的输出 sem_feat) vs (原始高层语义 feat_high)
-                distill_loss = F.mse_loss(
-                    self.forward_feature(sem_feat),
-                    self.forward_feature(feat_high.detach()),
-                )
-            # 返回: (用于生成的特征, 蒸馏Loss)
-            return gen_feat, distill_loss
+        # 5. Return with optional distillation loss
+        if teacher_feat is not None:
+            distill_loss = F.mse_loss(
+                self.forward_feature(sem_feat), teacher_feat.detach()
+            )
         else:
-            # 推理时只返回生成特征
-            return gen_feat
+            distill_loss = torch.tensor(
+                0.0, device=gen_feat.device, dtype=gen_feat.dtype
+            )
+
+        return gen_feat, distill_loss
 
     def forward_loss(self, target_pixel_values, teacher_feat=None):
-        # 1. Get Condition & Distill Loss
+        """
+        Compute training loss.
+
+        Args:
+            target_pixel_values: target images [B, C, H, W]
+            teacher_feat: teacher model features for distillation (optional)
+
+        Returns:
+            dict: loss components including total loss, flow loss, and distill loss
+        """
+        # 1. Get generation features and distillation loss
         z, distill_loss = self.forward_condition(
-            target_pixel_values, return_distill_loss=True, teacher_feat=teacher_feat
+            target_pixel_values, teacher_feat=teacher_feat
         )
 
-        # 2. Prepare Target
+        # 2. Transform target to latent space
         t = p2l_transform_tensor(target_pixel_values, self.config.patch_size)
 
-        # 3. Compute Flow Loss
+        # 3. Compute flow matching loss
         flow_loss = self.flow_head.forward_train(x1=t, z=z)
 
-        # 4. Total Loss
-        # 可以添加权重系数，例如: flow_loss + 0.5 * distill_loss
+        # 4. Combine losses
         return {
             'loss': flow_loss + distill_loss,
             'flow_loss': flow_loss,
