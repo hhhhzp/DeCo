@@ -11,7 +11,10 @@ from lightning.pytorch.utilities.types import OptimizerLRScheduler, STEP_OUTPUT
 from torch.optim.lr_scheduler import LRScheduler
 from torch.optim import Optimizer
 from lightning.pytorch.callbacks import Callback
-from transformers import get_constant_schedule_with_warmup
+from transformers import (
+    get_constant_schedule_with_warmup,
+    get_cosine_schedule_with_warmup,
+)
 from torchvision.transforms import Normalize
 from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from src.models.autoencoder.base import fp2uint8
@@ -201,7 +204,11 @@ class LightningUniFlowModel(pl.LightningModule):
 
         optimizer: torch.optim.Optimizer = self.optimizer(param_groups)
 
-        if self.lr_scheduler is not None:
+        if self.distill:
+            lr_scheduler = get_cosine_schedule_with_warmup(
+                optimizer, num_warmup_steps=2000
+            )
+
             lr_scheduler = self.lr_scheduler(optimizer)
             return dict(
                 optimizer=optimizer,
