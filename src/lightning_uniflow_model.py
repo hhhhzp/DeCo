@@ -199,7 +199,7 @@ class LightningUniFlowModel(pl.LightningModule):
             {"params": other_params},  # Default learning rate
             {
                 "params": vision_encoder_params,
-                "lr": 2e-5,
+                "lr": 1e-4,
             },  # Lower learning rate for vision encoder
         ]
 
