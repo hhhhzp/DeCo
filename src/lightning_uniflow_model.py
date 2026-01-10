@@ -224,11 +224,11 @@ class LightningUniFlowModel(pl.LightningModule):
             # )
             return dict(
                 optimizer=optimizer,
-                lr_scheduler={
-                    "scheduler": lr_scheduler,
-                    "interval": "step",
-                    "frequency": 1,
-                },
+                # lr_scheduler={
+                #     "scheduler": lr_scheduler,
+                #     "interval": "step",
+                #     "frequency": 1,
+                # },
             )
         return dict(optimizer=optimizer)
 
