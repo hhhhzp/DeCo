@@ -1,7 +1,7 @@
 # lightning.pytorch==2.4.0
 seed_everything: true
 tags:
-  exp: &exp uniflow_internvit_2b_distill
+  exp: &exp uniflow_internvit_2b_r28_224px_distill
 torch_hub_dir: ~/.cache/torch/hub
 huggingface_cache_dir: null
 
@@ -53,7 +53,7 @@ model:
       weight_decay: 0.0
       betas: [0.9, 0.95]
   # Pretrained model path
-  pretrain_model_path: uniflow_internvit_2b/exp_uniflow_internvit_2b_yshape/epoch=29-step=75000.ckpt
+  pretrain_model_path: uniflow_internvit_2b/exp_uniflow_internvit_2b_r28/epoch=19-step=50000.ckpt
 
 data:
   train_dataset:
