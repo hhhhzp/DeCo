@@ -1028,8 +1028,8 @@ class ChannelProjector(nn.Module):
 
         # 建议默认使用 Linear 以节省显存，除非确实需要非线性变换能力
         self.down_proj = FeedForward(
-                dim=in_dim_down, hidden_dim=in_dim_down, out_dim=latent_ch
-            )
+            dim=in_dim_down, hidden_dim=in_dim_down, out_dim=latent_ch
+        )
         self.up_proj = FeedForward(
             dim=latent_ch, hidden_dim=out_dim_up, out_dim=out_dim_up
         )
@@ -1040,8 +1040,8 @@ class ChannelProjector(nn.Module):
             x: [B, N, C]
             img_size: tuple (H, W) corresponding to N = H*W
         """
-        H, W = int(N**0.5), int(N**0.5)
         B, N, C = x.shape
+        H, W = int(N**0.5), int(N**0.5)
         x = rearrange(x, 'b (h w) c -> b (h w) c', h=H, w=W)  # 确保是 B N C
         x_spatial = rearrange(
             x, 'b (h h2) (w w2) c -> b (h w) (c h2 w2)', h2=2, w2=2, h=H // 2, w=W // 2
