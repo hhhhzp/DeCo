@@ -209,8 +209,6 @@ class LightningUniFlowModel(pl.LightningModule):
             lr_scheduler = get_cosine_schedule_with_warmup(
                 optimizer, num_warmup_steps=2000, num_training_steps=200000
             )
-
-            lr_scheduler = self.lr_scheduler(optimizer)
             return dict(
                 optimizer=optimizer,
                 lr_scheduler={
