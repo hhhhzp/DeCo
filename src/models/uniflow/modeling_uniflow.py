@@ -1015,8 +1015,8 @@ class ChannelProjector(nn.Module):
     """
     Channel projector assuming SQUARE images.
     Features:
-    1. 2x spatial downsampling (Space-to-Depth) -> Projection
-    2. Projection -> 2x spatial upsampling (Depth-to-Space)
+    1. 2x spatial downsampling (Space-to-Depth) -> Norm -> Projection
+    2. Projection -> Norm -> 2x spatial upsampling (Depth-to-Space)
     """
 
     def __init__(self, vit_hidden_size, latent_ch):
@@ -1024,53 +1024,53 @@ class ChannelProjector(nn.Module):
         self.vit_hidden_size = vit_hidden_size
         self.latent_ch = latent_ch
 
-        # Space-to-Depth 导致通道数变 4 倍
+        # Space-to-Depth results in 4x channels
         in_dim_down = vit_hidden_size * 4
         out_dim_up = vit_hidden_size * 4
 
+        # Down path components
+        self.down_norm = UniFlowRMSNorm(in_dim_down, eps=1e-6)
         self.down_proj = FeedForward(
             dim=in_dim_down, hidden_dim=in_dim_down, out_dim=latent_ch
         )
+
+        # Up path components
+        self.up_norm = UniFlowRMSNorm(out_dim_up, eps=1e-6)
         self.up_proj = FeedForward(
             dim=latent_ch, hidden_dim=out_dim_up, out_dim=out_dim_up
         )
 
     def downsample_and_project(self, x):
         """
-        Args:
-            x: [B, N, C]
-        Returns:
-            x_latent: [B, N/4, latent_ch]
+        Args: x: [B, N, C] (N must be square)
+        Returns: x_latent: [B, N/4, latent_ch]
         """
         B, N, C = x.shape
-        # 既然是正方形，直接开方
         H = W = int(N**0.5)
 
-        # 1. Space-to-Depth: [B, H, W, C] -> [B, H/2, W/2, 4C] -> [B, N/4, 4C]
-        # 这里 h 和 w 是下采样后特征图的高宽 (H/2)
+        # 1. Space-to-Depth: [B, H, W, C] -> [B, N/4, 4C]
         x = rearrange(
             x, 'b (h h2 w w2) c -> b (h w) (c h2 w2)', h=H // 2, w=W // 2, h2=2, w2=2
         )
 
-        # 2. Projection
-        x_latent = self.down_proj(x)
+        # 2. Norm -> Projection
+        # Pre-Norm on the high-dimensional spatial features
+        x_latent = self.down_proj(self.down_norm(x))
         return x_latent
 
     def project_and_upsample(self, x_latent):
         """
-        Args:
-            x_latent: [B, N/4, latent_ch]
-        Returns:
-            x: [B, N, C]
+        Args: x_latent: [B, N/4, latent_ch]
+        Returns: x: [B, N, C]
         """
         B, N_latent, C_latent = x_latent.shape
-        # 从 latent 倒推当前的 grid size
         H_latent = W_latent = int(N_latent**0.5)
 
-        # 1. Projection
-        x_up = self.up_proj(x_latent)
+        # 1. Projection -> Norm
+        # Post-Norm to stabilize features before PixelShuffle
+        x_up = self.up_norm(self.up_proj(x_latent))
 
-        # 2. Depth-to-Space: [B, H_lat, W_lat, 4C] -> [B, H_lat*2, W_lat*2, C]
+        # 2. Depth-to-Space: [B, N/4, 4C] -> [B, N, C]
         x = rearrange(
             x_up,
             'b (h w) (c h2 w2) -> b (h h2 w w2) c',
@@ -1079,7 +1079,6 @@ class ChannelProjector(nn.Module):
             h2=2,
             w2=2,
         )
-
         return x
 
 
