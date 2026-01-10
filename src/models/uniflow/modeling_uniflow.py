@@ -1011,23 +1011,12 @@ class SimpleMLPAdaLN(nn.Module):
         return self.final_layer(x, y)
 
 
-class ProjectorBlock(nn.Module):
-    """
-    Standard Pre-Norm Residual Block: x = x + MLP(Norm(x))
-    """
-
-    def __init__(self, dim, hidden_dim):
-        super().__init__()
-        self.norm = UniFlowRMSNorm(dim, eps=1e-6)
-        self.mlp = FeedForward(dim=dim, hidden_dim=hidden_dim)
-
-    def forward(self, x):
-        return x + self.mlp(self.norm(x))
-
-
 class ChannelProjector(nn.Module):
     """
-    Channel projector with Asymmetric or Symmetric ResBlock structure.
+    Channel projector assuming SQUARE images.
+    Features:
+    1. 2x spatial downsampling (Space-to-Depth) -> Norm -> Projection
+    2. Projection -> Norm -> 2x spatial upsampling (Depth-to-Space)
     """
 
     def __init__(self, vit_hidden_size, latent_ch):
@@ -1035,48 +1024,53 @@ class ChannelProjector(nn.Module):
         self.vit_hidden_size = vit_hidden_size
         self.latent_ch = latent_ch
 
-        # Dimensions
-        dim_4c = vit_hidden_size * 4
-        dim_2c = vit_hidden_size * 2
-        self.down_model = nn.Sequential(
-            nn.Linear(dim_4c, dim_2c, bias=False),
-            ProjectorBlock(dim=dim_2c, hidden_dim=dim_2c),
-            UniFlowRMSNorm(dim_2c, eps=1e-6),
-            nn.Linear(dim_2c, latent_ch, bias=False),
-        )
-        self.up_model = nn.Sequential(
-            nn.Linear(latent_ch, dim_2c, bias=False),  # 64 -> 2048
-            ProjectorBlock(dim=dim_2c, hidden_dim=dim_2c),
-            nn.Linear(dim_2c, dim_4c, bias=False),
-            UniFlowRMSNorm(dim_4c, eps=1e-6),  # Stabilize before PixelShuffle
+        # Space-to-Depth results in 4x channels
+        in_dim_down = vit_hidden_size * 4
+        out_dim_up = vit_hidden_size * 4
+
+        # Down path components
+        self.down_norm = UniFlowRMSNorm(in_dim_down, eps=1e-6)
+        self.down_proj = FeedForward(
+            dim=in_dim_down, hidden_dim=in_dim_down, out_dim=latent_ch
         )
 
-        self.apply(self._init_weights)
-
-    def _init_weights(self, m):
-        if isinstance(m, nn.Linear):
-            nn.init.xavier_uniform_(m.weight)
-            if m.bias is not None:
-                nn.init.constant_(m.bias, 0)
+        # Up path components
+        self.up_norm = UniFlowRMSNorm(out_dim_up, eps=1e-6)
+        self.up_proj = FeedForward(
+            dim=latent_ch, hidden_dim=out_dim_up, out_dim=out_dim_up
+        )
 
     def downsample_and_project(self, x):
+        """
+        Args: x: [B, N, C] (N must be square)
+        Returns: x_latent: [B, N/4, latent_ch]
+        """
         B, N, C = x.shape
         H = W = int(N**0.5)
 
-        # Space-to-Depth
+        # 1. Space-to-Depth: [B, H, W, C] -> [B, N/4, 4C]
         x = rearrange(
             x, 'b (h h2 w w2) c -> b (h w) (c h2 w2)', h=H // 2, w=W // 2, h2=2, w2=2
         )
-        return self.down_model(x)
+
+        # 2. Norm -> Projection
+        # Pre-Norm on the high-dimensional spatial features
+        x_latent = self.down_proj(self.down_norm(x))
+        return x_latent
 
     def project_and_upsample(self, x_latent):
+        """
+        Args: x_latent: [B, N/4, latent_ch]
+        Returns: x: [B, N, C]
+        """
         B, N_latent, C_latent = x_latent.shape
         H_latent = W_latent = int(N_latent**0.5)
 
-        # Up Model
-        x_up = self.up_model(x_latent)
+        # 1. Projection -> Norm
+        # Post-Norm to stabilize features before PixelShuffle
+        x_up = self.up_norm(self.up_proj(x_latent))
 
-        # Depth-to-Space
+        # 2. Depth-to-Space: [B, N/4, 4C] -> [B, N, C]
         x = rearrange(
             x_up,
             'b (h w) (c h2 w2) -> b (h h2 w w2) c',
