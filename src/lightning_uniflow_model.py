@@ -137,7 +137,7 @@ class LightningUniFlowModel(pl.LightningModule):
     def configure_model(self) -> None:
         """Initialize model weights and load pretrained checkpoints"""
         self.trainer.strategy.barrier()
-        # Initialize teacher model if distillation is enabled
+        self.init_vision_model()
         if self.distill:
             self.init_teacher_model()
 
@@ -147,7 +147,7 @@ class LightningUniFlowModel(pl.LightningModule):
             msg = self.load_state_dict(checkpoint['state_dict'], strict=False)
             if self.global_rank == 0:
                 print(f"Loaded pretrained model from {self.pretrain_model_path}: {msg}")
-        self.init_vision_model()
+
         # Copy parameters to EMA model
         if self.use_ema:
             copy_params(src_model=self.model, dst_model=self.ema_model)
@@ -206,7 +206,7 @@ class LightningUniFlowModel(pl.LightningModule):
 
         if self.distill:
             lr_scheduler = get_cosine_schedule_with_warmup(
-                optimizer, num_warmup_steps=2000
+                optimizer, num_warmup_steps=2000, num_training_steps=200000
             )
 
             lr_scheduler = self.lr_scheduler(optimizer)
