@@ -49,7 +49,7 @@ class LightningUniFlowModel(pl.LightningModule):
         eval_original_model: bool = False,
         pretrain_model_path: str = None,
         use_ema: bool = True,
-        distill: bool = True,
+        distill: bool = False,
     ):
         super().__init__()
         config = UniFlowVisionConfig.from_pretrained(config_path)
