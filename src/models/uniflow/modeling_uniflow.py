@@ -1319,7 +1319,6 @@ class UniFlowVisionModel(PreTrainedModel):
 
         # 4. Combine losses
         return {
-            'loss': flow_loss + distill_loss,
             'flow_loss': flow_loss,
             'distill_loss': distill_loss,
         }
