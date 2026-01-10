@@ -23,7 +23,13 @@ from src.models.uniflow.configuration_uniflow import UniFlowVisionConfig
 from src.callbacks.simple_ema import SimpleEMA
 from src.utils.no_grad import no_grad, filter_nograd_tensors
 from src.utils.copy import copy_params
-from transformers import AutoModel, AutoConfig, get_constant_schedule_with_warmup
+from transformers import (
+    AutoModel,
+    AutoConfig,
+    get_constant_schedule_with_warmup,
+)
+from torch.optim.lr_scheduler import LambdaLR, ReduceLROnPlateau
+from transformers.optimization import get_cosine_with_min_lr_schedule_with_warmup
 
 # Log to wandb
 import wandb
@@ -200,16 +206,22 @@ class LightningUniFlowModel(pl.LightningModule):
             {"params": other_params},  # Default learning rate
             {
                 "params": vision_encoder_params,
-                "lr": 1e-4,
+                "lr": 5e-5,
             },  # Lower learning rate for vision encoder
         ]
 
         optimizer: torch.optim.Optimizer = self.optimizer(param_groups)
 
         if self.distill:
-            lr_scheduler = get_cosine_schedule_with_warmup(
-                optimizer, num_warmup_steps=2000, num_training_steps=200000
+            lr_scheduler = get_cosine_with_min_lr_schedule_with_warmup(
+                optimizer,
+                num_warmup_steps=10000,
+                num_training_steps=200000,
+                min_lr=5e-5,
             )
+            # get_cosine_schedule_with_warmup(
+            #     optimizer, num_warmup_steps=2000, num_training_steps=200000
+            # )
             return dict(
                 optimizer=optimizer,
                 lr_scheduler={
