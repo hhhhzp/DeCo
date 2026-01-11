@@ -1,7 +1,7 @@
 # lightning.pytorch==2.4.0
 seed_everything: true
 tags:
-  exp: &exp uniflow_internvit_2b_r28_trans
+  exp: &exp uniflow_internvit_2b_r28_mlp_c32
 torch_hub_dir: ~/.cache/torch/hub
 huggingface_cache_dir: null
 
@@ -21,7 +21,7 @@ trainer:
         name: *exp
   num_sanity_val_steps: 0
   max_steps: 200100
-  val_check_interval: 2500
+  val_check_interval: 10
   check_val_every_n_epoch: null
   log_every_n_steps: 10
   deterministic: null

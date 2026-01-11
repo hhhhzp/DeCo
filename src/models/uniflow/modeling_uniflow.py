@@ -684,71 +684,73 @@ class FlowDecoder(nn.Module):
         # Learnable mask token for CFG training
         self.mask_token = nn.Parameter(torch.zeros(1, 1, z_channels))
 
-    def forward_train(self, x1, z, pos):
+    def forward_train(self, x1, z):
         """
-        Training forward pass for flow matching with [B, N, C] logic.
+        Training forward pass for flow matching.
+        Args:
+            x1: target clean data [B, N, C] where C = target_channels
+            z: condition from encoder [B, N, C_z]
+        Returns:
+            loss: flow matching loss
         """
         b, n, c = x1.shape
         assert (
             c == self.target_channels
         ), f"Expected {self.target_channels} channels, got {c}"
-
-        # 1. CFG Masking: 使用 learnable mask_token (10% dropout)
-        # 形状为 [B, 1, 1] 确保整个 batch 维度的 condition 同时被 mask
         cfg_mask = torch.rand((b, 1, 1), device=z.device) > 0.1
-        z_masked = z * cfg_mask + self.mask_token * (~cfg_mask)
+        z = z * cfg_mask + self.mask_token * (~cfg_mask)
+        # Apply NerfEmbedder to condition tokens
+        z = self.nerf_embedder(z)
 
-        # 2. Apply NerfEmbedder
-        z_embed = self.nerf_embedder(z_masked)
+        # Flatten batch and sequence dimensions
+        x1 = x1.reshape(b * n, c)
+        z = z.reshape(b * n, -1)
 
-        # 3. Sample noise x0
+        # Sample noise x0
         x0 = torch.randn_like(x1)
 
-        # 4. Sample token-wise timestep t (logit-normal)
-        nt = torch.randn((b), device=x1.device)
+        # Sample timestep t using logit-normal distribution
+        # Logit-Normal: t = sigmoid(nt) where nt ~ N(0, 1)
+        nt = torch.randn((b * n,), device=x1.device)
         t = torch.sigmoid(nt)
         # 90% logit-normal, 10% uniform
         t = torch.where(torch.rand_like(t) <= 0.9, t, torch.rand_like(t))
-        timesteps = t * 1000
 
-        t = t.view([b, *([1] * len(x1.shape[1:]))])
-        # 5. Interpolate: x_t = t * x1 + (1 - t) * x0
-        x_t = t * x1 + (1 - t) * x0
+        # Interpolate between x0 and x1: x_t = t * x1 + (1 - t) * x0
+        t_expanded = t.view(-1, 1)
+        x_t = t_expanded * x1 + (1 - t_expanded) * x0
 
-        # 6. Target velocity
+        # Target velocity: v_target = x1 - x0
         v_target = x1 - x0
 
-        # 7. Predict velocity: 输入形状均为 [B, N, C]
+        # Predict velocity
+        timesteps = t * 1000  # scale to [0, 1000]
+        xc = x_t
+        if self.noise_concat:
+            xc = torch.cat([x_t, z], dim=-1)
+        v_pred = self.net(x=xc, t=timesteps, c=z)
 
-        v_pred = self.net(x=x_t, t=timesteps, c=z_embed, pos=pos)
-
-        # 8. Compute MSE loss
+        # Compute MSE loss
         loss = F.mse_loss(v_pred, v_target)
+
         return loss
 
     @torch.no_grad()
-    def forward(self, z, pos, schedule="linear", cfg=1.0, cfg_interval=None):
-        """
-        Inference forward pass.
-        """
+    def forward(self, z, schedule="linear", cfg=1.0, cfg_interval=None):
+
         b, n, c_z = z.shape
 
-        # 1. 准备 Condition Embeddings (Cond & Uncond)
-        z_cond = self.nerf_embedder(z)
+        # Apply NerfEmbedder to condition tokens
+        z = self.nerf_embedder(z)
 
-        z_uncond = None
-        if cfg != 1.0:
-            # 推理时使用训练好的 mask_token 并通过相同的 embedder
-            mask_input = self.mask_token.expand(b, n, -1)
-            z_uncond = self.nerf_embedder(mask_input)
-
+        z = z.reshape(b * n, c_z)
         sample_steps = self.num_sampling_steps
 
-        # 2. 生成时间步序列 ts 和 dts
+        # get all timesteps ts and intervals Δts
         if schedule == "linear":
             ts = torch.arange(1, sample_steps + 1).flip(0) / sample_steps
             dts = torch.ones_like(ts) * (1.0 / sample_steps)
-        elif schedule.startswith("pow"):
+        elif schedule.startswith("pow"):  # "pow_0.25"
             p = float(schedule.split("_")[1])
             ts = torch.arange(0, sample_steps + 1).flip(0) ** (
                 1 / p
@@ -758,43 +760,47 @@ class FlowDecoder(nn.Module):
             raise NotImplementedError
         ts = 1 - ts
 
-        # 3. CFG interval 处理
-        if cfg_interval is None:
+        # cfg interval
+        if cfg_interval is None:  # cfg_interval = "(.17,1.02)"
             interval = None
         else:
             cfg_lo, cfg_hi = ast.literal_eval(cfg_interval)
-            interval = _edm_to_flow_convention(cfg_lo), _edm_to_flow_convention(cfg_hi)
+            interval = self._edm_to_flow_convention(
+                cfg_lo
+            ), self._edm_to_flow_convention(cfg_hi)
 
-        # 4. 迭代采样: Noise X0 -> Clean X1
-        x = torch.randn(b, n, self.in_channels, device=z.device, dtype=z.dtype)
+        # sampling (sample_steps) steps: noise X0 -> clean X1
+        trajs = []
+        x = torch.randn(b * n, self.in_channels).cuda()  # noise start [b,n,c]
+        x = x.to(z.dtype)
 
-        for i, (t, dt) in enumerate(zip(ts, dts)):
-            # 扩展 t 为 [B] 以匹配训练时的输入格式
-            timesteps = torch.full((b,), t.item() * 1000, device=z.device)
+        null_z = z.clone() * 0.0 if cfg != 1.0 else None
+        for i, (t, dt) in enumerate((zip(ts, dts))):
+            timesteps = torch.tensor([t] * (b * n)).to(z.device)
 
-            # --- Conditional Pass ---
             xc = x
             if self.noise_concat:
-                xc = torch.cat([x, z_cond], dim=-1)
-            vc = self.net(x=xc, t=timesteps, c=z_cond, pos=pos)
+                xc = torch.cat([x, z], dim=-1)  # c: 192 + 768 = 960
+            vc = self.net(x=xc, t=1000 * timesteps, c=z)  # conditional v
 
-            # --- Classifier Free Guidance ---
-            if z_uncond is not None and (
+            # classifier free guidance
+            if null_z is not None and (
                 interval is None
-                or (t.item() >= interval[0] and t.item() <= interval[1])
+                or ((t.item() >= interval[0]) and (t.item() <= interval[1]))
             ):
                 xu = x
                 if self.noise_concat:
-                    xu = torch.cat([x, z_uncond], dim=-1)
-                vu = self.net(x=xu, t=timesteps, c=z_uncond, pos=pos)
+                    xu = torch.cat([x, null_z], dim=-1)  # c: 192 + 768=960
+                vu = self.net(x=xu, t=1000 * timesteps, c=null_z)  # unconditional v
                 vc = vu + cfg * (vc - vu)
 
-            # 更新变量
+            # update x
             x = x + dt * vc
+            trajs.append(x)
 
-        # 5. 还原为图像空间
+        sampled_token = trajs[-1]
         sampled_image = l2p_transform_tensor(
-            x,  # 形状已经是 [B, N, C]
+            sampled_token.reshape(b, n, self.in_channels),
             patch_size=self.patch_size,
         )
         return sampled_image
@@ -851,6 +857,37 @@ class TimestepEmbedder(nn.Module):
         return t_emb
 
 
+# class ResBlock(nn.Module):
+#     """
+#     A residual block with attention and feedforward layers.
+#     :param channels: the number of input channels.
+#     :param num_heads: number of attention heads (default: 8).
+#     :param mlp_ratio: ratio for mlp hidden dimension (default: 4).
+#     """
+
+#     def __init__(self, channels, num_heads=8, mlp_ratio=4):
+#         super().__init__()
+#         self.channels = channels
+
+#         self.norm1 = UniFlowRMSNorm(channels, eps=1e-6)
+#         self.attn = Attention(channels, num_heads=num_heads, qkv_bias=False)
+#         self.norm2 = UniFlowRMSNorm(channels, eps=1e-6)
+#         mlp_hidden_dim = int(channels * mlp_ratio)
+#         self.mlp = FeedForward(channels, mlp_hidden_dim)
+
+#         self.adaLN_modulation = nn.Sequential(
+#             nn.SiLU(), nn.Linear(channels, 6 * channels, bias=True)
+#         )
+
+#     def forward(self, x, y, pos):
+#         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
+#             self.adaLN_modulation(y).chunk(6, dim=-1)
+#         )
+#         x = x + gate_msa * self.attn(modulate(self.norm1(x), shift_msa, scale_msa), pos)
+#         x = x + gate_mlp * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
+#         return x
+
+
 class ResBlock(nn.Module):
     """
     A residual block with attention and feedforward layers.
@@ -863,22 +900,17 @@ class ResBlock(nn.Module):
         super().__init__()
         self.channels = channels
 
-        self.norm1 = UniFlowRMSNorm(channels, eps=1e-6)
-        self.attn = Attention(channels, num_heads=num_heads, qkv_bias=False)
-        self.norm2 = UniFlowRMSNorm(channels, eps=1e-6)
+        self.norm = UniFlowRMSNorm(channels, eps=1e-6)
         mlp_hidden_dim = int(channels * mlp_ratio)
-        self.mlp = FeedForward(channels, mlp_hidden_dim)
+        self.mlp = FeedForward(channels, channels)
 
         self.adaLN_modulation = nn.Sequential(
-            nn.SiLU(), nn.Linear(channels, 6 * channels, bias=True)
+            nn.SiLU(), nn.Linear(channels, 3 * channels, bias=True)
         )
 
     def forward(self, x, y, pos):
-        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
-            self.adaLN_modulation(y).chunk(6, dim=-1)
-        )
-        x = x + gate_msa * self.attn(modulate(self.norm1(x), shift_msa, scale_msa), pos)
-        x = x + gate_mlp * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
+        shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(y).chunk(3, dim=-1)
+        x = x + gate_mlp * self.mlp(modulate(self.norm(x), shift_mlp, scale_mlp))
         return x
 
 
