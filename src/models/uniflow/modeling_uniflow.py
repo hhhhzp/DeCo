@@ -1024,8 +1024,6 @@ class SimpleMLPAdaLN(nn.Module):
             res_blocks.append(
                 ResBlock(
                     model_channels,
-                    num_heads=num_heads,
-                    mlp_ratio=mlp_ratio,
                 )
             )
 
