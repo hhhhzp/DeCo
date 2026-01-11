@@ -1210,6 +1210,18 @@ class ChannelProjectorV2(nn.Module):
             )
         )
         self.up_norm = UniFlowRMSNorm(vit_hidden_size, eps=1e-6)
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            torch.nn.init.xavier_uniform_(m.weight)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+            if m.weight is not None:
+                nn.init.constant_(m.weight, 1.0)
 
     def downsample_and_project(self, x):
         """
