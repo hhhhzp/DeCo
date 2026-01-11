@@ -1016,7 +1016,7 @@ class SimpleMLPAdaLN(nn.Module):
         :return: an [N x C] Tensor of outputs.
         """
         x = self.input_proj(x)
-        t = self.time_embed(t)
+        t = self.time_embed(t).unsqueeze(1)
         c = self.cond_embed(c)
 
         y = t + c
