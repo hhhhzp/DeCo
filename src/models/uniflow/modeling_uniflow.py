@@ -1209,18 +1209,6 @@ class ChannelProjectorV2(nn.Module):
                 ]
             )
         )
-        self.apply(self._init_weights)
-
-    def _init_weights(self, m):
-        if isinstance(m, nn.Linear):
-            torch.nn.init.xavier_uniform_(m.weight)
-            if isinstance(m, nn.Linear) and m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.LayerNorm):
-            if m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-            if m.weight is not None:
-                nn.init.constant_(m.weight, 1.0)
 
     def downsample_and_project(self, x):
         """
@@ -1361,7 +1349,7 @@ class UniFlowVisionModel(PreTrainedModel):
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
-            torch.nn.init.xavier_uniform_(m.weight)
+            trunc_normal_(m.weight, std=0.02)
             if isinstance(m, nn.Linear) and m.bias is not None:
                 nn.init.constant_(m.bias, 0)
         elif isinstance(m, nn.LayerNorm):
