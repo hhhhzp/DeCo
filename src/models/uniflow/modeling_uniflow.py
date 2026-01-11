@@ -1209,7 +1209,6 @@ class ChannelProjectorV2(nn.Module):
                 ]
             )
         )
-        self.up_norm = UniFlowRMSNorm(vit_hidden_size, eps=1e-6)
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
@@ -1278,7 +1277,7 @@ class ChannelProjectorV2(nn.Module):
         # 4. Reshape back to sequence [B, N, vit_hidden_size]
         x = x.permute(0, 2, 3, 1).reshape(B, -1, self.vit_hidden_size)
 
-        return self.up_norm(x)
+        return x
 
 
 #############################################################
