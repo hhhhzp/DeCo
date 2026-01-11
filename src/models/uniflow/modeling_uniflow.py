@@ -705,7 +705,7 @@ class FlowDecoder(nn.Module):
         x0 = torch.randn_like(x1)
 
         # 4. Sample token-wise timestep t (logit-normal)
-        nt = torch.randn((b, n, 1), device=x1.device)
+        nt = torch.randn((b), device=x1.device)
         t = torch.sigmoid(nt)
         # 90% logit-normal, 10% uniform
         t = torch.where(torch.rand_like(t) <= 0.9, t, torch.rand_like(t))
@@ -718,6 +718,9 @@ class FlowDecoder(nn.Module):
 
         # 7. Predict velocity: 输入形状均为 [B, N, C]
         timesteps = t * 1000  # [B, N, 1]
+        import pdb
+
+        pdb.set_trace()
         v_pred = self.net(x=x_t, t=timesteps, c=z_embed, pos=pos)
 
         # 8. Compute MSE loss
