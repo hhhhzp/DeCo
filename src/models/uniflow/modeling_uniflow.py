@@ -1132,8 +1132,24 @@ class UniFlowVisionModel(PreTrainedModel):
         self.latent_ch = config.latent_ch
         if self.use_chal_proj:
             # Channel projector with 2x downsampling and upsampling
-            self.channel_projector = ChannelProjector(
-                vit_hidden_size=vit_hidden_size, latent_ch=self.latent_ch
+            self.chal_proj = nn.Sequential(
+                OrderedDict(
+                    [
+                        ("c_fc", nn.Linear(vit_hidden_size, vit_hidden_size)),
+                        ("gelu", nn.GELU()),
+                        ("c_proj", nn.Linear(vit_hidden_size, self.latent_ch)),
+                    ]
+                )
+            )
+            # up project to hidden_size
+            self.chal_unproj = nn.Sequential(
+                OrderedDict(
+                    [
+                        ("c_fc", nn.Linear(self.latent_ch, vit_hidden_size)),
+                        ("gelu", nn.GELU()),
+                        ("c_proj", nn.Linear(vit_hidden_size, vit_hidden_size)),
+                    ]
+                )
             )
 
         # global transformer blocks
@@ -1259,38 +1275,36 @@ class UniFlowVisionModel(PreTrainedModel):
             inputs_embeds=x,
             output_hidden_states=True,
         )
-        sem_feat = encoder_outputs.last_hidden_state[:, 1:]  # Remove CLS token
+        sem_tokens = encoder_outputs.last_hidden_state[:, 1:]  # Remove CLS token
 
         # 3. Channel projection for generation branch with 2x downsampling and upsampling
-        B, N, C = sem_feat.shape
+        B, N, C = sem_tokens.shape
         grid = int(N**0.5)
 
         # Downsample and project
-        gen_feat_latent = self.channel_projector.downsample_and_project(sem_feat)
-        # Project and upsample
-        gen_feat = self.channel_projector.project_and_upsample(gen_feat_latent)
-
+        latent_tokens = self.chal_proj(sem_tokens)
+        condition_tokens = self.chal_unproj(latent_tokens)
         # 4. Apply global blocks with RoPE
-        B, N, C = gen_feat.shape
+        B, N, C = condition_tokens.shape
         grid = int(N**0.5)
         pos_embed = self._get_pos_embed(self.global_block_pos_embed, grid, grid)
-        gen_feat = gen_feat + pos_embed
+        condition_tokens = condition_tokens + pos_embed
 
-        pos = self.fetch_pos(grid, grid, gen_feat.device)
+        pos = self.fetch_pos(grid, grid, condition_tokens.device)
         for block in self.global_blocks:
-            gen_feat = block(gen_feat, pos)
+            condition_tokens = block(condition_tokens, pos)
 
         # 5. Return with optional distillation loss
         if teacher_feat is not None:
             distill_loss = F.mse_loss(
-                self.forward_feature(sem_feat), teacher_feat.detach()
+                self.forward_feature(sem_tokens), teacher_feat.detach()
             )
         else:
             distill_loss = torch.tensor(
-                0.0, device=gen_feat.device, dtype=gen_feat.dtype
+                0.0, device=condition_tokens.device, dtype=condition_tokens.dtype
             )
 
-        return gen_feat, distill_loss
+        return condition_tokens, distill_loss
 
     def forward_loss(self, target_pixel_values, teacher_feat=None):
         """
