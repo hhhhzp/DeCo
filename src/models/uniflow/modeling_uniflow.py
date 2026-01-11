@@ -643,6 +643,11 @@ class NerfEmbedder(nn.Module):
         return inputs
 
 
+def _edm_to_flow_convention(noise_level):
+    # z = x + \sigma z'
+    return noise_level / (1 + noise_level)
+
+
 class FlowDecoder(nn.Module):
     """patch-wise pixel flow decoder (rectified flow)"""
 
@@ -748,6 +753,12 @@ class FlowDecoder(nn.Module):
     @torch.no_grad()
     def forward(self, z, schedule="linear", cfg=1.0, cfg_interval=None):
 
+        # ========== Temporary parameter override (comment out to disable) ==========
+        schedule = "pow_0.25"
+        cfg = 1.5
+        cfg_interval = "(.17,1.02)"
+        # ===========================================================================
+
         b, n, c_z = z.shape
 
         # Apply NerfEmbedder to condition tokens
@@ -775,9 +786,7 @@ class FlowDecoder(nn.Module):
             interval = None
         else:
             cfg_lo, cfg_hi = ast.literal_eval(cfg_interval)
-            interval = self._edm_to_flow_convention(
-                cfg_lo
-            ), self._edm_to_flow_convention(cfg_hi)
+            interval = _edm_to_flow_convention(cfg_lo), _edm_to_flow_convention(cfg_hi)
 
         # sampling (sample_steps) steps: noise X0 -> clean X1
         trajs = []
