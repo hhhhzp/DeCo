@@ -293,6 +293,7 @@ class FeedForward(nn.Module):
         super().__init__()
         if out_dim is None:
             out_dim = dim
+        hidden_dim = (int(hidden_dim * 2 / 3) + 7) // 8 * 8
         self.w12 = nn.Linear(dim, hidden_dim * 2, bias=False)
         self.w3 = nn.Linear(hidden_dim, out_dim, bias=False)
 
@@ -1194,7 +1195,7 @@ class ChannelProjectorV2(nn.Module):
         self.down_blocks = nn.ModuleList(
             [ProjectorBlock(vit_hidden_size) for _ in range(3)]
         )
-
+        self.down_norm = UniFlowRMSNorm(vit_hidden_size, eps=1e-6)
         self.down_linear2 = nn.Linear(vit_hidden_size, latent_ch)
 
         # --- Upsample path ---
@@ -1208,6 +1209,7 @@ class ChannelProjectorV2(nn.Module):
                 ]
             )
         )
+        self.up_norm = UniFlowRMSNorm(vit_hidden_size, eps=1e-6)
 
     def downsample_and_project(self, x):
         """
@@ -1229,12 +1231,14 @@ class ChannelProjectorV2(nn.Module):
         x = x.permute(0, 2, 3, 1).reshape(B, -1, 4 * C)
 
         # 4. Linear projection to vit_hidden_size
+
         x = self.down_linear1(x)
 
         # 5. Apply blocks (Original code passed 'cond' but block definition didn't use it. removed.)
         for block in self.down_blocks:
             x = block(x)
 
+        x = self.down_norm(x)
         # 6. Final projection to latent_ch
         x_latent = self.down_linear2(x)
 
@@ -1262,7 +1266,7 @@ class ChannelProjectorV2(nn.Module):
         # 4. Reshape back to sequence [B, N, vit_hidden_size]
         x = x.permute(0, 2, 3, 1).reshape(B, -1, self.vit_hidden_size)
 
-        return x
+        return self.up_norm(x)
 
 
 #############################################################
