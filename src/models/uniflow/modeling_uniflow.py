@@ -192,6 +192,7 @@ class Attention(nn.Module):
         attn_drop: float = 0.0,
         proj_drop: float = 0.0,
         is_causal=False,
+        use_flash_attn: bool = True,
     ) -> None:
         super().__init__()
         assert dim % num_heads == 0, 'dim should be divisible by num_heads'
@@ -208,8 +209,12 @@ class Attention(nn.Module):
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
         self.is_causal = is_causal
+        self.use_flash_attn = use_flash_attn and has_flash_attn
 
-    def forward(self, x: torch.Tensor, pos) -> torch.Tensor:
+        if self.use_flash_attn:
+            self.inner_attn = FlashAttention(attention_dropout=attn_drop)
+
+    def _naive_attn(self, x: torch.Tensor, pos) -> torch.Tensor:
         B, N, C = x.shape
         qkv = (
             self.qkv(x)
@@ -232,6 +237,50 @@ class Attention(nn.Module):
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
+
+    def _flash_attn(self, x: torch.Tensor, pos) -> torch.Tensor:
+        B, N, C = x.shape
+        qkv = (
+            self.qkv(x)
+            .reshape(B, N, 3, self.num_heads, C // self.num_heads)
+            .permute(2, 0, 3, 1, 4)
+        )
+        q, k, v = qkv[0], qkv[1], qkv[2]
+
+        # Apply normalization
+        q = self.q_norm(q.contiguous())
+        k = self.k_norm(k.contiguous())
+
+        # Apply RoPE
+        q, k = apply_rotary_emb(q, k, freqs_cis=pos)
+
+        # Rearrange for FlashAttention: [B, H, N, D] -> [B, N, H, D]
+        q = q.transpose(1, 2).contiguous()
+        k = k.transpose(1, 2).contiguous()
+        v = v.transpose(1, 2).contiguous()
+
+        # Stack qkv for FlashAttention: [B, N, 3, H, D]
+        qkv = torch.stack([q, k, v], dim=2)
+
+        # Apply FlashAttention
+        context, _ = self.inner_attn(
+            qkv,
+            key_padding_mask=None,
+            need_weights=False,
+            causal=self.is_causal,
+        )
+
+        # Reshape output: [B, N, H, D] -> [B, N, C]
+        x = rearrange(context, 'b n h d -> b n (h d)')
+        x = self.proj(x)
+        x = self.proj_drop(x)
+        return x
+
+    def forward(self, x: torch.Tensor, pos) -> torch.Tensor:
+        if self.use_flash_attn:
+            return self._flash_attn(x, pos)
+        else:
+            return self._naive_attn(x, pos)
 
 
 class FeedForward(nn.Module):
@@ -1154,8 +1203,14 @@ class ChannelProjectorV2(nn.Module):
 
         # --- Upsample path ---
         # 需要输出 4 * vit_hidden_size 以便 PixelShuffle 后变回 vit_hidden_size
-        self.up_proj = FeedForward(
-            dim=latent_ch, hidden_dim=4 * vit_hidden_size, out_dim=4 * vit_hidden_size
+        self.up_proj = nn.Sequential(
+            OrderedDict(
+                [
+                    ("c_fc", nn.Linear(self.latent_ch, 4 * vit_hidden_size)),
+                    ("gelu", nn.GELU()),
+                    ("c_proj", nn.Linear(4 * vit_hidden_size, 4 * vit_hidden_size)),
+                ]
+            )
         )
 
     def downsample_and_project(self, x):
