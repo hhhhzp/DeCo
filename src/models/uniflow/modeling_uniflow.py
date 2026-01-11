@@ -1411,11 +1411,8 @@ class UniFlowVisionModel(PreTrainedModel):
         assert x.ndim == 4, f'wrong pixel_values size: {x.shape}'
 
         # 1. Normalize and embed
-        print(f"[DEBUG] Input x dtype: {x.dtype}")
         x = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(x * 0.5 + 0.5)
-        print(f"[DEBUG] After normalize dtype: {x.dtype}")
         x = self.embeddings(x)
-        print(f"[DEBUG] After embeddings dtype: {x.dtype}")
 
         # 2. Extract features from encoder
         encoder_outputs = self.encoder(
@@ -1423,7 +1420,6 @@ class UniFlowVisionModel(PreTrainedModel):
             output_hidden_states=True,
         )
         sem_tokens = encoder_outputs.last_hidden_state[:, 1:]  # Remove CLS token
-        print(f"[DEBUG] sem_tokens dtype: {sem_tokens.dtype}")
 
         # 3. Channel projection for generation branch with 2x downsampling and upsampling
         B, N, C = sem_tokens.shape
@@ -1431,34 +1427,17 @@ class UniFlowVisionModel(PreTrainedModel):
 
         # Use new ChannelProjectorV2: downsample and project
         latent_tokens = self.channel_projector.downsample_and_project(sem_tokens)
-        print(f"[DEBUG] latent_tokens dtype: {latent_tokens.dtype}")
         condition_tokens = self.channel_projector.project_and_upsample(latent_tokens)
-        print(
-            f"[DEBUG] condition_tokens after upsample dtype: {condition_tokens.dtype}"
-        )
 
         # 4. Apply global blocks with RoPE
         B, N, C = condition_tokens.shape
         grid = int(N**0.5)
-        print(
-            f"[DEBUG] global_block_pos_embed dtype: {self.global_block_pos_embed.dtype}"
-        )
         pos_embed = self._get_pos_embed(self.global_block_pos_embed, grid, grid)
-        print(f"[DEBUG] pos_embed dtype: {pos_embed.dtype}")
         condition_tokens = condition_tokens + pos_embed
-        print(
-            f"[DEBUG] condition_tokens after adding pos_embed dtype: {condition_tokens.dtype}"
-        )
 
         pos = self.fetch_pos(grid, grid, condition_tokens.device)
         for block in self.global_blocks:
-            print(
-                f"[DEBUG] Before block, condition_tokens dtype: {condition_tokens.dtype}"
-            )
             condition_tokens = block(condition_tokens, pos)
-            print(
-                f"[DEBUG] After block, condition_tokens dtype: {condition_tokens.dtype}"
-            )
 
         # 5. Return with optional distillation loss
         if teacher_feat is not None:
