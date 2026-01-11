@@ -1021,6 +1021,8 @@ class SimpleMLPAdaLN(nn.Module):
         c = self.cond_embed(c)
 
         y = t + c
+
+        print(x.shape, y.shape)
         if self.grad_checkpointing and not torch.jit.is_scripting():
             for block in self.res_blocks:
                 x = checkpoint(block, x, y, pos)
