@@ -765,9 +765,7 @@ class FlowDecoder(nn.Module):
             interval = None
         else:
             cfg_lo, cfg_hi = ast.literal_eval(cfg_interval)
-            interval = self._edm_to_flow_convention(
-                cfg_lo
-            ), self._edm_to_flow_convention(cfg_hi)
+            interval = _edm_to_flow_convention(cfg_lo), _edm_to_flow_convention(cfg_hi)
 
         # sampling (sample_steps) steps: noise X0 -> clean X1
         trajs = []
