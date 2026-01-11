@@ -49,7 +49,7 @@ model:
   optimizer:
     class_path: torch.optim.AdamW
     init_args:
-      lr: 1e-4
+      lr: 2e-4
       weight_decay: 0.0
       betas: [0.9, 0.95]
   # Pretrained model path
