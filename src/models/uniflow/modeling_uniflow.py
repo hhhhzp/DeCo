@@ -247,10 +247,6 @@ class Attention(nn.Module):
         )
         q, k, v = qkv[0], qkv[1], qkv[2]
 
-        # Apply normalization
-        q = self.q_norm(q.contiguous())
-        k = self.k_norm(k.contiguous())
-
         # Apply RoPE
         q, k = apply_rotary_emb(q, k, freqs_cis=pos)
 
