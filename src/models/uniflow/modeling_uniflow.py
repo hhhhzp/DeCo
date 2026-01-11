@@ -718,9 +718,6 @@ class FlowDecoder(nn.Module):
 
         # 7. Predict velocity: 输入形状均为 [B, N, C]
         timesteps = t * 1000  # [B, N, 1]
-        import pdb
-
-        pdb.set_trace()
         v_pred = self.net(x=x_t, t=timesteps, c=z_embed, pos=pos)
 
         # 8. Compute MSE loss
