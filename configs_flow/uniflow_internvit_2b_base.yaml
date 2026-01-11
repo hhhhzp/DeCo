@@ -21,9 +21,9 @@ trainer:
         name: *exp
   num_sanity_val_steps: 0
   max_steps: 200100
-  val_check_interval: 10
+  val_check_interval: 2500
   check_val_every_n_epoch: null
-  log_every_n_steps: 2500
+  log_every_n_steps: 10
   deterministic: null
   inference_mode: true
   use_distributed_sampler: false
