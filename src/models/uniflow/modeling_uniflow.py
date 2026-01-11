@@ -851,35 +851,6 @@ class TimestepEmbedder(nn.Module):
         return t_emb
 
 
-# class ResBlock(nn.Module):
-#     """
-#     A residual block that can optionally change the number of channels.
-#     :param channels: the number of input channels.
-#     """
-
-#     def __init__(self, channels):
-#         super().__init__()
-#         self.channels = channels
-
-#         self.in_ln = nn.LayerNorm(channels, eps=1e-6)
-#         self.mlp = FeedForward(channels, channels)
-#         # nn.Sequential(
-#         #     nn.Linear(channels, channels, bias=True),
-#         #     nn.SiLU(),
-#         #     nn.Linear(channels, channels, bias=True),
-#         # )
-
-#         self.adaLN_modulation = nn.Sequential(
-#             nn.SiLU(), nn.Linear(channels, 3 * channels, bias=True)
-#         )
-
-#     def forward(self, x, y):
-#         shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(y).chunk(3, dim=-1)
-#         h = modulate(self.in_ln(x), shift_mlp, scale_mlp)
-#         h = self.mlp(h)
-#         return x + gate_mlp * h
-
-
 class ResBlock(nn.Module):
     """
     A residual block with attention and feedforward layers.
@@ -1101,6 +1072,112 @@ class ChannelProjector(nn.Module):
         return x
 
 
+class ProjectorBlock(nn.Module):
+    """
+    A residual block that maintains channel dimensions.
+    Structure: x + MLP(Norm(x))
+    """
+
+    def __init__(self, channels):
+        super().__init__()
+        self.channels = channels
+        self.norm = UniFlowRMSNorm(channels, eps=1e-6)
+        # 注意：原代码 FeedForward 参数为 (channels, channels)，这里假设 hidden_dim=channels
+        self.mlp = FeedForward(dim=channels, hidden_dim=channels, out_dim=channels)
+
+    def forward(self, x):
+        return x + self.mlp(self.norm(x))
+
+
+class ChannelProjectorV2(nn.Module):
+    """
+    Channel projector V2 with Pixel Shuffle/Unshuffle.
+
+    Architecture:
+    1. Downsample: PixelUnshuffle (2x) -> Linear -> 3x ProjectorBlock -> Linear
+    2. Upsample: Linear -> FeedForward -> PixelShuffle (2x)
+    """
+
+    def __init__(self, vit_hidden_size, latent_ch):
+        super().__init__()
+        self.vit_hidden_size = vit_hidden_size
+        self.latent_ch = latent_ch
+
+        # --- Downsample path ---
+        # PixelUnshuffle (downscale_factor=2) 将空间折叠进通道
+        # C -> C * 2^2 = 4C
+        in_dim_after_unshuffle = 4 * vit_hidden_size
+
+        self.down_linear1 = nn.Linear(in_dim_after_unshuffle, vit_hidden_size)
+
+        self.down_blocks = nn.ModuleList(
+            [ProjectorBlock(vit_hidden_size) for _ in range(3)]
+        )
+
+        self.down_linear2 = nn.Linear(vit_hidden_size, latent_ch)
+
+        # --- Upsample path ---
+        # 需要输出 4 * vit_hidden_size 以便 PixelShuffle 后变回 vit_hidden_size
+        self.up_proj = FeedForward(
+            dim=latent_ch, hidden_dim=4 * vit_hidden_size, out_dim=4 * vit_hidden_size
+        )
+
+    def downsample_and_project(self, x):
+        """
+        Args: x: [B, N, C] (N must be square, e.g., H*W)
+        Returns: x_latent: [B, N/4, latent_ch]
+        """
+        B, N, C = x.shape
+        H = W = int(N**0.5)
+        assert H * W == N, f"Input sequence length {N} must be a perfect square."
+
+        # 1. Reshape to image format [B, C, H, W] for pixel_unshuffle
+        x = x.view(B, H, W, C).permute(0, 3, 1, 2)  # -> [B, C, H, W]
+
+        # 2. Apply pixel_unshuffle (equivalent to scale_factor=0.5)
+        # Output: [B, 4*C, H/2, W/2]
+        x = F.pixel_unshuffle(x, downscale_factor=2)
+
+        # 3. Reshape back to sequence [B, N/4, 4*C]
+        x = x.permute(0, 2, 3, 1).reshape(B, -1, 4 * C)
+
+        # 4. Linear projection to vit_hidden_size
+        x = self.down_linear1(x)
+
+        # 5. Apply blocks (Original code passed 'cond' but block definition didn't use it. removed.)
+        for block in self.down_blocks:
+            x = block(x)
+
+        # 6. Final projection to latent_ch
+        x_latent = self.down_linear2(x)
+
+        return x_latent
+
+    def project_and_upsample(self, x_latent):
+        """
+        Args: x_latent: [B, N/4, latent_ch]
+        Returns: x: [B, N, C]
+        """
+        B, N_latent, _ = x_latent.shape
+        H_latent = W_latent = int(N_latent**0.5)
+
+        # 1. Apply upsampling projection -> [B, N_latent, 4*vit_hidden_size]
+        x = self.up_proj(x_latent)
+
+        # 2. Reshape to [B, C_up, H_latent, W_latent] for pixel_shuffle
+        # C_up is 4 * vit_hidden_size
+        x = x.view(B, H_latent, W_latent, -1).permute(0, 3, 1, 2)
+
+        # 3. Apply pixel_shuffle (2x upsample)
+        # Input: [B, 4*C, H, W] -> Output: [B, C, 2*H, 2*W]
+        x = F.pixel_shuffle(x, upscale_factor=2)
+
+        # 4. Reshape back to sequence [B, N, vit_hidden_size]
+        x = x.permute(0, 2, 3, 1).reshape(B, -1, self.vit_hidden_size)
+
+        return x
+
+
 #############################################################
 #                 UniFlowVisionModel
 #############################################################
@@ -1131,26 +1208,8 @@ class UniFlowVisionModel(PreTrainedModel):
         self.use_chal_proj = config.use_chal_proj
         self.latent_ch = config.latent_ch
         if self.use_chal_proj:
-            # Channel projector with 2x downsampling and upsampling
-            self.chal_proj = nn.Sequential(
-                OrderedDict(
-                    [
-                        ("c_fc", nn.Linear(vit_hidden_size, vit_hidden_size)),
-                        ("gelu", nn.GELU()),
-                        ("c_proj", nn.Linear(vit_hidden_size, self.latent_ch)),
-                    ]
-                )
-            )
-            # up project to hidden_size
-            self.chal_unproj = nn.Sequential(
-                OrderedDict(
-                    [
-                        ("c_fc", nn.Linear(self.latent_ch, vit_hidden_size)),
-                        ("gelu", nn.GELU()),
-                        ("c_proj", nn.Linear(vit_hidden_size, vit_hidden_size)),
-                    ]
-                )
-            )
+            # Use new ChannelProjectorV2 with pixel_shuffle and ProjectorBlock
+            self.channel_projector = ChannelProjectorV2(vit_hidden_size, self.latent_ch)
 
         # global transformer blocks
         self.global_blocks_depth = config.global_blocks_depth
@@ -1281,9 +1340,9 @@ class UniFlowVisionModel(PreTrainedModel):
         B, N, C = sem_tokens.shape
         grid = int(N**0.5)
 
-        # Downsample and project
-        latent_tokens = self.chal_proj(sem_tokens)
-        condition_tokens = self.chal_unproj(latent_tokens)
+        # Use new ChannelProjectorV2: downsample and project
+        latent_tokens = self.channel_projector.downsample_and_project(sem_tokens)
+        condition_tokens = self.channel_projector.project_and_upsample(latent_tokens)
         # 4. Apply global blocks with RoPE
         B, N, C = condition_tokens.shape
         grid = int(N**0.5)
