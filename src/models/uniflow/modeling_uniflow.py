@@ -709,7 +709,7 @@ class FlowDecoder(nn.Module):
         t = torch.sigmoid(nt)
         # 90% logit-normal, 10% uniform
         t = torch.where(torch.rand_like(t) <= 0.9, t, torch.rand_like(t))
-
+        t = t.view([b, *([1] * len(x1.shape[1:]))])
         # 5. Interpolate: x_t = t * x1 + (1 - t) * x0
         x_t = t * x1 + (1 - t) * x0
 
