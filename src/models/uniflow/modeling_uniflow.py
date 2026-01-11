@@ -179,75 +179,6 @@ NORM2FN = {
     'rms_norm': UniFlowRMSNorm,
     'layer_norm': nn.LayerNorm,
 }
-from einops import rearrange, repeat
-from math import pi
-
-
-def broadcat(tensors, dim=-1):
-    num_tensors = len(tensors)
-    shape_lens = set(list(map(lambda t: len(t.shape), tensors)))
-    assert len(shape_lens) == 1, 'tensors must all have the same number of dimensions'
-    shape_len = list(shape_lens)[0]
-    dim = (dim + shape_len) if dim < 0 else dim
-    dims = list(zip(*map(lambda t: list(t.shape), tensors)))
-    expandable_dims = [(i, val) for i, val in enumerate(dims) if i != dim]
-    assert all(
-        [*map(lambda t: len(set(t[1])) <= 2, expandable_dims)]
-    ), 'invalid dimensions for broadcastable concatentation'
-    max_dims = list(map(lambda t: (t[0], max(t[1])), expandable_dims))
-    expanded_dims = list(map(lambda t: (t[0], (t[1],) * num_tensors), max_dims))
-    expanded_dims.insert(dim, (dim, dims[dim]))
-    expandable_shapes = list(zip(*map(lambda t: t[1], expanded_dims)))
-    tensors = list(map(lambda t: t[0].expand(*t[1]), zip(tensors, expandable_shapes)))
-    return torch.cat(tensors, dim=dim)
-
-
-def rotate_half(x):
-    x = rearrange(x, '... (d r) -> ... d r', r=2)
-    x1, x2 = x.unbind(dim=-1)
-    x = torch.stack((-x2, x1), dim=-1)
-    return rearrange(x, '... d r -> ... (d r)')
-
-
-class VisionRotaryEmbeddingFast(nn.Module):
-    def __init__(
-        self,
-        dim,
-        pt_seq_len=16,
-        custom_freqs=None,
-        freqs_for='lang',
-        theta=10000,
-        max_freq=10,
-        num_freqs=1,
-    ):
-        super().__init__()
-        if custom_freqs:
-            freqs = custom_freqs
-        elif freqs_for == 'lang':
-            freqs = 1.0 / (
-                theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim)
-            )
-        elif freqs_for == 'pixel':
-            freqs = torch.linspace(1.0, max_freq / 2, dim // 2) * pi
-        elif freqs_for == 'constant':
-            freqs = torch.ones(num_freqs).float()
-        else:
-            raise ValueError(f'unknown modality {freqs_for}')
-
-        self.pt_seq_len = pt_seq_len
-        self.register_buffer("freqs", freqs)
-
-    def forward(self, x):
-        ft_seq_len = int(np.sqrt(x.shape[2]))
-        t = torch.arange(ft_seq_len).cuda() / ft_seq_len * self.pt_seq_len
-
-        freqs = torch.einsum('..., f -> ... f', t, self.freqs)
-        freqs = repeat(freqs, '... n -> ... (n r)', r=2)
-        freqs = broadcat((freqs[:, None, :], freqs[None, :, :]), dim=-1)
-
-        freqs_cos = freqs.cos().view(-1, freqs.shape[-1])
-        freqs_sin = freqs.sin().view(-1, freqs.shape[-1])
-        return x * freqs_cos + rotate_half(x) * freqs_sin
 
 
 class Attention(nn.Module):
@@ -278,11 +209,6 @@ class Attention(nn.Module):
         self.proj_drop = nn.Dropout(proj_drop)
         self.is_causal = is_causal
 
-        self.rope = VisionRotaryEmbeddingFast(
-            dim=self.head_dim // 2,
-            pt_seq_len=32,
-        )
-
     def forward(self, x: torch.Tensor, pos) -> torch.Tensor:
         B, N, C = x.shape
         qkv = (
@@ -293,8 +219,7 @@ class Attention(nn.Module):
         q, k, v = qkv[0], qkv[1], qkv[2]
         q = self.q_norm(q.contiguous())
         k = self.k_norm(k.contiguous())
-        q = self.rope(q)
-        k = self.rope(k)
+        q, k = apply_rotary_emb(q, k, freqs_cis=pos)
 
         q = q.view(B, self.num_heads, -1, C // self.num_heads)  # B, H, N, Hc
         k = k.view(
@@ -963,19 +888,20 @@ class TimestepEmbedder(nn.Module):
 
 class ResBlock(nn.Module):
     """
-    A residual block with attention and feedforward layers.
+    A residual block that can optionally change the number of channels.
     :param channels: the number of input channels.
-    :param num_heads: number of attention heads (default: 8).
-    :param mlp_ratio: ratio for mlp hidden dimension (default: 4).
     """
 
-    def __init__(self, channels, num_heads=8, mlp_ratio=4):
+    def __init__(self, channels):
         super().__init__()
         self.channels = channels
 
-        self.norm = UniFlowRMSNorm(channels, eps=1e-6)
-        mlp_hidden_dim = int(channels * mlp_ratio)
-        self.mlp = FeedForward(channels, channels)
+        self.in_ln = UniFlowRMSNorm(channels, eps=1e-6)
+        self.mlp = nn.Sequential(
+            nn.Linear(channels, channels, bias=True),
+            nn.SiLU(),
+            nn.Linear(channels, channels, bias=True),
+        )
 
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(), nn.Linear(channels, 3 * channels, bias=True)
@@ -983,8 +909,9 @@ class ResBlock(nn.Module):
 
     def forward(self, x, y, pos):
         shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(y).chunk(3, dim=-1)
-        x = x + gate_mlp * self.mlp(modulate(self.norm(x), shift_mlp, scale_mlp))
-        return x
+        h = modulate(self.in_ln(x), shift_mlp, scale_mlp)
+        h = self.mlp(h)
+        return x + gate_mlp * h
 
 
 class FinalLayer(nn.Module):
@@ -1188,7 +1115,11 @@ class ProjectorBlock(nn.Module):
         self.channels = channels
         self.norm = UniFlowRMSNorm(channels, eps=1e-6)
         # 注意：原代码 FeedForward 参数为 (channels, channels)，这里假设 hidden_dim=channels
-        self.mlp = FeedForward(dim=channels, hidden_dim=channels, out_dim=channels)
+        self.mlp = nn.Sequential(
+            nn.Linear(channels, channels, bias=True),
+            nn.SiLU(),
+            nn.Linear(channels, channels, bias=True),
+        )
 
     def forward(self, x):
         return x + self.mlp(self.norm(x))
@@ -1454,8 +1385,7 @@ class UniFlowVisionModel(PreTrainedModel):
         pos_embed = self._get_pos_embed(self.global_block_pos_embed, grid, grid)
         condition_tokens = condition_tokens + pos_embed
 
-        pos = None
-        #self.fetch_pos(grid, grid, condition_tokens.device)
+        pos = self.fetch_pos(grid, grid, condition_tokens.device)
         for block in self.global_blocks:
             condition_tokens = block(condition_tokens, pos)
 
