@@ -717,7 +717,7 @@ class FlowDecoder(nn.Module):
         v_target = x1 - x0
 
         # 7. Predict velocity: 输入形状均为 [B, N, C]
-        timesteps = t * 1000  # [B, N, 1]
+        timesteps = (t * 1000).squeeze()  # [B]
         v_pred = self.net(x=x_t, t=timesteps, c=z_embed, pos=pos)
 
         # 8. Compute MSE loss
@@ -767,8 +767,8 @@ class FlowDecoder(nn.Module):
         x = torch.randn(b, n, self.in_channels, device=z.device, dtype=z.dtype)
 
         for i, (t, dt) in enumerate(zip(ts, dts)):
-            # 扩展 t 为 [B, N, 1] 以匹配训练时的输入格式
-            timesteps = torch.full((b, n, 1), t.item() * 1000, device=z.device)
+            # 扩展 t 为 [B] 以匹配训练时的输入格式
+            timesteps = torch.full((b,), t.item() * 1000, device=z.device)
 
             # --- Conditional Pass ---
             xc = x
