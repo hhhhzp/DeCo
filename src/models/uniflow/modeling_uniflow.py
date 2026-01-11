@@ -293,7 +293,7 @@ class FeedForward(nn.Module):
         super().__init__()
         if out_dim is None:
             out_dim = dim
-        hidden_dim = (int(hidden_dim * 2 / 3) + 7) // 8 * 8
+        # hidden_dim = (int(hidden_dim * 2 / 3) + 7) // 8 * 8
         self.w12 = nn.Linear(dim, hidden_dim * 2, bias=False)
         self.w3 = nn.Linear(hidden_dim, out_dim, bias=False)
 
