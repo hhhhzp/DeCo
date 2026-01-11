@@ -709,6 +709,8 @@ class FlowDecoder(nn.Module):
         t = torch.sigmoid(nt)
         # 90% logit-normal, 10% uniform
         t = torch.where(torch.rand_like(t) <= 0.9, t, torch.rand_like(t))
+        timesteps = t * 1000
+
         t = t.view([b, *([1] * len(x1.shape[1:]))])
         # 5. Interpolate: x_t = t * x1 + (1 - t) * x0
         x_t = t * x1 + (1 - t) * x0
@@ -717,7 +719,7 @@ class FlowDecoder(nn.Module):
         v_target = x1 - x0
 
         # 7. Predict velocity: 输入形状均为 [B, N, C]
-        timesteps = (t * 1000).squeeze()  # [B]
+
         v_pred = self.net(x=x_t, t=timesteps, c=z_embed, pos=pos)
 
         # 8. Compute MSE loss
