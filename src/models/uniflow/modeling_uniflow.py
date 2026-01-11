@@ -593,29 +593,6 @@ class UniFlowVisionEncoder(nn.Module):
         )
 
 
-class Distill_Adapter(nn.Module):
-    def __init__(self, in_channels=1408, out_channels=3200, norm_layer=nn.LayerNorm):
-        super().__init__()
-
-        self.head = nn.Linear(in_channels, out_channels)
-        self.norm = norm_layer(out_channels)
-
-        self.apply(self._init_weights)
-
-    def _init_weights(self, m):
-        if isinstance(m, nn.Linear):
-            nn.init.xavier_uniform_(m.weight)
-            if isinstance(m, nn.Linear) and m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.LayerNorm):
-            nn.init.constant_(m.bias, 0)
-            nn.init.constant_(m.weight, 1.0)
-
-    def forward(self, x):
-        x = self.norm(self.head(x))
-        return x
-
-
 class NerfEmbedder(nn.Module):
     def __init__(self, in_channels, hidden_size_input, max_freqs):
         super().__init__()
@@ -665,6 +642,8 @@ class FlowDecoder(nn.Module):
         patch_size=14,
         img_size=224,
         max_freqs=8,
+        num_heads=8,
+        mlp_ratio=4,
     ):
         super().__init__()
         self.patch_size = patch_size
@@ -698,80 +677,76 @@ class FlowDecoder(nn.Module):
             z_channels=z_channels,
             num_res_blocks=depth,
             grad_checkpointing=grad_checkpointing,
+            num_heads=num_heads,
+            mlp_ratio=mlp_ratio,
         )
 
-    def forward_train(self, x1, z):
+        # Learnable mask token for CFG training
+        self.mask_token = nn.Parameter(torch.zeros(1, 1, z_channels))
+
+    def forward_train(self, x1, z, pos):
         """
-        Training forward pass for flow matching.
-        Args:
-            x1: target clean data [B, N, C] where C = target_channels
-            z: condition from encoder [B, N, C_z]
-        Returns:
-            loss: flow matching loss
+        Training forward pass for flow matching with [B, N, C] logic.
         """
         b, n, c = x1.shape
         assert (
             c == self.target_channels
         ), f"Expected {self.target_channels} channels, got {c}"
 
-        # Apply NerfEmbedder to condition tokens
-        z = self.nerf_embedder(z)
+        # 1. CFG Masking: 使用 learnable mask_token (10% dropout)
+        # 形状为 [B, 1, 1] 确保整个 batch 维度的 condition 同时被 mask
+        cfg_mask = torch.rand((b, 1, 1), device=z.device) > 0.1
+        z_masked = z * cfg_mask + self.mask_token * (~cfg_mask)
 
-        # Flatten batch and sequence dimensions
-        x1 = x1.reshape(b * n, c)
-        z = z.reshape(b * n, -1)
+        # 2. Apply NerfEmbedder
+        z_embed = self.nerf_embedder(z_masked)
 
-        # Sample noise x0
+        # 3. Sample noise x0
         x0 = torch.randn_like(x1)
 
-        # Sample timestep t using logit-normal distribution
-        # Logit-Normal: t = sigmoid(nt) where nt ~ N(0, 1)
-        nt = torch.randn((b * n,), device=x1.device)
+        # 4. Sample token-wise timestep t (logit-normal)
+        nt = torch.randn((b, n, 1), device=x1.device)
         t = torch.sigmoid(nt)
         # 90% logit-normal, 10% uniform
         t = torch.where(torch.rand_like(t) <= 0.9, t, torch.rand_like(t))
 
-        # Interpolate between x0 and x1: x_t = t * x1 + (1 - t) * x0
-        t_expanded = t.view(-1, 1)
-        x_t = t_expanded * x1 + (1 - t_expanded) * x0
+        # 5. Interpolate: x_t = t * x1 + (1 - t) * x0
+        x_t = t * x1 + (1 - t) * x0
 
-        # Target velocity: v_target = x1 - x0
+        # 6. Target velocity
         v_target = x1 - x0
 
-        # Predict velocity
-        timesteps = t * 1000  # scale to [0, 1000]
-        xc = x_t
-        if self.noise_concat:
-            xc = torch.cat([x_t, z], dim=-1)
-        v_pred = self.net(x=xc, t=timesteps, c=z)
+        # 7. Predict velocity: 输入形状均为 [B, N, C]
+        timesteps = t * 1000  # [B, N, 1]
+        v_pred = self.net(x=x_t, t=timesteps, c=z_embed, pos=pos)
 
-        # Compute MSE loss
+        # 8. Compute MSE loss
         loss = F.mse_loss(v_pred, v_target)
-
         return loss
 
     @torch.no_grad()
-    def forward(self, z, schedule="linear", cfg=1.0, cfg_interval=None):
-
-        # ========== Temporary parameter override (comment out to disable) ==========
-        schedule = "pow_0.25"
-        cfg = 1.5
-        cfg_interval = "(.17,1.02)"
-        # ===========================================================================
-
+    def forward(self, z, pos, schedule="linear", cfg=1.0, cfg_interval=None):
+        """
+        Inference forward pass.
+        """
         b, n, c_z = z.shape
 
-        # Apply NerfEmbedder to condition tokens
-        z = self.nerf_embedder(z)
+        # 1. 准备 Condition Embeddings (Cond & Uncond)
+        z_cond = self.nerf_embedder(z)
 
-        z = z.reshape(b * n, c_z)
+        z_uncond = None
+        if cfg != 1.0:
+            # 推理时使用训练好的 mask_token 并通过相同的 embedder
+            mask_input = self.mask_token.expand(b, n, -1)
+            z_uncond = self.nerf_embedder(mask_input)
+
         sample_steps = self.num_sampling_steps
 
-        # get all timesteps ts and intervals Δts
+        # 2. 生成时间步序列 ts 和 dts
         if schedule == "linear":
             ts = torch.arange(1, sample_steps + 1).flip(0) / sample_steps
             dts = torch.ones_like(ts) * (1.0 / sample_steps)
-        elif schedule.startswith("pow"):  # "pow_0.25"
+        elif schedule.startswith("pow"):
             p = float(schedule.split("_")[1])
             ts = torch.arange(0, sample_steps + 1).flip(0) ** (
                 1 / p
@@ -781,45 +756,43 @@ class FlowDecoder(nn.Module):
             raise NotImplementedError
         ts = 1 - ts
 
-        # cfg interval
-        if cfg_interval is None:  # cfg_interval = "(.17,1.02)"
+        # 3. CFG interval 处理
+        if cfg_interval is None:
             interval = None
         else:
             cfg_lo, cfg_hi = ast.literal_eval(cfg_interval)
             interval = _edm_to_flow_convention(cfg_lo), _edm_to_flow_convention(cfg_hi)
 
-        # sampling (sample_steps) steps: noise X0 -> clean X1
-        trajs = []
-        x = torch.randn(b * n, self.in_channels).cuda()  # noise start [b,n,c]
-        x = x.to(z.dtype)
+        # 4. 迭代采样: Noise X0 -> Clean X1
+        x = torch.randn(b, n, self.in_channels, device=z.device, dtype=z.dtype)
 
-        null_z = z.clone() * 0.0 if cfg != 1.0 else None
-        for i, (t, dt) in enumerate((zip(ts, dts))):
-            timesteps = torch.tensor([t] * (b * n)).to(z.device)
+        for i, (t, dt) in enumerate(zip(ts, dts)):
+            # 扩展 t 为 [B, N, 1] 以匹配训练时的输入格式
+            timesteps = torch.full((b, n, 1), t.item() * 1000, device=z.device)
 
+            # --- Conditional Pass ---
             xc = x
             if self.noise_concat:
-                xc = torch.cat([x, z], dim=-1)  # c: 192 + 768 = 960
-            vc = self.net(x=xc, t=1000 * timesteps, c=z)  # conditional v
+                xc = torch.cat([x, z_cond], dim=-1)
+            vc = self.net(x=xc, t=timesteps, c=z_cond, pos=pos)
 
-            # classifier free guidance
-            if null_z is not None and (
+            # --- Classifier Free Guidance ---
+            if z_uncond is not None and (
                 interval is None
-                or ((t.item() >= interval[0]) and (t.item() <= interval[1]))
+                or (t.item() >= interval[0] and t.item() <= interval[1])
             ):
                 xu = x
                 if self.noise_concat:
-                    xu = torch.cat([x, null_z], dim=-1)  # c: 192 + 768=960
-                vu = self.net(x=xu, t=1000 * timesteps, c=null_z)  # unconditional v
+                    xu = torch.cat([x, z_uncond], dim=-1)
+                vu = self.net(x=xu, t=timesteps, c=z_uncond, pos=pos)
                 vc = vu + cfg * (vc - vu)
 
-            # update x
+            # 更新变量
             x = x + dt * vc
-            trajs.append(x)
 
-        sampled_token = trajs[-1]
+        # 5. 还原为图像空间
         sampled_image = l2p_transform_tensor(
-            sampled_token.reshape(b, n, self.in_channels),
+            x,  # 形状已经是 [B, N, C]
             patch_size=self.patch_size,
         )
         return sampled_image
@@ -876,33 +849,64 @@ class TimestepEmbedder(nn.Module):
         return t_emb
 
 
+# class ResBlock(nn.Module):
+#     """
+#     A residual block that can optionally change the number of channels.
+#     :param channels: the number of input channels.
+#     """
+
+#     def __init__(self, channels):
+#         super().__init__()
+#         self.channels = channels
+
+#         self.in_ln = nn.LayerNorm(channels, eps=1e-6)
+#         self.mlp = FeedForward(channels, channels)
+#         # nn.Sequential(
+#         #     nn.Linear(channels, channels, bias=True),
+#         #     nn.SiLU(),
+#         #     nn.Linear(channels, channels, bias=True),
+#         # )
+
+#         self.adaLN_modulation = nn.Sequential(
+#             nn.SiLU(), nn.Linear(channels, 3 * channels, bias=True)
+#         )
+
+#     def forward(self, x, y):
+#         shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(y).chunk(3, dim=-1)
+#         h = modulate(self.in_ln(x), shift_mlp, scale_mlp)
+#         h = self.mlp(h)
+#         return x + gate_mlp * h
+
+
 class ResBlock(nn.Module):
     """
-    A residual block that can optionally change the number of channels.
+    A residual block with attention and feedforward layers.
     :param channels: the number of input channels.
+    :param num_heads: number of attention heads (default: 8).
+    :param mlp_ratio: ratio for mlp hidden dimension (default: 4).
     """
 
-    def __init__(self, channels):
+    def __init__(self, channels, num_heads=8, mlp_ratio=4):
         super().__init__()
         self.channels = channels
 
-        self.in_ln = nn.LayerNorm(channels, eps=1e-6)
-        self.mlp = FeedForward(channels, channels)
-        # nn.Sequential(
-        #     nn.Linear(channels, channels, bias=True),
-        #     nn.SiLU(),
-        #     nn.Linear(channels, channels, bias=True),
-        # )
+        self.norm1 = UniFlowRMSNorm(channels, eps=1e-6)
+        self.attn = Attention(channels, num_heads=num_heads, qkv_bias=False)
+        self.norm2 = UniFlowRMSNorm(channels, eps=1e-6)
+        mlp_hidden_dim = int(channels * mlp_ratio)
+        self.mlp = FeedForward(channels, mlp_hidden_dim)
 
         self.adaLN_modulation = nn.Sequential(
-            nn.SiLU(), nn.Linear(channels, 3 * channels, bias=True)
+            nn.SiLU(), nn.Linear(channels, 6 * channels, bias=True)
         )
 
-    def forward(self, x, y):
-        shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(y).chunk(3, dim=-1)
-        h = modulate(self.in_ln(x), shift_mlp, scale_mlp)
-        h = self.mlp(h)
-        return x + gate_mlp * h
+    def forward(self, x, y, pos):
+        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
+            self.adaLN_modulation(y).chunk(6, dim=-1)
+        )
+        x = x + gate_msa * self.attn(modulate(self.norm1(x), shift_msa, scale_msa), pos)
+        x = x + gate_mlp * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
+        return x
 
 
 class FinalLayer(nn.Module):
@@ -945,6 +949,8 @@ class SimpleMLPAdaLN(nn.Module):
         z_channels,
         num_res_blocks,
         grad_checkpointing=False,
+        num_heads=8,
+        mlp_ratio=4,
     ):
         super().__init__()
 
@@ -964,6 +970,8 @@ class SimpleMLPAdaLN(nn.Module):
             res_blocks.append(
                 ResBlock(
                     model_channels,
+                    num_heads=num_heads,
+                    mlp_ratio=mlp_ratio,
                 )
             )
 
@@ -996,12 +1004,13 @@ class SimpleMLPAdaLN(nn.Module):
         nn.init.constant_(self.final_layer.linear.weight, 0)
         nn.init.constant_(self.final_layer.linear.bias, 0)
 
-    def forward(self, x, t, c):
+    def forward(self, x, t, c, pos=None):
         """
         Apply the model to an input batch.
         :param x: an [N x C] Tensor of inputs.
         :param t: a 1-D batch of timesteps.
         :param c: conditioning from AR transformer.
+        :param pos: position embeddings for attention (optional, will use dummy if None).
         :return: an [N x C] Tensor of outputs.
         """
         x = self.input_proj(x)
@@ -1009,13 +1018,12 @@ class SimpleMLPAdaLN(nn.Module):
         c = self.cond_embed(c)
 
         y = t + c
-
         if self.grad_checkpointing and not torch.jit.is_scripting():
             for block in self.res_blocks:
-                x = checkpoint(block, x, y)
+                x = checkpoint(block, x, y, pos)
         else:
             for block in self.res_blocks:
-                x = block(x, y)
+                x = block(x, y, pos)
 
         return self.final_layer(x, y)
 
@@ -1153,6 +1161,8 @@ class UniFlowVisionModel(PreTrainedModel):
             img_size=config.image_size,
             use_cfg=config.use_cfg,
             max_freqs=8,
+            num_heads=16,
+            mlp_ratio=2 / 3,
         )
 
         # init params
@@ -1299,10 +1309,15 @@ class UniFlowVisionModel(PreTrainedModel):
         # 2. Transform target to latent space
         t = p2l_transform_tensor(target_pixel_values, self.config.patch_size)
 
-        # 3. Compute flow matching loss
-        flow_loss = self.flow_head.forward_train(x1=t, z=z)
+        # 3. Get position embeddings (reuse from forward_condition)
+        B, N, C = z.shape
+        grid = int(N**0.5)
+        pos = self.fetch_pos(grid, grid, z.device)
 
-        # 4. Combine losses
+        # 4. Compute flow matching loss
+        flow_loss = self.flow_head.forward_train(x1=t, z=z, pos=pos)
+
+        # 5. Combine losses
         return {
             'flow_loss': flow_loss,
             'distill_loss': distill_loss,
@@ -1311,7 +1326,13 @@ class UniFlowVisionModel(PreTrainedModel):
     def forward(self, pixel_values):
         # Inference: return_distill_loss=False
         z, _ = self.forward_condition(pixel_values)
-        return self.flow_head(z=z)
+
+        # Get position embeddings (reuse from forward_condition)
+        B, N, C = z.shape
+        grid = int(N**0.5)
+        pos = self.fetch_pos(grid, grid, z.device)
+
+        return self.flow_head(z=z, pos=pos)
 
 
 def pixel_shuffle(x, scale_factor=0.5):
