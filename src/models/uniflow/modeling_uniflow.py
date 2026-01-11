@@ -203,8 +203,8 @@ class Attention(nn.Module):
         self.scale = self.head_dim**-0.5
         self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
 
-        self.q_norm = UniFlowRMSNorm(self.head_dim)
-        self.k_norm = UniFlowRMSNorm(self.head_dim)
+        # self.q_norm = UniFlowRMSNorm(self.head_dim)
+        # self.k_norm = UniFlowRMSNorm(self.head_dim)
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
@@ -222,8 +222,8 @@ class Attention(nn.Module):
             .permute(2, 0, 3, 1, 4)
         )
         q, k, v = qkv[0], qkv[1], qkv[2]
-        q = self.q_norm(q.contiguous())
-        k = self.k_norm(k.contiguous())
+        # q = self.q_norm(q.contiguous())
+        # k = self.k_norm(k.contiguous())
         q, k = apply_rotary_emb(q, k, freqs_cis=pos)
 
         q = q.view(B, self.num_heads, -1, C // self.num_heads)  # B, H, N, Hc
