@@ -217,6 +217,7 @@ class LightningUniFlowModel(pl.LightningModule):
                 optimizer,
                 num_warmup_steps=20000,
                 num_training_steps=200000,
+                min_lr=1e-5,
             )
             # get_cosine_schedule_with_warmup(
             #     optimizer, num_warmup_steps=2000, num_training_steps=200000
