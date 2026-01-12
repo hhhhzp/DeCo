@@ -1424,7 +1424,8 @@ class UniFlowVisionModel(PreTrainedModel):
             inputs_embeds=x,
             output_hidden_states=True,
         )
-        sem_tokens = encoder_outputs.last_hidden_state[:, 1:]  # Remove CLS token
+        sem_tokens = encoder_outputs.hidden_states[4][:, 1:]
+        # sem_tokens = encoder_outputs.last_hidden_state[:, 1:]  # Remove CLS token
 
         # 3. Channel projection for generation branch with 2x downsampling and upsampling
         B, N, C = sem_tokens.shape
