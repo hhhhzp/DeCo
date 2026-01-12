@@ -502,9 +502,10 @@ class PixMultiJSONLDataset(Dataset):
 
 import torch
 import torch.distributed as dist
+from torch.utils.data import IterableDataset
 
 
-class PixWebDataset:
+class PixWebDataset(IterableDataset):
     """
     WebDataset wrapper with streaming support and distributed training.
     Supports automatic sharding for multi-GPU and multi-worker scenarios.
