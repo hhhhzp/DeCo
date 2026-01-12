@@ -498,3 +498,148 @@ class PixMultiJSONLDataset(Dataset):
                     )
                 # 否则继续重试
                 continue
+
+
+class PixWebDataset:
+    """
+    WebDataset wrapper with streaming support and distributed training.
+    Supports automatic sharding for multi-GPU and multi-worker scenarios.
+    """
+
+    def __init__(
+        self,
+        data_files,
+        cache_dir=None,
+        resolution=256,
+        random_crop=False,
+        random_flip=False,
+        is_train=True,
+        data_rank=0,
+        data_world_size=1,
+        random_seed=42,
+    ):
+        """
+        Args:
+            data_files: List of WebDataset tar files or pattern
+            cache_dir: Cache directory for HuggingFace datasets
+            resolution: Image resolution
+            random_crop: Whether to use random crop
+            random_flip: Whether to use random horizontal flip
+            is_train: Whether this is training dataset (affects shuffling)
+            data_rank: Current process rank in distributed training
+            data_world_size: Total number of processes in distributed training
+            random_seed: Random seed for shuffling
+        """
+        self.data_files = data_files
+        self.cache_dir = cache_dir
+        self.resolution = resolution
+        self.is_train = is_train
+        self.data_rank = data_rank
+        self.data_world_size = data_world_size
+        self.random_seed = random_seed
+
+        # Setup transforms (similar to PixImageNet)
+        if random_crop:
+            self.transform = torchvision.transforms.Compose(
+                [
+                    torchvision.transforms.Resize(resolution),
+                    torchvision.transforms.RandomCrop(resolution),
+                    torchvision.transforms.RandomHorizontalFlip(),
+                ]
+            )
+        else:
+            if random_flip is False:
+                self.transform = partial(center_crop_fn, image_size=resolution)
+            else:
+                self.transform = torchvision.transforms.Compose(
+                    [
+                        torchvision.transforms.Lambda(
+                            partial(center_crop_fn, image_size=resolution)
+                        ),
+                        torchvision.transforms.RandomHorizontalFlip(),
+                    ]
+                )
+
+        self.normalize = Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+
+        # Load HuggingFace WebDataset
+        meta = {"cache_dir": cache_dir} if cache_dir else {}
+        self.hf_dataset = load_dataset(
+            "webdataset",
+            data_files=data_files,
+            cache_dir=meta.get("cache_dir"),
+            split="train",
+            streaming=True,
+        )
+
+        # Setup sharding for distributed training
+        self.hf_dataset = self._setup_sharded_dataset(self.hf_dataset)
+
+        print(f"PixWebDataset initialized with transform: {self.transform}")
+        print(
+            f"Distributed config: rank={data_rank}, world_size={data_world_size}, "
+            f"is_train={is_train}, seed={random_seed}"
+        )
+
+    def _setup_sharded_dataset(self, dataset):
+        """Handle distributed and multi-worker data sharding logic"""
+        from torch.utils.data import get_worker_info
+
+        # 1. Shuffle first (if training)
+        if self.is_train:
+            dataset = dataset.shuffle(
+                buffer_size=1000, seed=self.data_rank + self.random_seed
+            )
+
+        # 2. Process-level sharding (GPU Level)
+        if self.data_world_size > 1:
+            dataset = dataset.shard(
+                num_shards=self.data_world_size, index=self.data_rank
+            )
+
+        # 3. Worker-level sharding (DataLoader Worker Level)
+        worker_info = get_worker_info()
+        if worker_info is not None and worker_info.num_workers > 1:
+            dataset = dataset.shard(
+                num_shards=worker_info.num_workers, index=worker_info.id
+            )
+
+        return dataset
+
+    def _process_sample(self, sample):
+        """Process a single sample from WebDataset"""
+        # Extract image from sample
+        # WebDataset format typically has keys like 'jpg', 'png', 'image', etc.
+        image = sample['jpg']
+        image = image.convert('RGB')
+
+        # Apply transforms
+        raw_image = self.transform(image)
+        raw_image = to_tensor(raw_image)
+
+        # Normalize
+        normalized_image = self.normalize(raw_image)
+
+        # Extract label if available
+        target = 0
+
+        # Construct metadata
+        metadata = {
+            "raw_image": raw_image,  # Unnormalized tensor (0-1)
+            "class": target,
+        }
+
+        return normalized_image, target, metadata
+
+    def __iter__(self):
+        """Iterate over the dataset"""
+        # Re-setup sharding for each epoch (important for DataLoader workers)
+        dataset = self._setup_sharded_dataset(self.hf_dataset)
+
+        for sample in dataset:
+            try:
+                yield self._process_sample(sample)
+            except Exception as e:
+                # Skip failed samples and continue with next one
+                print(f"Warning: Failed to process sample, skipping. Error: {e}")
+                continue

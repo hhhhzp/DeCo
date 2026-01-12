@@ -16,7 +16,6 @@ import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 import numpy as np
 from einops import rearrange
-import lpips
 from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from timm.models.layers import DropPath, trunc_normal_
 from timm.models.registry import register_model
@@ -27,6 +26,7 @@ from src.models.layers.rope import (
     apply_rotary_emb,
     precompute_freqs_cis_ex2d as precompute_freqs_cis_2d,
 )
+from src.models.modules.perceptual_loss import PerceptualLoss
 from transformers.activations import ACT2FN
 from transformers.modeling_outputs import BaseModelOutput, BaseModelOutputWithPooling
 from transformers.modeling_utils import PreTrainedModel
@@ -754,11 +754,9 @@ class FlowDecoder(nn.Module):
         # Learnable mask token for CFG training
         # self.mask_token = nn.Parameter(torch.zeros(1, 1, z_channels))
 
-        # LPIPS loss network (VGG-based perceptual loss)
-        self.lpips_loss = lpips.LPIPS(net='vgg').eval()
-        # Freeze LPIPS parameters
-        for param in self.lpips_loss.parameters():
-            param.requires_grad = False
+        # Perceptual loss network (LPIPS-based)
+        self.lpips_loss = PerceptualLoss(model_name='lpips-convnext_s-1.0-0.1')
+        # PerceptualLoss already freezes parameters in its __init__
 
     def forward_train(self, x1, z, pos):
         """
@@ -826,8 +824,8 @@ class FlowDecoder(nn.Module):
         )
 
         # Normalize to [-1, 1] range for LPIPS (it expects images in this range)
-        x1_pred_img = torch.clamp(x1_pred_img, -1, 1)
-        x1_target_img = torch.clamp(x1_target_img, -1, 1)
+        x1_pred_img = torch.clamp(x1_pred_img, -1, 1) * 0.5 + 0.5
+        x1_target_img = torch.clamp(x1_target_img, -1, 1) * 0.5 + 0.5
 
         # Compute LPIPS loss
         lpips_loss = self.lpips_loss(x1_pred_img, x1_target_img).mean()
@@ -1636,7 +1634,7 @@ class UniFlowVisionModel(PreTrainedModel):
             patch_size=config.patch_size,
             img_size=config.image_size,
             use_cfg=config.use_cfg,
-            max_freqs=8,
+            max_freqs=32,
             num_heads=16,
             mlp_ratio=2 / 3,
         )
@@ -1793,15 +1791,15 @@ class UniFlowVisionModel(PreTrainedModel):
         flow_losses = self.flow_head.forward_train(x1=t, z=z, pos=pos)
 
         # 5. Combine losses into separate components
-        # Apply 0.1 weight to LPIPS loss
-        weighted_lpips_loss = 0.1 * flow_losses['lpips_loss']
+        # Apply 1.1 weight to LPIPS loss
+        weighted_lpips_loss = 1.1 * flow_losses['lpips_loss']
 
         # Calculate total loss as sum of all losses
         total_loss = flow_losses['mse_loss'] + weighted_lpips_loss + distill_loss
 
         return {
             'loss': total_loss,
-            'mse_loss': flow_losses['mse_loss'],
+            'flow_loss': flow_losses['mse_loss'],
             'lpips_loss': weighted_lpips_loss,
             'distill_loss': distill_loss,
         }

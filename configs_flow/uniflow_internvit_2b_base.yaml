@@ -1,7 +1,7 @@
 # lightning.pytorch==2.4.0
 seed_everything: true
 tags:
-  exp: &exp uniflow_internvit_layer6_unfreeze_lpips_2b_r14_mlp_c32
+  exp: &exp uniflow_internvit_layer6_unfreeze_lpips_convnext_2b_r14_mlp_c32
 torch_hub_dir: ~/.cache/torch/hub
 huggingface_cache_dir: null
 
@@ -62,6 +62,9 @@ data:
       root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k
       resolution: 224
       split: train
+      random_crop: true
+      random_flip: true
+
   eval_dataset:
     class_path: src.data.dataset.imagenet.PixHFDataset
     init_args:
