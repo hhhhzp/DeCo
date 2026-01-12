@@ -582,27 +582,15 @@ class PixWebDataset:
         )
 
     def _setup_sharded_dataset(self, dataset):
-        """Handle distributed and multi-worker data sharding logic"""
-        from torch.utils.data import get_worker_info
+        worker_info = torch.utils.data.get_worker_info()
+        if worker_info is None:
+            worker_id = 0
+            num_workers = 1
+        else:
+            worker_id = worker_info.id
+            num_workers = worker_info.num_workers
 
-        # 1. Shuffle first (if training)
-        if self.is_train:
-            dataset = dataset.shuffle(
-                buffer_size=1000, seed=self.data_rank + self.random_seed
-            )
-
-        # 2. Process-level sharding (GPU Level)
-        if self.data_world_size > 1:
-            dataset = dataset.shard(
-                num_shards=self.data_world_size, index=self.data_rank
-            )
-
-        # 3. Worker-level sharding (DataLoader Worker Level)
-        worker_info = get_worker_info()
-        if worker_info is not None and worker_info.num_workers > 1:
-            dataset = dataset.shard(
-                num_shards=worker_info.num_workers, index=worker_info.id
-            )
+        dataset = dataset.shard(num_shards=num_workers, index=worker_id)
 
         return dataset
 
