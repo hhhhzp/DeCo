@@ -175,6 +175,27 @@ class UniFlowRMSNorm(nn.Module):
         return (self.weight * hidden_states).to(input_dtype)
 
 
+class UniFlowRMSNorm2d(nn.Module):
+    """
+    RMSNorm for 2D image data [B, C, H, W].
+    Normalizes over the channel dimension.
+    """
+
+    def __init__(self, num_channels, eps=1e-6):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(num_channels))
+        self.variance_epsilon = eps
+
+    def forward(self, hidden_states):
+        input_dtype = hidden_states.dtype
+        hidden_states = hidden_states.to(torch.float32)
+        # Compute variance over channel dimension: [B, C, H, W] -> [B, 1, H, W]
+        variance = hidden_states.pow(2).mean(dim=1, keepdim=True)
+        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+        # Apply learnable weight: [C] -> [1, C, 1, 1]
+        return (self.weight.view(1, -1, 1, 1) * hidden_states).to(input_dtype)
+
+
 NORM2FN = {
     'rms_norm': UniFlowRMSNorm,
     'layer_norm': nn.LayerNorm,
@@ -1171,6 +1192,26 @@ class ProjectorBlock(nn.Module):
         return x + self.mlp(self.norm(x))
 
 
+class ProjectorBlock2d(nn.Module):
+    """
+    A residual block for 2D image data [B, C, H, W].
+    Structure: x + Conv(Norm(x))
+    """
+
+    def __init__(self, channels):
+        super().__init__()
+        self.channels = channels
+        self.norm = UniFlowRMSNorm2d(num_channels=channels, eps=1e-6)
+        self.conv = nn.Sequential(
+            nn.Conv2d(channels, channels, kernel_size=1, bias=True),
+            nn.SiLU(),
+            nn.Conv2d(channels, channels, kernel_size=1, bias=True),
+        )
+
+    def forward(self, x):
+        return x + self.conv(self.norm(x))
+
+
 class ChannelProjectorV2(nn.Module):
     """
     Channel projector V2 with Pixel Shuffle/Unshuffle.
@@ -1392,7 +1433,9 @@ class ChannelProjectorV5(nn.Module):
             downsample=True,
             shortcut=True,  # 这是 Block 内部的空间 Shortcut
         )
-        self.down_res = nn.ModuleList([ProjectorBlock(self.mid_dim) for _ in range(3)])
+        self.down_res = nn.ModuleList(
+            [ProjectorBlock2d(self.mid_dim) for _ in range(3)]
+        )
 
         # [B] 通道投影部分 (Channel Projection)
         # 负责 2C -> Latent
@@ -1414,7 +1457,7 @@ class ChannelProjectorV5(nn.Module):
         self.dec_shortcut_repeat = self.mid_dim // latent_ch
 
         # [B] 空间变换部分 (Spatial Transform)
-        self.up_res = ProjectorBlock(self.mid_dim)
+        self.up_res = ProjectorBlock2d(self.mid_dim)
 
         # 负责 H/2 -> H 和 2C -> C
         self.up_sampler = DCUpBlock2d(
