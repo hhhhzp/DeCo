@@ -62,7 +62,6 @@ data:
       data_files: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/BLIP-3o/*.tar
       cache_dir: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/cache/webdataset
       resolution: 224
-      split: train
       random_crop: true
       random_flip: true
 
