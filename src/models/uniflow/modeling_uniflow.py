@@ -751,7 +751,7 @@ class FlowDecoder(nn.Module):
         )
 
         # Learnable mask token for CFG training
-        self.mask_token = nn.Parameter(torch.zeros(1, 1, z_channels))
+        # self.mask_token = nn.Parameter(torch.zeros(1, 1, z_channels))
 
     def forward_train(self, x1, z, pos):
         """
