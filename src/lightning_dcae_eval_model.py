@@ -219,7 +219,7 @@ class LightningDCAEEvalModel(pl.LightningModule):
             # Resize down to 28/32 ratio
             video_frames = self.resize_down(video_frames)
             video_frames = (video_frames * 0.5 + 0.5).clamp(0, 1)
-            video = video_frames.cpu()
+            video = video_frames
         else:
             video = latents
 
