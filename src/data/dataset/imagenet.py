@@ -538,6 +538,7 @@ class PixWebDataset(IterableDataset):
         self.resolution = resolution
         self.is_train = is_train
         self.random_seed = random_seed
+        self.seed = random_seed
 
         # Setup transforms (similar to PixImageNet)
         if random_crop:
