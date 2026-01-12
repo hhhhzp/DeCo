@@ -3,6 +3,7 @@ import os
 import math
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import lightning.pytorch as pl
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
@@ -166,6 +167,18 @@ class LightningDCAEEvalModel(pl.LightningModule):
         self.vision_model.eval()
         self.pixel_decoder.eval()
 
+    def resize_down(self, tensor):
+        """Resize down to 28/32 ratio"""
+        _, _, h, w = tensor.shape
+
+        # Calculate target size (round to nearest integer)
+        target_h = round(h * 28 / 32)
+        target_w = round(w * 28 / 32)
+
+        return F.interpolate(
+            tensor, size=(target_h, target_w), mode='bilinear', align_corners=True
+        )
+
     def _encode_latents(self, pixel_values: torch.Tensor) -> torch.Tensor:
         """
         Encode images to latent representations using vision encoder.
@@ -203,6 +216,8 @@ class LightningDCAEEvalModel(pl.LightningModule):
             latents = latents.to(self.vision_model.dtype)
             # Decode using VAE decoder
             video_frames = self.pixel_decoder.vae_decode(latents)
+            # Resize down to 28/32 ratio
+            video_frames = self.resize_down(video_frames)
             video_frames = (video_frames * 0.5 + 0.5).clamp(0, 1)
             video = video_frames.cpu()
         else:
