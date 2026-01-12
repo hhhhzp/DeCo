@@ -37,5 +37,5 @@
   "use_disp_loss": false,
   "decoder_type": "mlp",
   "num_decoder_layers": 12,
-  "num_sampling_steps": "16"
+  "num_sampling_steps": "1"
 }
