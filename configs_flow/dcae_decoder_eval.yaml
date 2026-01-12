@@ -1,0 +1,52 @@
+# lightning.pytorch==2.4.0
+seed_everything: true
+tags:
+  exp: &exp dcae_decoder_eval
+torch_hub_dir: ~/.cache/torch/hub
+huggingface_cache_dir: null
+
+trainer:
+  default_root_dir: ./dcae_eval_results
+  accelerator: auto
+  strategy: auto
+  devices: auto
+  num_nodes: 1
+  precision: bf16-mixed
+  logger:
+      class_path: lightning.pytorch.loggers.WandbLogger
+      init_args:
+        save_dir: ./dcae_eval_results
+        name: *exp
+  num_sanity_val_steps: 0
+  inference_mode: true
+  use_distributed_sampler: false
+  callbacks:
+    - class_path: src.callbacks.compute_metrics.ComputeMetricsHook
+      init_args:
+         compute_fid: true
+         fid_feature_dim: 2048
+  plugins:
+    - src.plugins.bd_env.BDEnvironment
+
+model:
+  # Path to pretrained InternVL model (vision encoder)
+  pretrained_model_path: /apdcephfs_sh2/share_300000800/user/leike/interns/zhenpeng/project/UniLIP/transferred_weights/UniLIP-3B-Merged
+  
+  # Path to VAE weights (for decoder initialization)
+  vae_weight_path: /path/to/your/vae/weights
+  
+  # Path to trained DCAE decoder checkpoint (optional)
+  decoder_checkpoint_path: null
+  
+  # Hidden size of the vision encoder output
+  llm_hidden_size: 3200
+
+data:
+  eval_dataset:
+    class_path: src.data.dataset.imagenet.PixHFDataset
+    init_args:
+      root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k
+      resolution: 224
+      split: validation
+  pred_batch_size: 32
+  pred_num_workers: 4
