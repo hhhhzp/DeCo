@@ -15,7 +15,6 @@ from src.models.autoencoder.base import fp2uint8
 # Log to wandb
 import wandb
 import numpy as np
-import cv2
 
 
 class ResBlock(nn.Module):
@@ -217,7 +216,6 @@ class LightningDCAEEvalModel(pl.LightningModule):
             padded_images.clamp(0, 1)[0].permute(1, 2, 0).cpu().numpy()[:, :, [2, 1, 0]]
             * 255
         )
-        cv2.imwrite("pad_image.jpg", np_image.astype(np.uint8))
 
         # normalize
         normalized_images = (padded_images - mean) / std
@@ -251,7 +249,6 @@ class LightningDCAEEvalModel(pl.LightningModule):
             .numpy()[:, :, [2, 1, 0]]
         )
         np_image = (np_image + 1) / 2 * 255
-        cv2.imwrite("unpad_image.jpg", np_image.astype(np.uint8))
         # exit()
         return unpadded_tensor
 
