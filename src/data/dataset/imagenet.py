@@ -500,6 +500,10 @@ class PixMultiJSONLDataset(Dataset):
                 continue
 
 
+import torch
+import torch.distributed as dist
+
+
 class PixWebDataset:
     """
     WebDataset wrapper with streaming support and distributed training.
@@ -514,8 +518,6 @@ class PixWebDataset:
         random_crop=False,
         random_flip=False,
         is_train=True,
-        data_rank=0,
-        data_world_size=1,
         random_seed=42,
     ):
         """
@@ -534,8 +536,6 @@ class PixWebDataset:
         self.cache_dir = cache_dir
         self.resolution = resolution
         self.is_train = is_train
-        self.data_rank = data_rank
-        self.data_world_size = data_world_size
         self.random_seed = random_seed
 
         # Setup transforms (similar to PixImageNet)
@@ -576,23 +576,6 @@ class PixWebDataset:
         self.hf_dataset = self._setup_sharded_dataset(self.hf_dataset)
 
         print(f"PixWebDataset initialized with transform: {self.transform}")
-        print(
-            f"Distributed config: rank={data_rank}, world_size={data_world_size}, "
-            f"is_train={is_train}, seed={random_seed}"
-        )
-
-    def _setup_sharded_dataset(self, dataset):
-        worker_info = torch.utils.data.get_worker_info()
-        if worker_info is None:
-            worker_id = 0
-            num_workers = 1
-        else:
-            worker_id = worker_info.id
-            num_workers = worker_info.num_workers
-
-        dataset = dataset.shard(num_shards=num_workers, index=worker_id)
-
-        return dataset
 
     def _process_sample(self, sample):
         """Process a single sample from WebDataset"""
@@ -619,15 +602,48 @@ class PixWebDataset:
 
         return normalized_image, target, metadata
 
+    def _setup_sharded_dataset(self, dataset):
+        """
+        处理两级分片逻辑：
+        1. Global Level: 根据 GPU rank 切分
+        2. Local Level:  根据 DataLoader worker 切分
+        """
+
+        # --- 1. Global Sharding (GPU/Node 级别) ---
+        # 自动检测是否处于分布式环境
+        if dist.is_available() and dist.is_initialized():
+            world_size = dist.get_world_size()
+            rank = dist.get_rank()
+        else:
+            world_size = 1
+            rank = 0
+
+        # 如果是多卡训练，先进行第一层切分
+        if world_size > 1:
+            dataset = dataset.shard(num_shards=world_size, index=rank)
+
+        # [可选] 这里是插入 Shuffle 的最佳时机
+        if self.is_train:
+            dataset = dataset.shuffle(buffer_size=1000, seed=self.seed)
+
+        # --- 2. Local Sharding (Worker 级别) ---
+        # 获取当前进程的 worker 信息
+        worker_info = torch.utils.data.get_worker_info()
+        if worker_info is not None and worker_info.num_workers > 1:
+            # 在当前 GPU 分到的数据基础上，再进行第二层切分
+            dataset = dataset.shard(
+                num_shards=worker_info.num_workers, index=worker_info.id
+            )
+
+        return dataset
+
     def __iter__(self):
         """Iterate over the dataset"""
-        # Re-setup sharding for each epoch (important for DataLoader workers)
         dataset = self._setup_sharded_dataset(self.hf_dataset)
-
         for sample in dataset:
             try:
                 yield self._process_sample(sample)
             except Exception as e:
-                # Skip failed samples and continue with next one
-                print(f"Warning: Failed to process sample, skipping. Error: {e}")
+                rank = dist.get_rank() if dist.is_initialized() else 0
+                print(f"[Rank {rank}] Warning: Sample failed: {e}")
                 continue

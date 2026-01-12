@@ -1,0 +1,78 @@
+# lightning.pytorch==2.4.0
+seed_everything: true
+tags:
+  exp: &exp uniflow_internvit_layer6_unfreeze_lpips_convnext_blip3o_2b_r14_mlp_c32
+torch_hub_dir: ~/.cache/torch/hub
+huggingface_cache_dir: null
+
+trainer:
+  default_root_dir: ./uniflow_internvit_2b
+  accelerator: auto
+  strategy: auto
+  devices: auto
+  num_nodes: 1
+  precision: bf16-mixed
+  gradient_clip_val: 1.0
+  gradient_clip_algorithm: norm
+  logger:
+      class_path: lightning.pytorch.loggers.WandbLogger
+      init_args:
+        save_dir: ./uniflow_internvit_2b
+        name: *exp
+  num_sanity_val_steps: 0
+  max_steps: 200100
+  val_check_interval: 2500
+  check_val_every_n_epoch: null
+  log_every_n_steps: 10
+  deterministic: null
+  inference_mode: true
+  use_distributed_sampler: false
+  callbacks:
+    - class_path: src.callbacks.model_checkpoint.CheckpointHook
+      init_args:
+        every_n_train_steps: 5000
+        save_top_k: -1
+        save_last: true
+    - class_path: src.callbacks.compute_metrics.ComputeMetricsHook
+      init_args:
+         compute_fid: true
+         fid_feature_dim: 2048
+  plugins:
+    - src.plugins.bd_env.BDEnvironment
+
+model:
+  config_path: src/models/uniflow/config.json
+  
+  use_ema: false
+  eval_original_model: true
+  
+  optimizer:
+    class_path: torch.optim.AdamW
+    init_args:
+      lr: 2e-4
+      weight_decay: 0.0
+      betas: [0.9, 0.95]
+  # Pretrained model path
+  pretrain_model_path: null
+
+data:
+  train_dataset:
+    class_path: src.data.dataset.imagenet.PixHFDataset
+    init_args:
+      data_files: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/BLIP-3o/*.tar
+      cache_dir: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/cache/webdataset
+      resolution: 224
+      split: train
+      random_crop: true
+      random_flip: true
+
+  eval_dataset:
+    class_path: src.data.dataset.imagenet.PixHFDataset
+    init_args:
+      root: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/imagenet-1k
+      resolution: 224
+      split: validation
+  train_batch_size: 16
+  train_num_workers: 8
+  pred_batch_size: 32
+  pred_num_workers: 1

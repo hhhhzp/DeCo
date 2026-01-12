@@ -21,6 +21,6 @@ export NNODES=4
 export NGPUS_PER_NODE=8
 export NODE_RANK=${NODE_RANK:-0}
 
-python main.py fit -c  configs_flow/uniflow_internvit_2b_base.yaml \
+python main.py fit -c  configs_flow/uniflow_internvit_2b_blip3o.yaml \
     --trainer.num_nodes=4 \
     --trainer.devices=8
