@@ -13,7 +13,7 @@ CONFIG_FILE="configs_flow/dcae_decoder_eval.yaml"
 # CHECKPOINT_PATH="path/to/your/checkpoint.ckpt"
 
 # Run evaluation
-python eval_dcae.py predict \
+python eval_dcae.py validate \
     --config ${CONFIG_FILE}
 # Alternative: Run validation (with metrics computation)
 # python eval_dcae.py validate \
