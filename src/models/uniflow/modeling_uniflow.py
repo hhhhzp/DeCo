@@ -766,8 +766,8 @@ class FlowDecoder(nn.Module):
         assert (
             c == self.target_channels
         ), f"Expected {self.target_channels} channels, got {c}"
-        cfg_mask = torch.rand((b, 1, 1), device=z.device) > 0.1
-        z = z * cfg_mask + self.mask_token * (~cfg_mask)
+        # cfg_mask = torch.rand((b, 1, 1), device=z.device) > 0.1
+        # z = z * cfg_mask + self.mask_token * (~cfg_mask)
         # Apply NerfEmbedder to condition tokens
         z = self.nerf_embedder(z)
 
@@ -819,7 +819,9 @@ class FlowDecoder(nn.Module):
         z = self.nerf_embedder(z)
 
         z = z.reshape(b * n, c_z)
-        sample_steps = self.num_sampling_steps  # Original line, commented out for temporary override
+        sample_steps = (
+            self.num_sampling_steps
+        )  # Original line, commented out for temporary override
 
         # get all timesteps ts and intervals Δts
         if schedule == "linear":
