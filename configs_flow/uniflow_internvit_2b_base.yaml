@@ -1,7 +1,7 @@
 # lightning.pytorch==2.4.0
 seed_everything: true
 tags:
-  exp: &exp uniflow_internvit_layer4_unfreeze_2b_r14_mlp_c32
+  exp: &exp uniflow_internvit_layer6_unfreeze_2b_r14_mlp_c32
 torch_hub_dir: ~/.cache/torch/hub
 huggingface_cache_dir: null
 
