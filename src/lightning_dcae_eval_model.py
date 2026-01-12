@@ -200,7 +200,7 @@ class LightningDCAEEvalModel(pl.LightningModule):
             video_frames: Decoded images
         """
         if output_type != "latent":
-            latents = latents.to(self.pixel_decoder.decoder.dtype)
+            latents = latents.to(self.vision_model.dtype)
             # Decode using VAE decoder
             video_frames = self.pixel_decoder.vae_decode(latents)
             video_frames = (video_frames * 0.5 + 0.5).clamp(0, 1)
