@@ -273,8 +273,7 @@ class LightningUniFlowModel(pl.LightningModule):
         loss_dict = self.model.forward_loss(img, teacher_feat=teacher_feat)
 
         # Compute total loss
-        total_loss = sum(loss_dict.values())
-        loss_dict["loss"] = total_loss
+        total_loss = loss_dict["loss"]
 
         # Log learning rate
         if self.trainer.optimizers:

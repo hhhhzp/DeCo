@@ -16,6 +16,7 @@ import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 import numpy as np
 from einops import rearrange
+import lpips
 from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from timm.models.layers import DropPath, trunc_normal_
 from timm.models.registry import register_model
@@ -753,6 +754,12 @@ class FlowDecoder(nn.Module):
         # Learnable mask token for CFG training
         # self.mask_token = nn.Parameter(torch.zeros(1, 1, z_channels))
 
+        # LPIPS loss network (VGG-based perceptual loss)
+        self.lpips_loss = lpips.LPIPS(net='vgg').eval()
+        # Freeze LPIPS parameters
+        for param in self.lpips_loss.parameters():
+            param.requires_grad = False
+
     def forward_train(self, x1, z, pos):
         """
         Training forward pass for flow matching.
@@ -760,7 +767,7 @@ class FlowDecoder(nn.Module):
             x1: target clean data [B, N, C] where C = target_channels
             z: condition from encoder [B, N, C_z]
         Returns:
-            loss: flow matching loss
+            dict: loss components including mse_loss and lpips_loss
         """
         b, n, c = x1.shape
         assert (
@@ -799,10 +806,36 @@ class FlowDecoder(nn.Module):
             xc = torch.cat([x_t, z], dim=-1)
         v_pred = self.net(x=xc, t=timesteps, c=z)
 
-        # Compute MSE loss
-        loss = F.mse_loss(v_pred, v_target)
+        # Compute MSE loss on velocity
+        mse_loss = F.mse_loss(v_pred, v_target)
 
-        return loss
+        # Derive predicted x1 from predicted velocity
+        # From flow matching: x_t = t * x1 + (1 - t) * x0
+        # And v = x1 - x0
+        # Therefore: x1_pred = x0 + v_pred = x_t + (1 - t) * v_pred
+        x1_pred = x_t + (1 - t_expanded) * v_pred
+
+        # Reshape to image format for LPIPS: [B*N, C] -> [B, C, H, W]
+        x1_pred_img = l2p_transform_tensor(
+            x1_pred.reshape(b, n, c),
+            patch_size=self.patch_size,
+        )
+        x1_target_img = l2p_transform_tensor(
+            x1.reshape(b, n, c),
+            patch_size=self.patch_size,
+        )
+
+        # Normalize to [-1, 1] range for LPIPS (it expects images in this range)
+        x1_pred_img = torch.clamp(x1_pred_img, -1, 1)
+        x1_target_img = torch.clamp(x1_target_img, -1, 1)
+
+        # Compute LPIPS loss
+        lpips_loss = self.lpips_loss(x1_pred_img, x1_target_img).mean()
+
+        return {
+            'mse_loss': mse_loss,
+            'lpips_loss': lpips_loss,
+        }
 
     @torch.no_grad()
     def forward(self, z, pos, schedule="linear", cfg=1.0, cfg_interval=None):
@@ -1741,7 +1774,7 @@ class UniFlowVisionModel(PreTrainedModel):
             teacher_feat: teacher model features for distillation (optional)
 
         Returns:
-            dict: loss components including total loss, flow loss, and distill loss
+            dict: loss components including mse_loss, lpips_loss, and distill_loss
         """
         # 1. Get generation features and distillation loss
         z, distill_loss = self.forward_condition(
@@ -1756,12 +1789,20 @@ class UniFlowVisionModel(PreTrainedModel):
         grid = int(N**0.5)
         pos = self.fetch_pos(grid, grid, z.device)
 
-        # 4. Compute flow matching loss
-        flow_loss = self.flow_head.forward_train(x1=t, z=z, pos=pos)
+        # 4. Compute flow matching losses (returns dict with mse_loss and lpips_loss)
+        flow_losses = self.flow_head.forward_train(x1=t, z=z, pos=pos)
 
-        # 5. Combine losses
+        # 5. Combine losses into separate components
+        # Apply 0.1 weight to LPIPS loss
+        weighted_lpips_loss = 0.1 * flow_losses['lpips_loss']
+
+        # Calculate total loss as sum of all losses
+        total_loss = flow_losses['mse_loss'] + weighted_lpips_loss + distill_loss
+
         return {
-            'flow_loss': flow_loss,
+            'loss': total_loss,
+            'mse_loss': flow_losses['mse_loss'],
+            'lpips_loss': weighted_lpips_loss,
             'distill_loss': distill_loss,
         }
 
