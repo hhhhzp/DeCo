@@ -1268,6 +1268,228 @@ class ChannelProjectorV2(nn.Module):
         return x
 
 
+class DCDownBlock2d(nn.Module):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        downsample: bool = False,
+        shortcut: bool = True,
+    ) -> None:
+        super().__init__()
+
+        self.downsample = downsample
+        self.factor = 2
+        self.stride = 1 if downsample else 2
+        self.group_size = in_channels * self.factor**2 // out_channels
+        self.shortcut = shortcut
+
+        out_ratio = self.factor**2
+        if downsample:
+            assert out_channels % out_ratio == 0
+            out_channels = out_channels // out_ratio
+
+        self.conv = nn.Conv2d(
+            in_channels,
+            out_channels,
+            kernel_size=3,
+            stride=self.stride,
+            padding=1,
+        )
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        x = self.conv(hidden_states)
+        if self.downsample:
+            x = F.pixel_unshuffle(x, self.factor)
+
+        if self.shortcut:
+            y = F.pixel_unshuffle(hidden_states, self.factor)
+            y = y.unflatten(1, (-1, self.group_size))
+            y = y.mean(dim=2)
+            hidden_states = x + y
+        else:
+            hidden_states = x
+
+        return hidden_states
+
+
+class DCUpBlock2d(nn.Module):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        interpolate: bool = False,
+        shortcut: bool = True,
+        interpolation_mode: str = "nearest",
+    ) -> None:
+        super().__init__()
+
+        self.interpolate = interpolate
+        self.interpolation_mode = interpolation_mode
+        self.shortcut = shortcut
+        self.factor = 2
+        self.repeats = out_channels * self.factor**2 // in_channels
+
+        out_ratio = self.factor**2
+
+        if not interpolate:
+            out_channels = out_channels * out_ratio
+
+        self.conv = nn.Conv2d(in_channels, out_channels, 3, 1, 1)
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        if self.interpolate:
+            x = F.interpolate(
+                hidden_states, scale_factor=self.factor, mode=self.interpolation_mode
+            )
+            x = self.conv(x)
+        else:
+            x = self.conv(hidden_states)
+            x = F.pixel_shuffle(x, self.factor)
+
+        if self.shortcut:
+            y = hidden_states.repeat_interleave(
+                self.repeats, dim=1, output_size=hidden_states.shape[1] * self.repeats
+            )
+            y = F.pixel_shuffle(y, self.factor)
+            hidden_states = x + y
+        else:
+            hidden_states = x
+
+        return hidden_states
+
+
+class ChannelProjectorV5(nn.Module):
+    """
+    Channel Projector V5 - Corrected Shortcut Placement
+
+    Architecture:
+    Down: [ViT] -> DownBlock(H->H/2) -> ResBlock -> [Mid_Feat] -> (Conv + Mean) -> [Latent]
+    Up:   [Latent] -> (Conv + Repeat) -> [Mid_Feat] -> ResBlock -> UpBlock(H/2->H) -> [ViT]
+
+    Correction:
+    The "Channel Shortcut" is applied LOCALLY around the channel projection layers,
+    NOT globally across the spatial scaling layers.
+    """
+
+    def __init__(self, vit_hidden_size: int, latent_ch: int):
+        super().__init__()
+        self.vit_hidden_size = vit_hidden_size
+        self.latent_ch = latent_ch
+
+        # 中间维度：遵循 H/2 时通道翻倍的原则，保持信息容量
+        self.mid_dim = vit_hidden_size * 2
+
+        # ====================================================
+        # 1. Downsample Modules
+        # ====================================================
+
+        # [A] 空间变换部分 (Spatial Transform)
+        # 负责 H -> H/2 和 C -> 2C
+        self.down_sampler = DCDownBlock2d(
+            in_channels=vit_hidden_size,
+            out_channels=self.mid_dim,
+            downsample=True,
+            shortcut=True,  # 这是 Block 内部的空间 Shortcut
+        )
+        self.down_res = nn.ModuleList([ProjectorBlock(self.mid_dim) for _ in range(3)])
+
+        # [B] 通道投影部分 (Channel Projection)
+        # 负责 2C -> Latent
+        self.to_latent = nn.Conv2d(self.mid_dim, latent_ch, kernel_size=1)
+
+        # Shortcut 配置: Mid_Dim -> Latent
+        self.enc_shortcut_group = self.mid_dim // latent_ch
+        assert self.mid_dim % latent_ch == 0
+
+        # ====================================================
+        # 2. Upsample Modules
+        # ====================================================
+
+        # [A] 通道恢复部分 (Channel Projection)
+        # 负责 Latent -> 2C
+        self.from_latent = nn.Conv2d(latent_ch, self.mid_dim, kernel_size=1)
+
+        # Shortcut 配置: Latent -> Mid_Dim
+        self.dec_shortcut_repeat = self.mid_dim // latent_ch
+
+        # [B] 空间变换部分 (Spatial Transform)
+        self.up_res = ProjectorBlock(self.mid_dim)
+
+        # 负责 H/2 -> H 和 2C -> C
+        self.up_sampler = DCUpBlock2d(
+            in_channels=self.mid_dim,
+            out_channels=vit_hidden_size,
+            interpolate=True,  # 依然坚持使用插值
+            shortcut=True,  # 这是 Block 内部的空间 Shortcut
+            interpolation_mode="nearest",
+        )
+
+        # 最后的 Norm，因为 Projector 输出直接进 Transformer
+        self.out_norm = UniFlowRMSNorm(vit_hidden_size, eps=1e-6)
+
+    def _seq_to_img(self, x):
+        B, N, C = x.shape
+        H = W = int(N**0.5)
+        return x.view(B, H, W, C).permute(0, 3, 1, 2)
+
+    def _img_to_seq(self, x):
+        return x.permute(0, 2, 3, 1).reshape(x.shape[0], -1, x.shape[1])
+
+    def downsample_and_project(self, x):
+        """
+        ViT -> Latent
+        """
+        x = self._seq_to_img(x)  # [B, C, H, W]
+
+        # 1. Spatial Downsampling Phase
+        # 这一阶段只负责把图变小，特征变厚，不进行激进的压缩
+        x = self.down_sampler(x)  # [B, 2C, H/2, W/2]
+        x = self.down_res(x)
+
+        # 2. Channel Projection Phase (With Local Shortcut)
+        # 这一阶段对应 DCAE Encoder 最后的 conv_out + shortcut
+
+        # Main Path
+        feat = self.to_latent(x)
+
+        # Shortcut Path: Split -> Mean
+        # x: [B, 2C, H/2, W/2] -> Unflatten -> Mean -> [B, Latent, H/2, W/2]
+        sc = x.unflatten(1, (-1, self.enc_shortcut_group))
+        sc = sc.mean(dim=2)
+
+        return self._img_to_seq(feat + sc)
+
+    def project_and_upsample(self, x_latent):
+        """
+        Latent -> ViT
+        """
+        z = self._seq_to_img(x_latent)  # [B, Latent, H/2, W/2]
+
+        # 1. Channel Projection Phase (With Local Shortcut)
+        # 这一阶段对应 DCAE Decoder 最前的 conv_in + shortcut
+
+        # Main Path
+        feat = self.from_latent(z)
+
+        # Shortcut Path: Repeat
+        # z: [B, Latent, H/2, W/2] -> Repeat -> [B, 2C, H/2, W/2]
+        sc = z.repeat_interleave(self.dec_shortcut_repeat, dim=1)
+
+        x = feat + sc
+
+        # 2. Spatial Upsampling Phase
+        # 此时 x 已经是信息丰富的中间特征，开始进行空间恢复
+        x = self.up_res(x)
+        x = self.up_sampler(x)  # [B, C, H, W]
+
+        # 3. Final Norm
+        x = self._img_to_seq(x)
+        x = self.out_norm(x)
+
+        return x
+
+
 #############################################################
 #                 UniFlowVisionModel
 #############################################################
@@ -1299,7 +1521,7 @@ class UniFlowVisionModel(PreTrainedModel):
         self.latent_ch = config.latent_ch
         if self.use_chal_proj:
             # Use new ChannelProjectorV2 with pixel_shuffle and ProjectorBlock
-            self.channel_projector = ChannelProjectorV2(vit_hidden_size, self.latent_ch)
+            self.channel_projector = ChannelProjectorV5(vit_hidden_size, self.latent_ch)
 
         # global transformer blocks
         self.global_blocks_depth = config.global_blocks_depth
