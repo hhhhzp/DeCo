@@ -806,6 +806,12 @@ class FlowDecoder(nn.Module):
 
     @torch.no_grad()
     def forward(self, z, pos, schedule="linear", cfg=1.0, cfg_interval=None):
+        # Temporary configuration override (comment out to use default parameters)
+        sample_steps = 25
+        schedule = "pow_0.25"
+        cfg = 1.5
+        # mode = 'rf'  # Not used in this function
+        cfg_interval = "(.17,1.02)"
 
         b, n, c_z = z.shape
 
@@ -813,7 +819,7 @@ class FlowDecoder(nn.Module):
         z = self.nerf_embedder(z)
 
         z = z.reshape(b * n, c_z)
-        sample_steps = self.num_sampling_steps
+        # sample_steps = self.num_sampling_steps  # Original line, commented out for temporary override
 
         # get all timesteps ts and intervals Δts
         if schedule == "linear":
@@ -1690,8 +1696,7 @@ class UniFlowVisionModel(PreTrainedModel):
             inputs_embeds=x,
             output_hidden_states=True,
         )
-        sem_tokens = encoder_outputs.hidden_states[4][:, 1:]
-        # sem_tokens = encoder_outputs.last_hidden_state[:, 1:]  # Remove CLS token
+        sem_tokens = encoder_outputs.last_hidden_state[:, 1:]  # Remove CLS token
 
         # 3. Channel projection for generation branch with 2x downsampling and upsampling
         B, N, C = sem_tokens.shape
