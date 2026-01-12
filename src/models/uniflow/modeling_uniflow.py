@@ -1445,7 +1445,8 @@ class ChannelProjectorV5(nn.Module):
         # 1. Spatial Downsampling Phase
         # 这一阶段只负责把图变小，特征变厚，不进行激进的压缩
         x = self.down_sampler(x)  # [B, 2C, H/2, W/2]
-        x = self.down_res(x)
+        for block in self.down_res:
+            x = block(x)
 
         # 2. Channel Projection Phase (With Local Shortcut)
         # 这一阶段对应 DCAE Encoder 最后的 conv_out + shortcut
