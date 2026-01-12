@@ -1114,8 +1114,8 @@ class ChannelProjector(nn.Module):
         self.latent_ch = latent_ch
 
         # Space-to-Depth results in 4x channels
-        in_dim_down = vit_hidden_size * 4
-        out_dim_up = vit_hidden_size * 4
+        in_dim_down = vit_hidden_size
+        out_dim_up = vit_hidden_size
 
         # Down path components
         self.down_norm = UniFlowRMSNorm(in_dim_down, eps=1e-6)
@@ -1138,9 +1138,9 @@ class ChannelProjector(nn.Module):
         H = W = int(N**0.5)
 
         # 1. Space-to-Depth: [B, H, W, C] -> [B, N/4, 4C]
-        x = rearrange(
-            x, 'b (h h2 w w2) c -> b (h w) (c h2 w2)', h=H // 2, w=W // 2, h2=2, w2=2
-        )
+        # x = rearrange(
+        #     x, 'b (h h2 w w2) c -> b (h w) (c h2 w2)', h=H // 2, w=W // 2, h2=2, w2=2
+        # )
 
         # 2. Norm -> Projection
         # Pre-Norm on the high-dimensional spatial features
@@ -1152,23 +1152,23 @@ class ChannelProjector(nn.Module):
         Args: x_latent: [B, N/4, latent_ch]
         Returns: x: [B, N, C]
         """
-        B, N_latent, C_latent = x_latent.shape
-        H_latent = W_latent = int(N_latent**0.5)
+        # B, N_latent, C_latent = x_latent.shape
+        # H_latent = W_latent = int(N_latent**0.5)
 
         # 1. Projection -> Norm
         # Post-Norm to stabilize features before PixelShuffle
         x_up = self.up_norm(self.up_proj(x_latent))
 
         # 2. Depth-to-Space: [B, N/4, 4C] -> [B, N, C]
-        x = rearrange(
-            x_up,
-            'b (h w) (c h2 w2) -> b (h h2 w w2) c',
-            h=H_latent,
-            w=W_latent,
-            h2=2,
-            w2=2,
-        )
-        return x
+        # x = rearrange(
+        #     x_up,
+        #     'b (h w) (c h2 w2) -> b (h h2 w w2) c',
+        #     h=H_latent,
+        #     w=W_latent,
+        #     h2=2,
+        #     w2=2,
+        # )
+        return x_up
 
 
 class ProjectorBlock(nn.Module):
@@ -1565,7 +1565,7 @@ class UniFlowVisionModel(PreTrainedModel):
         self.latent_ch = config.latent_ch
         if self.use_chal_proj:
             # Use new ChannelProjectorV2 with pixel_shuffle and ProjectorBlock
-            self.channel_projector = ChannelProjectorV5(vit_hidden_size, self.latent_ch)
+            self.channel_projector = ChannelProjector(vit_hidden_size, self.latent_ch)
 
         # global transformer blocks
         self.global_blocks_depth = config.global_blocks_depth
