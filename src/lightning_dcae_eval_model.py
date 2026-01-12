@@ -15,6 +15,7 @@ from src.models.autoencoder.base import fp2uint8
 # Log to wandb
 import wandb
 import numpy as np
+import cv2
 
 
 class ResBlock(nn.Module):
@@ -115,6 +116,7 @@ class LightningDCAEEvalModel(pl.LightningModule):
         self.pixel_decoder = None
 
         self._logged_images_count = 0
+        self.pad_info = None
 
     def configure_model(self) -> None:
         """Initialize model weights and load pretrained checkpoints"""
@@ -179,6 +181,80 @@ class LightningDCAEEvalModel(pl.LightningModule):
             tensor, size=(target_h, target_w), mode='bilinear', align_corners=True
         )
 
+    def padding(self, tensor):
+        """Pad image to multiple of 28"""
+        # renormalize to [0,1]
+        mean = torch.tensor(IMAGENET_DEFAULT_MEAN).to(tensor.device)
+        std = torch.tensor(IMAGENET_DEFAULT_STD).to(tensor.device)
+        mean = mean[None, :, None, None]
+        std = std[None, :, None, None]
+        # inputs is normalized by imagenet, while reconstruction predict [-1,1]
+        # here align both to [0, 1]
+        original_images = tensor * std + mean
+        b, c, h, w = original_images.shape
+
+        # Calculate target height and width (smallest multiple of 28, >= current size)
+        new_h = math.ceil(h / 28) * 28
+        new_w = math.ceil(w / 28) * 28
+
+        # Calculate padding needed
+        pad_h = new_h - h
+        pad_w = new_w - w
+
+        # Calculate top/bottom and left/right padding
+        pad_top = pad_h // 2
+        pad_bottom = pad_h - pad_top
+        pad_left = pad_w // 2
+        pad_right = pad_w - pad_left
+
+        # Apply symmetric padding (avoid edge discontinuities)
+        padded_images = F.pad(
+            original_images,
+            (pad_left, pad_right, pad_top, pad_bottom),
+            mode='reflect',
+        )
+        np_image = (
+            padded_images.clamp(0, 1)[0].permute(1, 2, 0).cpu().numpy()[:, :, [2, 1, 0]]
+            * 255
+        )
+        cv2.imwrite("pad_image.jpg", np_image.astype(np.uint8))
+
+        # normalize
+        normalized_images = (padded_images - mean) / std
+        self.pad_info = (pad_top, pad_bottom, pad_left, pad_right)
+        return normalized_images
+
+    def remove_padding(self, tensor):
+        """
+        Remove padding from padded tensor
+        Args:
+            tensor: Padded tensor with shape (b, c, h_padded, w_padded)
+        Returns:
+            unpadded_tensor: Original image region after removing padding
+        """
+        pad_top, pad_bottom, pad_left, pad_right = self.pad_info
+
+        # Calculate original image region
+        _, _, h_padded, w_padded = tensor.shape
+        unpadded_tensor = tensor[
+            :,
+            :,
+            pad_top : h_padded - pad_bottom,
+            pad_left : w_padded - pad_right,
+        ]
+        np_image = (
+            unpadded_tensor.clamp(-1, 1)[0]
+            .permute(1, 2, 0)
+            .float()
+            .detach()
+            .cpu()
+            .numpy()[:, :, [2, 1, 0]]
+        )
+        np_image = (np_image + 1) / 2 * 255
+        cv2.imwrite("unpad_image.jpg", np_image.astype(np.uint8))
+        # exit()
+        return unpadded_tensor
+
     def _encode_latents(self, pixel_values: torch.Tensor) -> torch.Tensor:
         """
         Encode images to latent representations using vision encoder.
@@ -189,6 +265,9 @@ class LightningDCAEEvalModel(pl.LightningModule):
         Returns:
             latents: Latent representations
         """
+        # Pad input to multiple of 28 before encoding
+        pixel_values = self.padding(pixel_values)
+
         # Ensure input data type matches model
         with torch.no_grad():
             # Convert [-1, 1] range to [0, 1] range, then apply ImageNet normalization
@@ -218,6 +297,8 @@ class LightningDCAEEvalModel(pl.LightningModule):
             video_frames = self.pixel_decoder.vae_decode(latents)
             # Resize down to 28/32 ratio
             video_frames = self.resize_down(video_frames)
+            # Remove padding to restore original size
+            video_frames = self.remove_padding(video_frames)
             video_frames = (video_frames * 0.5 + 0.5).clamp(0, 1)
             video = video_frames
         else:
