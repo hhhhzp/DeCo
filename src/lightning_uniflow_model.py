@@ -167,8 +167,8 @@ class LightningUniFlowModel(pl.LightningModule):
             no_grad(self.teacher_model)
             self.model.embeddings.position_embedding.requires_grad_(False)
         else:
-            no_grad(self.model.embeddings)
-            no_grad(self.model.encoder)
+            # no_grad(self.model.embeddings)
+            # no_grad(self.model.encoder)
             no_grad(self.model.mlp1)
 
     def configure_callbacks(self) -> Union[Sequence[Callback], Callback]:
