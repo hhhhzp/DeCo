@@ -296,7 +296,7 @@ class LightningDCAEEvalModel(pl.LightningModule):
             video_frames = self.resize_down(video_frames)
             # Remove padding to restore original size
             video_frames = self.remove_padding(video_frames)
-            video_frames = (video_frames * 0.5 + 0.5).clamp(0, 1)
+            #video_frames = (video_frames * 0.5 + 0.5).clamp(0, 1)
             video = video_frames
         else:
             video = latents
