@@ -847,7 +847,9 @@ class FlowDecoder(nn.Module):
         x = torch.randn(b * n, self.in_channels).cuda()  # noise start [b,n,c]
         x = x.to(z.dtype)
 
-        null_z = z.clone() * 0.0 if cfg != 1.0 else None
+        null_z = (
+            self.mask_token.expand(b, n, -1).reshape(b * n, -1) if cfg != 1.0 else None
+        )
         for i, (t, dt) in enumerate((zip(ts, dts))):
             timesteps = torch.tensor([t] * (b * n)).to(z.device)
 
