@@ -174,7 +174,7 @@ class LightningUniFlowModel(pl.LightningModule):
             # Unfreeze only sem_ae
             for param in self.model.sem_ae.parameters():
                 param.requires_grad = True
-            no_grad(self.model.sem_ae.up_proj)
+            # no_grad(self.model.sem_ae.up_proj)
             if self.global_rank == 0:
                 print("Training mode: Semantic Autoencoder (only sem_ae trainable)")
         elif self.distill:
