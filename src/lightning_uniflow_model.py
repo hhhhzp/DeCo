@@ -27,6 +27,7 @@ from transformers import (
     AutoModel,
     AutoConfig,
     get_constant_schedule_with_warmup,
+    get_cosine_schedule_with_warmup,
 )
 from torch.optim.lr_scheduler import LambdaLR, ReduceLROnPlateau
 from transformers.optimization import get_cosine_with_min_lr_schedule_with_warmup
@@ -231,6 +232,20 @@ class LightningUniFlowModel(pl.LightningModule):
         ]
 
         optimizer: torch.optim.Optimizer = self.optimizer(param_groups)
+        if self.self.train_semantic_ae:
+            lr_scheduler = get_cosine_schedule_with_warmup(
+                optimizer,
+                num_warmup_steps=0,
+                num_training_steps=200000,
+            )
+            return dict(
+                optimizer=optimizer,
+                lr_scheduler={
+                    "scheduler": lr_scheduler,
+                    "interval": "step",
+                    "frequency": 1,
+                },
+            )
 
         if self.distill:
             lr_scheduler = get_cosine_with_min_lr_schedule_with_warmup(
