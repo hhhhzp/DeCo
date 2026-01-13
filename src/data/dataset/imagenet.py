@@ -606,13 +606,11 @@ class PixWebDataset(IterableDataset):
 
     def _setup_sharded_dataset(self, dataset):
         """
-        处理两级分片逻辑：
-        1. Global Level: 根据 GPU rank 切分
-        2. Local Level:  根据 DataLoader worker 切分
+        处理分片逻辑（优化版）：
+        将 Global Rank 和 Local Worker 合并计算，只进行一次 Shard 操作。
         """
 
-        # --- 1. Global Sharding (GPU/Node 级别) ---
-        # 自动检测是否处于分布式环境
+        # 1. 获取分布式环境信息 (Global Info)
         if dist.is_available() and dist.is_initialized():
             world_size = dist.get_world_size()
             rank = dist.get_rank()
@@ -620,22 +618,29 @@ class PixWebDataset(IterableDataset):
             world_size = 1
             rank = 0
 
-        # 如果是多卡训练，先进行第一层切分
-        if world_size > 1:
-            dataset = dataset.shard(num_shards=world_size, index=rank)
-
-        # [可选] 这里是插入 Shuffle 的最佳时机
-        if self.is_train:
-            dataset = dataset.shuffle(buffer_size=1000, seed=self.seed)
-
-        # --- 2. Local Sharding (Worker 级别) ---
-        # 获取当前进程的 worker 信息
+        # 2. 获取本地 Worker 信息 (Local Info)
         worker_info = torch.utils.data.get_worker_info()
-        if worker_info is not None and worker_info.num_workers > 1:
-            # 在当前 GPU 分到的数据基础上，再进行第二层切分
-            dataset = dataset.shard(
-                num_shards=worker_info.num_workers, index=worker_info.id
-            )
+        if worker_info is not None:
+            num_workers = worker_info.num_workers
+            worker_id = worker_info.id
+        else:
+            num_workers = 1
+            worker_id = 0
+
+        # 3. 计算全局唯一的 Worker ID 和总分片数 (关键修改)
+        # 公式：Current_Global_ID = Rank_ID * Workers_Per_GPU + Local_Worker_ID
+        total_shards = world_size * num_workers
+        global_worker_id = rank * num_workers + worker_id
+
+        # 4. 执行一次性分片
+        # 相比分两次 shard，这样底层不仅效率更高，而且能保证数据绝对不重复
+        if total_shards > 1:
+            dataset = dataset.shard(num_shards=total_shards, index=global_worker_id)
+
+        # 5. Shuffle (放在分片之后，针对当前分片的数据流进行 Buffer Shuffle)
+        if self.is_train:
+            # 加上 rank 防止不同 GPU 随机种子撞车（虽已有分片隔离，但作为双重保险）
+            dataset = dataset.shuffle(buffer_size=1000, seed=self.seed + rank)
 
         return dataset
 

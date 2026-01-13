@@ -1230,34 +1230,14 @@ class SemanticAutoEncoder(nn.Module):
 
         # Encoder: downsample and compress
         self.down_blocks = nn.ModuleList(
-            [ProjectorBlock(channels=hidden_size) for _ in range(3)]
+            [ProjectorBlock(channels=hidden_size) for _ in range(1)]
         )
         self.down_proj = nn.Linear(hidden_size, latent_ch)
 
         # Decoder: project and upsample
         self.up_proj = nn.Linear(latent_ch, hidden_size)
         self.up_blocks = nn.ModuleList(
-            # 6 Transformer blocks
-            [
-                Block(
-                    dim=hidden_size,
-                    num_heads=16,
-                    mlp_ratio=4.0,
-                    qkv_bias=True,
-                    norm_layer=nn.LayerNorm,
-                    init_values=0.01,
-                )
-                for _ in range(6)
-            ]
-            # 1 MLP block for final refinement
-            + [
-                nn.Sequential(
-                    nn.LayerNorm(hidden_size),
-                    nn.Linear(hidden_size, hidden_size),
-                    nn.GELU(),
-                    nn.Linear(hidden_size, hidden_size),
-                )
-            ]
+            [ProjectorBlock(channels=hidden_size) for _ in range(12)]
         )
 
     def downsample_and_project(self, x):
