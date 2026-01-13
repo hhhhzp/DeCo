@@ -1239,8 +1239,9 @@ class SemanticAutoEncoder(nn.Module):
                     mlp_ratio=4.0,
                     qkv_bias=True,
                     norm_layer=nn.LayerNorm,
+                    init_values=0.01,
                 )
-                for _ in range(1)
+                for _ in range(5)
             ]
         )
 
@@ -1893,14 +1894,14 @@ class UniFlowVisionModel(PreTrainedModel):
         sem_tokens = self._encode_image(pixel_values)
 
         # 2. Get target features through forward_feature
-        target_feat = self.forward_feature(sem_tokens.detach())
+        target_feat = self.forward_feature(sem_tokens)
 
         # 3. Semantic autoencoder: encode and decode
         latent = self.sem_ae.downsample_and_project(target_feat)
         reconstructed_feat = self.sem_ae.project_and_upsample(latent)
 
         # 4. Compute MSE loss
-        semantic_loss = F.mse_loss(reconstructed_feat, target_feat)
+        semantic_loss = F.mse_loss(reconstructed_feat, target_feat.detach())
 
         return {
             'loss': semantic_loss,
