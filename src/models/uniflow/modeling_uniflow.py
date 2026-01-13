@@ -1606,7 +1606,7 @@ class UniFlowVisionModel(PreTrainedModel):
         self.latent_ch = config.latent_ch
         if self.use_chal_proj:
             # Use new ChannelProjectorV2 with pixel_shuffle and ProjectorBlock
-            self.channel_projector = ChannelProjectorV5(vit_hidden_size, self.latent_ch)
+            self.channel_projector = ChannelProjector(vit_hidden_size, self.latent_ch)
 
         # global transformer blocks
         self.global_blocks_depth = config.global_blocks_depth
