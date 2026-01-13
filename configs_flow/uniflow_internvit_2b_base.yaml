@@ -1,12 +1,12 @@
 # lightning.pytorch==2.4.0
 seed_everything: true
 tags:
-  exp: &exp uniflow_internvit_layer6_unfreeze_lpips_convnext_2b_r14_mlp_c32
+  exp: &exp uniflow_internvit_layer6_2b_r14_mlp_c32
 torch_hub_dir: ~/.cache/torch/hub
 huggingface_cache_dir: null
 
 trainer:
-  default_root_dir: ./uniflow_internvit_2b
+  default_root_dir: ./dual_internvit_2b
   accelerator: auto
   strategy: auto
   devices: auto
