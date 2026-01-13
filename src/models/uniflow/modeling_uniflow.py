@@ -1230,7 +1230,7 @@ class SemanticAutoEncoder(nn.Module):
 
         # Encoder: downsample and compress
         self.down_blocks = nn.ModuleList(
-            [ProjectorBlock(channels=hidden_size) for _ in range(1)]
+            [ProjectorBlock(channels=hidden_size) for _ in range(6)]
         )
         self.down_proj = nn.Linear(hidden_size, latent_ch)
 
