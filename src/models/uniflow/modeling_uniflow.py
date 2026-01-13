@@ -1149,21 +1149,20 @@ class ChannelProjector(nn.Module):
     2. Projection -> Norm -> 2x spatial upsampling (Depth-to-Space)
     """
 
-    def __init__(self, vit_hidden_size, latent_ch, add_norm=True):
+    def __init__(self, hidden_size, latent_ch, add_norm=True, mlp_ratio=4):
         super().__init__()
-        self.vit_hidden_size = vit_hidden_size
         self.latent_ch = latent_ch
 
         # Space-to-Depth results in 4x channels
-        in_dim_down = vit_hidden_size
-        out_dim_up = vit_hidden_size
-
+        in_dim_down = hidden_size
+        out_dim_up = hidden_size
+        mlp_hidden_dim = int(hidden_size * mlp_ratio)
         # Down path components
         self.down_norm = (
             UniFlowRMSNorm(in_dim_down, eps=1e-6) if add_norm else nn.Identity()
         )
         self.down_proj = FeedForward(
-            dim=in_dim_down, hidden_dim=in_dim_down, out_dim=latent_ch
+            dim=in_dim_down, hidden_dim=mlp_hidden_dim, out_dim=latent_ch
         )
 
         # Up path components
@@ -1171,7 +1170,7 @@ class ChannelProjector(nn.Module):
             UniFlowRMSNorm(out_dim_up, eps=1e-6) if add_norm else nn.Identity()
         )
         self.up_proj = FeedForward(
-            dim=latent_ch, hidden_dim=out_dim_up, out_dim=out_dim_up
+            dim=latent_ch, hidden_dim=mlp_hidden_dim, out_dim=out_dim_up
         )
 
     def downsample_and_project(self, x):
