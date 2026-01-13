@@ -1235,7 +1235,7 @@ class SemanticAutoEncoder(nn.Module):
 
         # Encoder: downsample and compress
         self.down_blocks = nn.ModuleList(
-            [ProjectorBlock(channels=llm_hidden_size) for _ in range(3)]
+            [ProjectorBlock(channels=llm_hidden_size) for _ in range(1)]
         )
         self.down_proj = nn.Linear(llm_hidden_size, latent_ch)
 
@@ -1246,12 +1246,12 @@ class SemanticAutoEncoder(nn.Module):
         )
 
         # Final projection from intermediate to output dimension
-        # self.up_proj = nn.Sequential(
-        #     nn.LayerNorm(llm_hidden_size),
-        #     nn.Linear(llm_hidden_size, llm_hidden_size),
-        #     nn.GELU(),
-        #     nn.Linear(llm_hidden_size, llm_hidden_size),
-        # )
+        self.up_proj = nn.Sequential(
+            nn.LayerNorm(llm_hidden_size),
+            nn.Linear(llm_hidden_size, llm_hidden_size),
+            nn.GELU(),
+            nn.Linear(llm_hidden_size, llm_hidden_size),
+        )
 
     def downsample_and_project(self, x):
         """Encode features to latent space.
@@ -1265,6 +1265,7 @@ class SemanticAutoEncoder(nn.Module):
         for block in self.down_blocks:
             x = block(x)
         x_latent = self.down_proj(x)
+        x_latent = F.layer_norm(x_latent, (self.latent_ch,))
         return x_latent
 
     def project_and_upsample(self, x_latent, return_intermediate=False):
@@ -1287,14 +1288,14 @@ class SemanticAutoEncoder(nn.Module):
             x_up = block(x_up)
 
         # x_up is now at intermediate dimension (4*vit_hidden_size)
-        x_mid = x_up
+        # x_mid = x_up
 
         # Project to final dimension
         # x_recon = self.up_proj(x_mid)
 
         # if return_intermediate:
         #     return x_mid, x_recon
-        return x_up
+        return self.up_proj(x_up)
 
 
 class ProjectorBlock(nn.Module):
