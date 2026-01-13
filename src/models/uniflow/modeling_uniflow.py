@@ -1225,9 +1225,23 @@ class SemanticAutoEncoder(nn.Module):
         out_dim_up = hidden_size
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
 
-        self.down_proj = nn.Linear(in_dim_down, latent_ch)
+        self.down_proj = FeedForward(
+            dim=in_dim_down, hidden_dim=mlp_hidden_dim, out_dim=latent_ch
+        )
         self.up_proj = FeedForward(
             dim=latent_ch, hidden_dim=mlp_hidden_dim, out_dim=out_dim_up
+        )
+        self.up_blocks = nn.ModuleList(
+            [
+                Block(
+                    dim=hidden_size,
+                    num_heads=16,
+                    mlp_ratio=4.0,
+                    qkv_bias=True,
+                    norm_layer=nn.LayerNorm,
+                )
+                for _ in range(1)
+            ]
         )
 
     def downsample_and_project(self, x):
@@ -1246,6 +1260,8 @@ class SemanticAutoEncoder(nn.Module):
         Returns: x: [B, N, C]
         """
         x_up = self.up_proj(x_latent)
+        for block in self.up_blocks:
+            x_up = block(x_up)
         return x_up
 
 
