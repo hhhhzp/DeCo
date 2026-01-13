@@ -168,13 +168,11 @@ class LightningUniFlowModel(pl.LightningModule):
 
         # Freeze strategy based on training mode
         if self.train_semantic_ae:
-            # Semantic AE training: freeze everything except sem_ae
-            no_grad(self.model.embeddings)
-            no_grad(self.model.encoder)
-            no_grad(self.model.mlp1)
-            no_grad(self.model.channel_projector)
-            no_grad(self.model.global_blocks)
-            no_grad(self.model.flow_head)
+            # Semantic AE training: freeze all parameters first, then unfreeze sem_ae
+            no_grad(self.model)  # Freeze all parameters
+            # Unfreeze only sem_ae
+            for param in self.model.sem_ae.parameters():
+                param.requires_grad = True
             if self.global_rank == 0:
                 print("Training mode: Semantic Autoencoder (only sem_ae trainable)")
         elif self.distill:
