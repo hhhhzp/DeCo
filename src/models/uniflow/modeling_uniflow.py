@@ -1224,7 +1224,7 @@ class SemanticAutoEncoder(nn.Module):
         in_dim_down = hidden_size
         out_dim_up = hidden_size
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
-        
+
         self.down_proj = nn.Linear(in_dim_down, latent_ch)
         self.up_proj = FeedForward(
             dim=latent_ch, hidden_dim=mlp_hidden_dim, out_dim=out_dim_up
@@ -1237,7 +1237,7 @@ class SemanticAutoEncoder(nn.Module):
         """
         B, N, C = x.shape
         H = W = int(N**0.5)
-        x_latent = self.down_proj(self.down_norm(x))
+        x_latent = self.down_proj(x)
         return x_latent
 
     def project_and_upsample(self, x_latent):
@@ -1245,7 +1245,7 @@ class SemanticAutoEncoder(nn.Module):
         Args: x_latent: [B, N/4, latent_ch]
         Returns: x: [B, N, C]
         """
-        x_up = self.up_norm(self.up_proj(x_latent))
+        x_up = self.up_proj(x_latent)
         return x_up
 
 
@@ -1646,7 +1646,9 @@ class UniFlowVisionModel(PreTrainedModel):
             self.channel_projector = ChannelProjector(vit_hidden_size, self.latent_ch)
 
         # Semantic autoencoder for feature reconstruction
-        self.sem_ae = SemanticAutoEncoder(llm_hidden_size, self.latent_ch, add_norm=False)
+        self.sem_ae = SemanticAutoEncoder(
+            llm_hidden_size, self.latent_ch, add_norm=False
+        )
 
         # global transformer blocks
         self.global_blocks_depth = config.global_blocks_depth
