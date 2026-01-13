@@ -1219,32 +1219,45 @@ class SemanticAutoEncoder(nn.Module):
     """Semantic AutoEncoder for feature compression and reconstruction.
 
     Architecture:
-        - Encoder: 3 ResBlocks + Linear projection to latent space
-        - Decoder: Linear projection + 6 Transformer Blocks + 1 MLP Block
+        - Encoder: 6 ProjectorBlocks + Linear projection to latent space
+        - Decoder: Linear projection + 6 ProjectorBlocks + MLP projection
+        - Supports intermediate supervision at 4*vit_hidden_size dimension
     """
 
-    def __init__(self, hidden_size, latent_ch, add_norm=True, mlp_ratio=4):
+    def __init__(
+        self, llm_hidden_size, vit_hidden_size, latent_ch, add_norm=True, mlp_ratio=4
+    ):
         super().__init__()
-        self.hidden_size = hidden_size
+        self.llm_hidden_size = llm_hidden_size
+        self.vit_hidden_size = vit_hidden_size
         self.latent_ch = latent_ch
+        self.mid_dim = 4 * vit_hidden_size
 
         # Encoder: downsample and compress
         self.down_blocks = nn.ModuleList(
-            [ProjectorBlock(channels=hidden_size) for _ in range(6)]
+            [ProjectorBlock(channels=llm_hidden_size) for _ in range(6)]
         )
-        self.down_proj = nn.Linear(hidden_size, latent_ch)
+        self.down_proj = nn.Linear(llm_hidden_size, latent_ch)
 
-        # Decoder: project and upsample
-        self.up_proj = nn.Linear(latent_ch, hidden_size)
+        # Decoder: project and upsample to intermediate dimension (4*vit_hidden_size)
+        self.up_embedding = nn.Linear(latent_ch, self.mid_dim)
         self.up_blocks = nn.ModuleList(
-            [ProjectorBlock(channels=hidden_size) for _ in range(12)]
+            [ProjectorBlock(channels=self.mid_dim) for _ in range(6)]
+        )
+
+        # Final projection from intermediate to output dimension
+        self.up_proj = nn.Sequential(
+            nn.LayerNorm(self.mid_dim),
+            nn.Linear(self.mid_dim, llm_hidden_size),
+            nn.GELU(),
+            nn.Linear(llm_hidden_size, llm_hidden_size),
         )
 
     def downsample_and_project(self, x):
         """Encode features to latent space.
 
         Args:
-            x: [B, N, C] feature tensor
+            x: [B, N, llm_hidden_size] feature tensor
 
         Returns:
             x_latent: [B, N, latent_ch] compressed features
@@ -1254,19 +1267,34 @@ class SemanticAutoEncoder(nn.Module):
         x_latent = self.down_proj(x)
         return x_latent
 
-    def project_and_upsample(self, x_latent):
+    def project_and_upsample(self, x_latent, return_intermediate=False):
         """Decode latent features back to original space.
 
         Args:
             x_latent: [B, N, latent_ch] compressed features
+            return_intermediate: if True, return intermediate features at 4*vit_hidden_size dimension
 
         Returns:
-            x_recon: [B, N, C] reconstructed features
+            if return_intermediate:
+                x_mid: [B, N, 4*vit_hidden_size] intermediate features
+                x_recon: [B, N, llm_hidden_size] reconstructed features
+            else:
+                x_recon: [B, N, llm_hidden_size] reconstructed features
         """
-        x_up = self.up_proj(x_latent)
+        # Project to intermediate dimension
+        x_up = self.up_embedding(x_latent)
         for block in self.up_blocks:
             x_up = block(x_up)
-        return x_up
+
+        # x_up is now at intermediate dimension (4*vit_hidden_size)
+        x_mid = x_up
+
+        # Project to final dimension
+        x_recon = self.up_proj(x_mid)
+
+        if return_intermediate:
+            return x_mid, x_recon
+        return x_recon
 
 
 class ProjectorBlock(nn.Module):
@@ -1663,7 +1691,7 @@ class UniFlowVisionModel(PreTrainedModel):
 
         # Semantic autoencoder for feature reconstruction
         self.sem_ae = SemanticAutoEncoder(
-            llm_hidden_size, self.latent_ch, add_norm=False
+            llm_hidden_size, vit_hidden_size, self.latent_ch, add_norm=False
         )
 
         # global transformer blocks
@@ -1881,30 +1909,51 @@ class UniFlowVisionModel(PreTrainedModel):
 
     def forward_semantic_loss(self, pixel_values):
         """
-        Compute semantic autoencoder loss only.
+        Compute semantic autoencoder loss with intermediate supervision.
 
         Args:
             pixel_values: input images [B, C, H, W]
 
         Returns:
-            dict: loss components with semantic_loss
+            dict: loss components with semantic_loss, semantic_loss_mid, semantic_loss_final
         """
         # 1. Encode image to semantic tokens
         sem_tokens = self._encode_image(pixel_values)
 
-        # 2. Get target features through forward_feature
-        target_feat = self.forward_feature(sem_tokens)
+        # 2. Get intermediate and final target features
+        # Intermediate: after pixel_shuffle (4*vit_hidden_size dimension)
+        h = w = int(sem_tokens.shape[1] ** 0.5)
+        vit_embeds = sem_tokens.reshape(sem_tokens.shape[0], h, w, -1)
+        vit_embeds = pixel_shuffle(vit_embeds, scale_factor=0.5)
+        target_feat_mid = vit_embeds.reshape(
+            vit_embeds.shape[0], -1, vit_embeds.shape[-1]
+        )
 
-        # 3. Semantic autoencoder: encode and decode
-        latent = self.sem_ae.downsample_and_project(target_feat)
-        reconstructed_feat = self.sem_ae.project_and_upsample(latent)
+        # Final: after mlp1 (llm_hidden_size dimension)
+        target_feat_final = self.mlp1(target_feat_mid)
 
-        # 4. Compute MSE loss
-        semantic_loss = F.mse_loss(reconstructed_feat, target_feat.detach())
+        # 3. Semantic autoencoder: encode and decode with intermediate output
+        latent = self.sem_ae.downsample_and_project(target_feat_final)
+        reconstructed_feat_mid, reconstructed_feat_final = (
+            self.sem_ae.project_and_upsample(latent, return_intermediate=True)
+        )
+
+        # 4. Compute MSE losses
+        # Intermediate supervision loss (at 4*vit_hidden_size dimension)
+        semantic_loss_mid = F.mse_loss(reconstructed_feat_mid, target_feat_mid.detach())
+
+        # Final supervision loss (at llm_hidden_size dimension)
+        semantic_loss_final = F.mse_loss(
+            reconstructed_feat_final, target_feat_final.detach()
+        )
+
+        # Total semantic loss (weighted sum)
+        semantic_loss = semantic_loss_mid + semantic_loss_final
 
         return {
             'loss': semantic_loss,
-            'semantic_loss': semantic_loss,
+            'semantic_loss_mid': semantic_loss_mid,
+            'semantic_loss': semantic_loss_final,
         }
 
     def forward(self, pixel_values):
