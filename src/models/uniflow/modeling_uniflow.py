@@ -1940,7 +1940,15 @@ class UniFlowVisionModel(PreTrainedModel):
 
         # 4. Compute MSE losses
         # Intermediate supervision loss (at 4*vit_hidden_size dimension)
-        semantic_loss_mid = F.mse_loss(reconstructed_feat_mid, target_feat_mid.detach())
+        # Apply layer normalization before computing loss
+        normalized_shape = (reconstructed_feat_mid.shape[-1],)
+        reconstructed_feat_mid_norm = F.layer_norm(
+            reconstructed_feat_mid, normalized_shape
+        )
+        target_feat_mid_norm = F.layer_norm(target_feat_mid.detach(), normalized_shape)
+        semantic_loss_mid = F.mse_loss(
+            reconstructed_feat_mid_norm, target_feat_mid_norm
+        )
 
         # Final supervision loss (at llm_hidden_size dimension)
         semantic_loss_final = F.mse_loss(
