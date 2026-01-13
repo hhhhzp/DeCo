@@ -1149,7 +1149,7 @@ class ChannelProjector(nn.Module):
     2. Projection -> Norm -> 2x spatial upsampling (Depth-to-Space)
     """
 
-    def __init__(self, vit_hidden_size, latent_ch):
+    def __init__(self, vit_hidden_size, latent_ch, add_norm=True):
         super().__init__()
         self.vit_hidden_size = vit_hidden_size
         self.latent_ch = latent_ch
@@ -1159,13 +1159,17 @@ class ChannelProjector(nn.Module):
         out_dim_up = vit_hidden_size
 
         # Down path components
-        self.down_norm = UniFlowRMSNorm(in_dim_down, eps=1e-6)
+        self.down_norm = (
+            UniFlowRMSNorm(in_dim_down, eps=1e-6) if add_norm else nn.Identity()
+        )
         self.down_proj = FeedForward(
             dim=in_dim_down, hidden_dim=in_dim_down, out_dim=latent_ch
         )
 
         # Up path components
-        self.up_norm = UniFlowRMSNorm(out_dim_up, eps=1e-6)
+        self.up_norm = (
+            UniFlowRMSNorm(out_dim_up, eps=1e-6) if add_norm else nn.Identity()
+        )
         self.up_proj = FeedForward(
             dim=latent_ch, hidden_dim=out_dim_up, out_dim=out_dim_up
         )
@@ -1608,6 +1612,9 @@ class UniFlowVisionModel(PreTrainedModel):
             # Use new ChannelProjectorV2 with pixel_shuffle and ProjectorBlock
             self.channel_projector = ChannelProjector(vit_hidden_size, self.latent_ch)
 
+        # Semantic autoencoder for feature reconstruction
+        self.sem_ae = ChannelProjector(llm_hidden_size, self.latent_ch, add_norm=False)
+
         # global transformer blocks
         self.global_blocks_depth = config.global_blocks_depth
         self.global_block_pos_embed = nn.Parameter(
@@ -1708,6 +1715,33 @@ class UniFlowVisionModel(PreTrainedModel):
         )
         return pos_embed
 
+    def _encode_image(self, pixel_values):
+        """
+        Encode images to semantic tokens.
+
+        Args:
+            pixel_values: input images [B, C, H, W]
+
+        Returns:
+            sem_tokens: encoder features without CLS token [B, N, C]
+        """
+        assert pixel_values.ndim == 4, f'wrong pixel_values size: {pixel_values.shape}'
+
+        # Normalize and embed
+        x = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(
+            pixel_values * 0.5 + 0.5
+        )
+        x = self.embeddings(x)
+
+        # Extract features from encoder
+        encoder_outputs = self.encoder(
+            inputs_embeds=x,
+            output_hidden_states=True,
+        )
+        sem_tokens = encoder_outputs.last_hidden_state[:, 1:]  # Remove CLS token
+
+        return sem_tokens
+
     def forward_condition(self, x, teacher_feat=None):
         """
         Encode images and extract features for generation.
@@ -1720,20 +1754,10 @@ class UniFlowVisionModel(PreTrainedModel):
             gen_feat: generation features [B, N, C]
             distill_loss: distillation loss (if teacher_feat is provided)
         """
-        assert x.ndim == 4, f'wrong pixel_values size: {x.shape}'
+        # 1. Encode image to semantic tokens
+        sem_tokens = self._encode_image(x)
 
-        # 1. Normalize and embed
-        x = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(x * 0.5 + 0.5)
-        x = self.embeddings(x)
-
-        # 2. Extract features from encoder
-        encoder_outputs = self.encoder(
-            inputs_embeds=x,
-            output_hidden_states=True,
-        )
-        sem_tokens = encoder_outputs.last_hidden_state[:, 1:]  # Remove CLS token
-
-        # 3. Channel projection for generation branch with 2x downsampling and upsampling
+        # 2. Channel projection for generation branch with 2x downsampling and upsampling
         B, N, C = sem_tokens.shape
         grid = int(N**0.5)
 
@@ -1741,7 +1765,7 @@ class UniFlowVisionModel(PreTrainedModel):
         latent_tokens = self.channel_projector.downsample_and_project(sem_tokens)
         condition_tokens = self.channel_projector.project_and_upsample(latent_tokens)
 
-        # 4. Apply global blocks with RoPE
+        # 3. Apply global blocks with RoPE
         B, N, C = condition_tokens.shape
         grid = int(N**0.5)
         pos_embed = self._get_pos_embed(self.global_block_pos_embed, grid, grid)
@@ -1751,7 +1775,7 @@ class UniFlowVisionModel(PreTrainedModel):
         for block in self.global_blocks:
             condition_tokens = block(condition_tokens, pos)
 
-        # 5. Return with optional distillation loss
+        # 4. Return with optional distillation loss
         if teacher_feat is not None:
             distill_loss = F.mse_loss(
                 self.forward_feature(sem_tokens), teacher_feat.detach()
@@ -1802,6 +1826,34 @@ class UniFlowVisionModel(PreTrainedModel):
             'flow_loss': flow_losses['mse_loss'],
             'lpips_loss': weighted_lpips_loss,
             'distill_loss': distill_loss,
+        }
+
+    def forward_semantic_loss(self, pixel_values):
+        """
+        Compute semantic autoencoder loss only.
+
+        Args:
+            pixel_values: input images [B, C, H, W]
+
+        Returns:
+            dict: loss components with semantic_loss
+        """
+        # 1. Encode image to semantic tokens
+        sem_tokens = self._encode_image(pixel_values)
+
+        # 2. Get target features through forward_feature
+        target_feat = self.forward_feature(sem_tokens)
+
+        # 3. Semantic autoencoder: encode and decode
+        latent = self.sem_ae.downsample_and_project(target_feat)
+        reconstructed_feat = self.sem_ae.project_and_upsample(latent)
+
+        # 4. Compute MSE loss
+        semantic_loss = F.mse_loss(reconstructed_feat, target_feat)
+
+        return {
+            'loss': semantic_loss,
+            'semantic_loss': semantic_loss,
         }
 
     def forward(self, pixel_values):

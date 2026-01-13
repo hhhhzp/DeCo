@@ -18,7 +18,7 @@ from transformers import (
 from torchvision.transforms import Normalize
 from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from src.models.autoencoder.base import fp2uint8
-from src.models.uniflow.modeling_uniflow import UniFlowVisionModel
+from src.models.uniflow.modeling_uniflow import ChannelProjector, UniFlowVisionModel
 from src.models.uniflow.configuration_uniflow import UniFlowVisionConfig
 from src.callbacks.simple_ema import SimpleEMA
 from src.utils.no_grad import no_grad, filter_nograd_tensors
@@ -56,12 +56,14 @@ class LightningUniFlowModel(pl.LightningModule):
         pretrain_model_path: str = None,
         use_ema: bool = True,
         distill: bool = False,
+        train_semantic_ae: bool = False,
     ):
         super().__init__()
         config = UniFlowVisionConfig.from_pretrained(config_path)
         self.model = UniFlowVisionModel(config)
         self.use_ema = use_ema
         self.distill = distill
+        self.train_semantic_ae = train_semantic_ae
 
         # Create EMA model if enabled
         if self.use_ema:
@@ -163,13 +165,31 @@ class LightningUniFlowModel(pl.LightningModule):
         # self.model = torch.compile(self.model)
         # if self.use_ema:
         #     self.ema_model = torch.compile(self.ema_model)
-        if self.distill:
-            no_grad(self.teacher_model)
-            self.model.embeddings.position_embedding.requires_grad_(False)
-        else:
+
+        # Freeze strategy based on training mode
+        if self.train_semantic_ae:
+            # Semantic AE training: freeze everything except sem_ae
             no_grad(self.model.embeddings)
             no_grad(self.model.encoder)
             no_grad(self.model.mlp1)
+            no_grad(self.model.channel_projector)
+            no_grad(self.model.global_blocks)
+            no_grad(self.model.flow_head)
+            if self.global_rank == 0:
+                print("Training mode: Semantic Autoencoder (only sem_ae trainable)")
+        elif self.distill:
+            # Distillation training: freeze position embeddings only
+            no_grad(self.teacher_model)
+            self.model.embeddings.position_embedding.requires_grad_(False)
+            if self.global_rank == 0:
+                print("Training mode: Distillation (position embeddings frozen)")
+        else:
+            # Flow matching training: freeze encoder components
+            no_grad(self.model.embeddings)
+            no_grad(self.model.encoder)
+            no_grad(self.model.mlp1)
+            if self.global_rank == 0:
+                print("Training mode: Flow Matching (encoder frozen)")
 
     def configure_callbacks(self) -> Union[Sequence[Callback], Callback]:
         """Configure EMA callback"""
@@ -249,28 +269,35 @@ class LightningUniFlowModel(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         """
-        Training step for UniFlow model using flow matching.
-        The model learns to predict velocity fields for rectified flow.
+        Training step for UniFlow model.
+        Supports two modes:
+        1. Flow matching training (default)
+        2. Semantic autoencoder training (train_semantic_ae=True)
         """
         # Unpack batch: input image is both source and target for reconstruction
         img, _, metadata = batch
 
-        # Get teacher features if distillation is enabled
-        teacher_feat = None
-        if self.distill and self.teacher_model is not None:
-            with torch.no_grad():
-                teacher_img = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(
-                    img * 0.5 + 0.5
-                )
-                teacher_feat = self.teacher_model.extract_feature(teacher_img)
+        # Mode 1: Semantic autoencoder training
+        if self.train_semantic_ae:
+            loss_dict = self.model.forward_semantic_loss(img)
+        # Mode 2: Flow matching training (default)
+        else:
+            # Get teacher features if distillation is enabled
+            teacher_feat = None
+            if self.distill and self.teacher_model is not None:
+                with torch.no_grad():
+                    teacher_img = Normalize(
+                        IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
+                    )(img * 0.5 + 0.5)
+                    teacher_feat = self.teacher_model.extract_feature(teacher_img)
 
-        # Forward pass with flow matching loss
-        # The model internally:
-        # 1. Encodes image to get condition tokens
-        # 2. Converts target image to patch tokens
-        # 3. Samples noise and timestep
-        # 4. Computes flow matching loss (velocity prediction)
-        loss_dict = self.model.forward_loss(img, teacher_feat=teacher_feat)
+            # Forward pass with flow matching loss
+            # The model internally:
+            # 1. Encodes image to get condition tokens
+            # 2. Converts target image to patch tokens
+            # 3. Samples noise and timestep
+            # 4. Computes flow matching loss (velocity prediction)
+            loss_dict = self.model.forward_loss(img, teacher_feat=teacher_feat)
 
         # Compute total loss
         total_loss = loss_dict["loss"]
