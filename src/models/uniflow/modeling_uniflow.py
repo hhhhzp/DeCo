@@ -1893,7 +1893,7 @@ class UniFlowVisionModel(PreTrainedModel):
         sem_tokens = self._encode_image(pixel_values)
 
         # 2. Get target features through forward_feature
-        target_feat = self.forward_feature(sem_tokens)
+        target_feat = self.forward_feature(sem_tokens.detach())
 
         # 3. Semantic autoencoder: encode and decode
         latent = self.sem_ae.downsample_and_project(target_feat)
