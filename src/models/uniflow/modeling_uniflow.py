@@ -1216,22 +1216,28 @@ class ChannelProjector(nn.Module):
 
 
 class SemanticAutoEncoder(nn.Module):
+    """Semantic AutoEncoder for feature compression and reconstruction.
+
+    Architecture:
+        - Encoder: 3 ResBlocks + Linear projection to latent space
+        - Decoder: Linear projection + 6 Transformer Blocks + 1 MLP Block
+    """
+
     def __init__(self, hidden_size, latent_ch, add_norm=True, mlp_ratio=4):
         super().__init__()
+        self.hidden_size = hidden_size
         self.latent_ch = latent_ch
 
-        # Space-to-Depth results in 4x channels
-        in_dim_down = hidden_size
-        out_dim_up = hidden_size
-        mlp_hidden_dim = int(hidden_size * mlp_ratio)
+        # Encoder: downsample and compress
+        self.down_blocks = nn.ModuleList(
+            [ResBlock(channels=hidden_size) for _ in range(3)]
+        )
+        self.down_proj = nn.Linear(hidden_size, latent_ch)
 
-        self.down_proj = FeedForward(
-            dim=in_dim_down, hidden_dim=mlp_hidden_dim, out_dim=latent_ch
-        )
-        self.up_proj = FeedForward(
-            dim=latent_ch, hidden_dim=mlp_hidden_dim, out_dim=out_dim_up
-        )
+        # Decoder: project and upsample
+        self.up_proj = nn.Linear(latent_ch, hidden_size)
         self.up_blocks = nn.ModuleList(
+            # 6 Transformer blocks
             [
                 Block(
                     dim=hidden_size,
@@ -1241,24 +1247,41 @@ class SemanticAutoEncoder(nn.Module):
                     norm_layer=nn.LayerNorm,
                     init_values=0.01,
                 )
-                for _ in range(5)
+                for _ in range(6)
+            ]
+            # 1 MLP block for final refinement
+            + [
+                nn.Sequential(
+                    nn.LayerNorm(hidden_size),
+                    nn.Linear(hidden_size, hidden_size),
+                    nn.GELU(),
+                    nn.Linear(hidden_size, hidden_size),
+                )
             ]
         )
 
     def downsample_and_project(self, x):
+        """Encode features to latent space.
+
+        Args:
+            x: [B, N, C] feature tensor
+
+        Returns:
+            x_latent: [B, N, latent_ch] compressed features
         """
-        Args: x: [B, N, C] (N must be square)
-        Returns: x_latent: [B, N/4, latent_ch]
-        """
-        B, N, C = x.shape
-        H = W = int(N**0.5)
+        for block in self.down_blocks:
+            x = block(x)
         x_latent = self.down_proj(x)
         return x_latent
 
     def project_and_upsample(self, x_latent):
-        """
-        Args: x_latent: [B, N/4, latent_ch]
-        Returns: x: [B, N, C]
+        """Decode latent features back to original space.
+
+        Args:
+            x_latent: [B, N, latent_ch] compressed features
+
+        Returns:
+            x_recon: [B, N, C] reconstructed features
         """
         x_up = self.up_proj(x_latent)
         for block in self.up_blocks:
