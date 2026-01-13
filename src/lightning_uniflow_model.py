@@ -232,7 +232,7 @@ class LightningUniFlowModel(pl.LightningModule):
         ]
 
         optimizer: torch.optim.Optimizer = self.optimizer(param_groups)
-        if self.self.train_semantic_ae:
+        if self.train_semantic_ae:
             lr_scheduler = get_cosine_schedule_with_warmup(
                 optimizer,
                 num_warmup_steps=0,
