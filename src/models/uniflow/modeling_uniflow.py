@@ -1230,7 +1230,7 @@ class SemanticAutoEncoder(nn.Module):
 
         # Encoder: downsample and compress
         self.down_blocks = nn.ModuleList(
-            [ResBlock(channels=hidden_size) for _ in range(3)]
+            [ProjectorBlock(channels=hidden_size) for _ in range(3)]
         )
         self.down_proj = nn.Linear(hidden_size, latent_ch)
 
@@ -1298,13 +1298,9 @@ class ProjectorBlock(nn.Module):
     def __init__(self, channels):
         super().__init__()
         self.channels = channels
-        self.norm = UniFlowRMSNorm(channels, eps=1e-6)
+        self.norm = nn.LayerNorm(channels)
         # 注意：原代码 FeedForward 参数为 (channels, channels)，这里假设 hidden_dim=channels
-        self.mlp = nn.Sequential(
-            nn.Linear(channels, channels, bias=True),
-            nn.SiLU(),
-            nn.Linear(channels, channels, bias=True),
-        )
+        self.mlp = FeedForward(dim=channels, hidden_dim=channels)
 
     def forward(self, x):
         return x + self.mlp(self.norm(x))
