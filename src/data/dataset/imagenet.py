@@ -642,10 +642,22 @@ class PixWebDataset(IterableDataset):
     def __iter__(self):
         """Iterate over the dataset"""
         dataset = self._setup_sharded_dataset(self.hf_dataset)
-        for sample in dataset:
+        rank = dist.get_rank() if dist.is_initialized() else 0
+
+        while True:
             try:
-                yield self._process_sample(sample)
+                for sample in dataset:
+                    try:
+                        yield self._process_sample(sample)
+                    except Exception as e:
+                        print(f"[Rank {rank}] Warning: Failed to process sample: {e}")
+                        continue
+                # 正常遍历完成，退出循环
+                break
             except Exception as e:
-                rank = dist.get_rank() if dist.is_initialized() else 0
-                print(f"[Rank {rank}] Warning: Sample failed: {e}")
+                print(
+                    f"[Rank {rank}] Warning: Dataset iteration error: {e}, restarting iterator..."
+                )
+                # 重新创建 dataset iterator
+                dataset = self._setup_sharded_dataset(self.hf_dataset)
                 continue
