@@ -1322,8 +1322,15 @@ class UniFlowVisionModel(PreTrainedModel):
             inputs_embeds=x,
             output_hidden_states=True,
         )
-        sem_tokens = encoder_outputs.last_hidden_state[:, 1:]  # Remove CLS token
+
         gen_tokens = encoder_outputs.hidden_states[4][:, 1:]
+
+        sem_tokens = encoder_outputs.last_hidden_state[:, 1:]  # Remove CLS token
+        h = w = int(sem_tokens.shape[1] ** 0.5)
+        sem_tokens = sem_tokens.reshape(sem_tokens.shape[0], h, w, -1)
+        sem_tokens = pixel_shuffle(sem_tokens, scale_factor=0.5)
+        sem_tokens = sem_tokens.reshape(sem_tokens.shape[0], -1, sem_tokens.shape[-1])
+        sem_tokens = self.mlp1(sem_tokens)
         return gen_tokens, sem_tokens
 
     def forward_condition(self, x, teacher_feat=None):
