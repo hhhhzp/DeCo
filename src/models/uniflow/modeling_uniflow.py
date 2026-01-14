@@ -1323,7 +1323,7 @@ class UniFlowVisionModel(PreTrainedModel):
             output_hidden_states=True,
         )
 
-        gen_tokens = encoder_outputs.hidden_states[6][:, 1:]
+        gen_tokens = encoder_outputs.hidden_states[4][:, 1:]
 
         sem_tokens = encoder_outputs.last_hidden_state[:, 1:]  # Remove CLS token
         h = w = int(sem_tokens.shape[1] ** 0.5)
