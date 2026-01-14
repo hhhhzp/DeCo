@@ -15,8 +15,10 @@ new_state_dict = {}
 for key, value in state_dict.items():
     new_key = key
     # Remove module and _orig_mod prefixes
+    if key.startswith('model.'):
+        new_key = key[6:]
     new_key = new_key.replace('.module.', '.')
     new_key = new_key.replace('._orig_mod.', '.')
     new_state_dict[new_key] = value
-msg = model.vision_model.load_state_dict(state_dict)
+msg = model.vision_model.load_state_dict(new_state_dict)
 print(msg)
