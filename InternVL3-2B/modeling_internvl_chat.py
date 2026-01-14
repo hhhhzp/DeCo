@@ -16,9 +16,11 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import ModelOutput, logging
 
+
 from .conversation import get_conv_template
 from .modeling_uniflow import UniFlowVisionModel, has_flash_attn
 from .configuration_uniflow import UniFlowVisionConfig
+from .configuration_internvl_chat import InternVLChatConfig
 
 
 logger = logging.get_logger(__name__)
@@ -34,7 +36,7 @@ def version_cmp(v1, v2, op='eq'):
 
 
 class InternVLChatModel(PreTrainedModel):
-    config_class = UniFlowVisionConfig
+    config_class = InternVLChatConfig
     main_input_name = 'pixel_values'
     base_model_prefix = 'language_model'
     _supports_flash_attn_2 = True
@@ -43,7 +45,7 @@ class InternVLChatModel(PreTrainedModel):
 
     def __init__(
         self,
-        config: UniFlowVisionConfig,
+        config: InternVLChatConfig,
         vision_model=None,
         language_model=None,
         use_flash_attn=True,

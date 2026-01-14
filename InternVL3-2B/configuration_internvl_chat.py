@@ -10,7 +10,7 @@ from transformers import AutoConfig, LlamaConfig, Qwen2Config
 from transformers.configuration_utils import PretrainedConfig
 from transformers.utils import logging
 
-from .configuration_intern_vit import InternVisionConfig
+from .configuration_uniflow import UniFlowVisionConfig
 
 logger = logging.get_logger(__name__)
 
@@ -20,38 +20,47 @@ class InternVLChatConfig(PretrainedConfig):
     is_composition = True
 
     def __init__(
-            self,
-            vision_config=None,
-            llm_config=None,
-            use_backbone_lora=0,
-            use_llm_lora=0,
-            select_layer=-1,
-            force_image_size=None,
-            downsample_ratio=0.5,
-            template=None,
-            dynamic_image_size=False,
-            use_thumbnail=False,
-            ps_version='v1',
-            min_dynamic_patch=1,
-            max_dynamic_patch=6,
-            **kwargs):
+        self,
+        vision_config=None,
+        llm_config=None,
+        use_backbone_lora=0,
+        use_llm_lora=0,
+        select_layer=-1,
+        force_image_size=None,
+        downsample_ratio=0.5,
+        template=None,
+        dynamic_image_size=False,
+        use_thumbnail=False,
+        ps_version='v1',
+        min_dynamic_patch=1,
+        max_dynamic_patch=6,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
 
         if vision_config is None:
             vision_config = {'architectures': ['InternVisionModel']}
-            logger.info('vision_config is None. Initializing the InternVisionConfig with default values.')
+            logger.info(
+                'vision_config is None. Initializing the InternVisionConfig with default values.'
+            )
 
         if llm_config is None:
             llm_config = {'architectures': ['Qwen2ForCausalLM']}
-            logger.info('llm_config is None. Initializing the LlamaConfig config with default values (`LlamaConfig`).')
+            logger.info(
+                'llm_config is None. Initializing the LlamaConfig config with default values (`LlamaConfig`).'
+            )
 
-        self.vision_config = InternVisionConfig(**vision_config)
+        self.vision_config = UniFlowVisionConfig(**vision_config)
         if llm_config.get('architectures')[0] == 'LlamaForCausalLM':
             self.llm_config = LlamaConfig(**llm_config)
         elif llm_config.get('architectures')[0] == 'Qwen2ForCausalLM':
             self.llm_config = Qwen2Config(**llm_config)
         else:
-            raise ValueError('Unsupported architecture: {}'.format(llm_config.get('architectures')[0]))
+            raise ValueError(
+                'Unsupported architecture: {}'.format(
+                    llm_config.get('architectures')[0]
+                )
+            )
         self.use_backbone_lora = use_backbone_lora
         self.use_llm_lora = use_llm_lora
         self.select_layer = select_layer
