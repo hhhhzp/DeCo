@@ -1244,7 +1244,7 @@ class SemanticAutoEncoder(nn.Module):
 
         # Encoder: downsample and compress
         self.down_blocks = nn.ModuleList(
-            [ProjectorBlock(channels=self.mid_dim) for _ in range(3)]
+            [ProjectorBlock(channels=self.mid_dim) for _ in range(1)]
         )
         self.down_proj = nn.Linear(self.mid_dim, latent_ch)
 
@@ -1869,8 +1869,8 @@ class UniFlowVisionModel(PreTrainedModel):
             output_hidden_states=True,
         )
         sem_tokens = encoder_outputs.last_hidden_state[:, 1:]  # Remove CLS token
-
-        return sem_tokens
+        gen_tokens = encoder_outputs.hidden_states[4][:, 1:]
+        return gen_tokens, sem_tokens
 
     def forward_condition(self, x, teacher_feat=None):
         """
