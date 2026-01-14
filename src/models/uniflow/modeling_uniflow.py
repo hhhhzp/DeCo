@@ -1244,27 +1244,22 @@ class SemanticAutoEncoder(nn.Module):
 
         # Encoder: downsample and compress
         self.down_blocks = nn.ModuleList(
-            [ProjectorBlock(channels=llm_hidden_size) for _ in range(3)]
+            [ProjectorBlock(channels=self.mid_dim) for _ in range(3)]
         )
-        self.down_proj = nn.Linear(llm_hidden_size, latent_ch)
+        self.down_proj = nn.Linear(self.mid_dim, latent_ch)
 
         # Decoder: project and upsample to intermediate dimension (4*vit_hidden_size)
-        self.up_embedding = nn.Linear(latent_ch, llm_hidden_size)
+        self.up_embedding = nn.Linear(latent_ch, self.mid_dim)
         self.up_blocks = nn.ModuleList(
-            [ProjectorBlock(channels=llm_hidden_size) for _ in range(3)]
+            [ProjectorBlock(channels=self.mid_dim) for _ in range(3)]
         )
 
         # Final projection from intermediate to output dimension
-        self.up_proj = nn.Sequential(
-            nn.LayerNorm(llm_hidden_size),
-            nn.Linear(llm_hidden_size, llm_hidden_size),
-            nn.GELU(),
-            nn.Linear(llm_hidden_size, llm_hidden_size),
-        )
+        self.up_proj = nn.Identity()
 
         # Position embedding for decoder (consistent with UniFlowVisionModel)
         self.decoder_pos_embed = nn.Parameter(
-            torch.randn(1, (image_size // patch_size) ** 2, llm_hidden_size)
+            torch.randn(1, (image_size // patch_size) ** 2, self.mid_dim)
         )
 
         # Initialize pos_embed from sincos pos_embed (consistent with UniFlowVisionModel)
@@ -1986,10 +1981,10 @@ class UniFlowVisionModel(PreTrainedModel):
         )
 
         # Final: after mlp1 (llm_hidden_size dimension)
-        target_feat = self.mlp1(target_feat_mid)
+        # target_feat =
 
         # 3. Semantic autoencoder: encode and decode with intermediate output
-        latent = self.sem_ae.downsample_and_project(target_feat)
+        latent = self.sem_ae.downsample_and_project(target_feat_mid)
         reconstructed_feat = self.sem_ae.project_and_upsample(latent)
 
         # 4. Compute MSE losses
@@ -2005,12 +2000,19 @@ class UniFlowVisionModel(PreTrainedModel):
         # )
 
         # Final supervision loss (at llm_hidden_size dimension)
-        semantic_loss = F.mse_loss(reconstructed_feat, target_feat.detach())
+        semantic_loss_mid = F.mse_loss(reconstructed_feat, target_feat_mid.detach())
+        semantic_loss = F.mse_loss(
+            self.mlp1(reconstructed_feat), self.mlp1(target_feat_mid).detach()
+        )
 
         # Total semantic loss (weighted sum)
         # semantic_loss = semantic_loss_mid + semantic_loss_final
 
-        return {'loss': semantic_loss, 'semantic_loss': semantic_loss}
+        return {
+            'loss': semantic_loss + semantic_loss_mid,
+            'semantic_loss': semantic_loss,
+            'semantic_loss_mid': semantic_loss_mid,
+        }
 
     def forward(self, pixel_values):
         # Inference: return_distill_loss=False
