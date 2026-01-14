@@ -2,7 +2,7 @@ from transformers import AutoModel
 import torch
 
 model = AutoModel.from_pretrained(
-    "./InternVL3-2B",
+    "./InternVL3-2B-bak",
     dtype=torch.bfloat16,
     trust_remote_code=True,
 )
@@ -24,3 +24,5 @@ for key, value in state_dict.items():
     new_state_dict[new_key] = value
 msg = model.vision_model.load_state_dict(new_state_dict)
 print(msg)
+
+model.save_pretrained("./InternVL3-2B-bak")
