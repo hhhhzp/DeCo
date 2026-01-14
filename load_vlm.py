@@ -2,13 +2,13 @@ from transformers import AutoModel
 import torch
 
 model = AutoModel.from_pretrained(
-    "./InternVL3-2B",
+    "./InternVL3-2B-bak",
     dtype=torch.bfloat16,
     trust_remote_code=True,
 )
 
 state_dict = torch.load(
-    "dual_internvit_2b/exp_sem_ae_mlp_c128_cosine/epoch=29-step=100000.ckpt",
+    "dual_internvit_2b/exp_sem_ae_mlp_c128_cosine_448px/epoch=36-step=125000.ckpt",
     map_location='cpu',
 )['state_dict']
 new_state_dict = {}
