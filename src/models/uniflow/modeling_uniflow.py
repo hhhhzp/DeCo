@@ -1251,7 +1251,7 @@ class SemanticAutoEncoder(nn.Module):
         # Decoder: project and upsample to intermediate dimension (4*vit_hidden_size)
         self.up_embedding = nn.Linear(latent_ch, self.mid_dim)
         self.up_blocks = nn.ModuleList(
-            [ProjectorBlock(channels=self.mid_dim) for _ in range(3)]
+            [ProjectorBlock(channels=self.mid_dim) for _ in range(6)]
         )
 
         # Final projection from intermediate to output dimension
