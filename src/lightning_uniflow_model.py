@@ -109,7 +109,6 @@ class LightningUniFlowModel(pl.LightningModule):
             dtype=torch.bfloat16,
             trust_remote_code=True,
         )
-
         # 提取 vision_model 和 mlp1
         msg = self.model.load_state_dict(model.vision_model.state_dict(), strict=False)
         if self.global_rank == 0:

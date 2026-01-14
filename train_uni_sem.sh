@@ -23,5 +23,4 @@ export NODE_RANK=${NODE_RANK:-0}
 
 python main.py fit -c  configs_flow/uniflow_internvit_2b_blip3o_sem.yaml \
     --trainer.num_nodes=4 \
-    --trainer.devices=8 \
-    --ckpt_path=dual_internvit_2b/exp_sem_ae_mlp_c128_cosine/epoch=29-step=100000.ckpt
+    --trainer.devices=8

@@ -1225,13 +1225,22 @@ class SemanticAutoEncoder(nn.Module):
     """
 
     def __init__(
-        self, llm_hidden_size, vit_hidden_size, latent_ch, add_norm=True, mlp_ratio=4
+        self,
+        llm_hidden_size,
+        vit_hidden_size,
+        latent_ch,
+        add_norm=True,
+        mlp_ratio=4,
+        image_size=224,
+        patch_size=14,
     ):
         super().__init__()
         self.llm_hidden_size = llm_hidden_size
         self.vit_hidden_size = vit_hidden_size
         self.latent_ch = latent_ch
         self.mid_dim = 4 * vit_hidden_size
+        self.image_size = image_size
+        self.patch_size = patch_size
 
         # Encoder: downsample and compress
         self.down_blocks = nn.ModuleList(
@@ -1242,7 +1251,7 @@ class SemanticAutoEncoder(nn.Module):
         # Decoder: project and upsample to intermediate dimension (4*vit_hidden_size)
         self.up_embedding = nn.Linear(latent_ch, llm_hidden_size)
         self.up_blocks = nn.ModuleList(
-            [ProjectorBlock(channels=llm_hidden_size) for _ in range(12)]
+            [ProjectorBlock(channels=llm_hidden_size) for _ in range(3)]
         )
 
         # Final projection from intermediate to output dimension
@@ -1252,6 +1261,19 @@ class SemanticAutoEncoder(nn.Module):
             nn.GELU(),
             nn.Linear(llm_hidden_size, llm_hidden_size),
         )
+
+        # Position embedding for decoder (consistent with UniFlowVisionModel)
+        self.decoder_pos_embed = nn.Parameter(
+            torch.randn(1, (image_size // patch_size) ** 2, vit_hidden_size)
+        )
+
+        # Initialize pos_embed from sincos pos_embed (consistent with UniFlowVisionModel)
+        logger.info("Init SemanticAutoEncoder pos_embed from sincos pos_embed")
+        pos_embed_spatial = get_2d_sincos_pos_embed(
+            self.decoder_pos_embed.shape[-1],
+            image_size // patch_size,
+        )
+        self.decoder_pos_embed.data.copy_(torch.from_numpy(pos_embed_spatial).float())
 
     def downsample_and_project(self, x):
         """Encode features to latent space.
@@ -1267,6 +1289,27 @@ class SemanticAutoEncoder(nn.Module):
         x_latent = self.down_proj(x)
         x_latent = F.layer_norm(x_latent, (self.latent_ch,))
         return x_latent
+
+    def _get_pos_embed(self, pos_embed, H, W):
+        """Get position embedding for given spatial dimensions (consistent with UniFlowVisionModel)"""
+        target_dtype = pos_embed.dtype
+        pos_embed = (
+            pos_embed.float()
+            .reshape(
+                1,
+                self.image_size // self.patch_size,
+                self.image_size // self.patch_size,
+                -1,
+            )
+            .permute(0, 3, 1, 2)
+        )
+        pos_embed = (
+            F.interpolate(pos_embed, size=(H, W), mode='bicubic', align_corners=False)
+            .reshape(1, -1, H * W)
+            .permute(0, 2, 1)
+            .to(target_dtype)
+        )
+        return pos_embed
 
     def project_and_upsample(self, x_latent, return_intermediate=False):
         """Decode latent features back to original space.
@@ -1284,6 +1327,13 @@ class SemanticAutoEncoder(nn.Module):
         """
         # Project to intermediate dimension
         x_up = self.up_embedding(x_latent)
+
+        # Add position embedding (consistent with UniFlowVisionModel)
+        B, N, C = x_up.shape
+        grid = int(N**0.5)
+        pos_embed = self._get_pos_embed(self.decoder_pos_embed, grid, grid)
+        x_up = x_up + pos_embed
+
         for block in self.up_blocks:
             x_up = block(x_up)
 
@@ -1692,7 +1742,12 @@ class UniFlowVisionModel(PreTrainedModel):
 
         # Semantic autoencoder for feature reconstruction
         self.sem_ae = SemanticAutoEncoder(
-            llm_hidden_size, vit_hidden_size, self.latent_ch, add_norm=False
+            llm_hidden_size,
+            vit_hidden_size,
+            self.latent_ch,
+            add_norm=False,
+            image_size=config.image_size,
+            patch_size=config.patch_size,
         )
 
         # global transformer blocks

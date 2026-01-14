@@ -1,6 +1,6 @@
 seed_everything: true
 tags:
-  exp: &exp sem_ae_mlp_c128_cosine_448px
+  exp: &exp sem_ae_mlp_c128_cosine_pos
 torch_hub_dir: ~/.cache/torch/hub
 huggingface_cache_dir: null
 
@@ -61,7 +61,7 @@ data:
     init_args:
       data_files: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/BLIP-3o/*.tar
       cache_dir: /apdcephfs/share_300000800/datamultimodal/zhenpeng_data/cache/webdataset
-      resolution: 448
+      resolution: 224
       random_crop: true
       random_flip: true
 
