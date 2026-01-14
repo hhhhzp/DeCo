@@ -1264,7 +1264,7 @@ class SemanticAutoEncoder(nn.Module):
 
         # Position embedding for decoder (consistent with UniFlowVisionModel)
         self.decoder_pos_embed = nn.Parameter(
-            torch.randn(1, (image_size // patch_size) ** 2, vit_hidden_size)
+            torch.randn(1, (image_size // patch_size) ** 2, llm_hidden_size)
         )
 
         # Initialize pos_embed from sincos pos_embed (consistent with UniFlowVisionModel)
