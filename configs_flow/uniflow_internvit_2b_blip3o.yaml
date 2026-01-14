@@ -44,9 +44,9 @@ model:
   
   use_ema: true
   ema_tracker:
-  class_path: src.callbacks.simple_ema.SimpleEMA
-  init_args:
-    decay: 0.9999
+    class_path: src.callbacks.simple_ema.SimpleEMA
+    init_args:
+      decay: 0.9999
 
   eval_original_model: true
   
