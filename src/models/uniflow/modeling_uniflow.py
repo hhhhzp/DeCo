@@ -33,6 +33,7 @@ from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import logging
 from .configuration_uniflow import UniFlowVisionConfig
 
+logger = logging.get_logger(__name__)
 try:
     from src.models.uniflow.flash_attention import FlashAttention
 
@@ -59,7 +60,6 @@ except Exception:
     )
     pass
 
-logger = logging.get_logger(__name__)
 
 import warnings
 
@@ -1323,7 +1323,7 @@ class UniFlowVisionModel(PreTrainedModel):
             output_hidden_states=True,
         )
 
-        gen_tokens = encoder_outputs.hidden_states[4][:, 1:]
+        gen_tokens = encoder_outputs.hidden_states[6][:, 1:]
 
         sem_tokens = encoder_outputs.last_hidden_state[:, 1:]  # Remove CLS token
         h = w = int(sem_tokens.shape[1] ** 0.5)
