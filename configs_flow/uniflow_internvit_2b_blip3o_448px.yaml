@@ -48,7 +48,7 @@ model:
     init_args:
       decay: 0.9999
 
-  eval_original_model: true
+  eval_original_model: false
   
   optimizer:
     class_path: torch.optim.AdamW
