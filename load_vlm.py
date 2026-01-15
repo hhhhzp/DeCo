@@ -13,12 +13,12 @@ state_dict = torch.load(
 )['state_dict']
 new_state_dict = {}
 for key, value in state_dict.items():
-    if '.lpips_loss' in key or '.mlp1.' in key or key.startswith('model.'):
+    if '.lpips_loss' in key or '.mlp1.' in key or key.startswith('ema_model.'):
         continue
     new_key = key
     # Remove module and _orig_mod prefixes
-    if key.startswith('ema_model.'):
-        new_key = key[10:]
+    if key.startswith('model.'):
+        new_key = key[6:]
     new_key = new_key.replace('.module.', '.')
     new_key = new_key.replace('._orig_mod.', '.')
     new_state_dict[new_key] = value
