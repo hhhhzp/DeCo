@@ -13,7 +13,7 @@ state_dict = torch.load(
 )['state_dict']
 new_state_dict = {}
 for key, value in state_dict.items():
-    if '.lpips_loss' in key:
+    if '.lpips_loss' in key or '.mlp1.' in key:
         continue
     new_key = key
     # Remove module and _orig_mod prefixes
