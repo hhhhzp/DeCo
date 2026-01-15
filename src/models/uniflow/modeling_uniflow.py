@@ -32,16 +32,18 @@ from transformers.modeling_outputs import BaseModelOutput, BaseModelOutputWithPo
 from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import logging
 from .configuration_uniflow import UniFlowVisionConfig
+from .flash_attention import FlashAttention
 
+has_flash_attn = True
 logger = logging.get_logger(__name__)
-try:
-    from src.models.uniflow.flash_attention import FlashAttention
+# try:
+#     from src.models.uniflow.flash_attention import FlashAttention
 
-    has_flash_attn = True
-except Exception as e:
-    print(e)
-    print('FlashAttention is not installed.')
-    has_flash_attn = False
+#     has_flash_attn = True
+# except Exception as e:
+#     print(e)
+#     print('FlashAttention is not installed.')
+#     has_flash_attn = False
 
 try:
     from apex.normalization import FusedRMSNorm
@@ -850,10 +852,7 @@ class FlowDecoder(nn.Module):
         z = self.nerf_embedder(z)
 
         z = z.reshape(b * n, c_z)
-        sample_steps = (
-            self.num_sampling_steps
-        )  # Original line, commented out for temporary override
-
+        sample_steps = self.num_sampling_steps
         # get all timesteps ts and intervals Δts
         if schedule == "linear":
             ts = torch.arange(1, sample_steps + 1).flip(0) / sample_steps
