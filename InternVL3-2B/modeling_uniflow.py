@@ -1290,12 +1290,6 @@ class UniFlowVisionModel(PreTrainedModel):
         # vit encoder
         self.embeddings = UniFlowVisionEmbeddings(config)
         self.encoder = UniFlowVisionEncoder(config)
-        self.mlp1 = nn.Sequential(
-            nn.LayerNorm(vit_hidden_size * int(1 / 0.5) ** 2),
-            nn.Linear(vit_hidden_size * int(1 / 0.5) ** 2, llm_hidden_size),
-            nn.GELU(),
-            nn.Linear(llm_hidden_size, llm_hidden_size),
-        )
         self.use_chal_proj = config.use_chal_proj
         self.latent_ch = config.latent_ch
         if self.use_chal_proj:
