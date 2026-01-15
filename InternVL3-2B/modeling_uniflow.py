@@ -26,119 +26,36 @@ from transformers.modeling_outputs import BaseModelOutput, BaseModelOutputWithPo
 from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import logging
 from .configuration_uniflow import UniFlowVisionConfig
+from .flash_attention import FlashAttention
+
+has_flash_attn = True
+logger = logging.get_logger(__name__)
+# try:
+#     from src.models.uniflow.flash_attention import FlashAttention
+
+#     has_flash_attn = True
+# except Exception as e:
+#     print(e)
+#     print('FlashAttention is not installed.')
+#     has_flash_attn = False
 
 try:
-    from flash_attn.bert_padding import pad_input, unpad_input
-    from flash_attn.flash_attn_interface import flash_attn_varlen_qkvpacked_func
+    from apex.normalization import FusedRMSNorm
 
-    has_flash_attn = True
-except:
-    print('FlashAttention2 is not installed.')
-    has_flash_attn = False
+    UniFlowRMSNorm = FusedRMSNorm  # noqa
 
-logger = logging.get_logger(__name__)
+    logger.info(
+        'Discovered apex.normalization.FusedRMSNorm - will use it instead of UniFlowRMSNorm'
+    )
+except ImportError:
+    # using the normal UniFlowRMSNorm
+    pass
+except Exception:
+    logger.warning(
+        'discovered apex but it failed to load, falling back to UniFlowRMSNorm'
+    )
+    pass
 
-
-class FlashAttention(nn.Module):
-    """Implement the scaled dot product attention with softmax.
-    Arguments
-    ---------
-        softmax_scale: The temperature to use for the softmax attention.
-                      (default: 1/sqrt(d_keys) where d_keys is computed at
-                      runtime)
-        attention_dropout: The dropout rate to apply to the attention
-                           (default: 0.0)
-    """
-
-    def __init__(
-        self, softmax_scale=None, attention_dropout=0.0, device=None, dtype=None
-    ):
-        super().__init__()
-        self.softmax_scale = softmax_scale
-        self.dropout_p = attention_dropout
-
-    def forward(
-        self,
-        qkv,
-        key_padding_mask=None,
-        causal=False,
-        cu_seqlens=None,
-        max_s=None,
-        need_weights=False,
-    ):
-        """Implements the multihead softmax attention.
-        Arguments
-        ---------
-            qkv: The tensor containing the query, key, and value. (B, S, 3, H, D) if key_padding_mask is None
-                if unpadded: (nnz, 3, h, d)
-            key_padding_mask: a bool tensor of shape (B, S)
-        """
-        assert not need_weights
-        assert qkv.dtype in [torch.float16, torch.bfloat16]
-        assert qkv.is_cuda
-
-        if cu_seqlens is None:
-            batch_size = qkv.shape[0]
-            seqlen = qkv.shape[1]
-            if key_padding_mask is None:
-                qkv = rearrange(qkv, 'b s ... -> (b s) ...')
-                max_s = seqlen
-                cu_seqlens = torch.arange(
-                    0,
-                    (batch_size + 1) * seqlen,
-                    step=seqlen,
-                    dtype=torch.int32,
-                    device=qkv.device,
-                )
-                output = flash_attn_varlen_qkvpacked_func(
-                    qkv,
-                    cu_seqlens,
-                    max_s,
-                    self.dropout_p if self.training else 0.0,
-                    softmax_scale=self.softmax_scale,
-                    causal=causal,
-                )
-                output = rearrange(output, '(b s) ... -> b s ...', b=batch_size)
-            else:
-                nheads = qkv.shape[-2]
-                x = rearrange(qkv, 'b s three h d -> b s (three h d)')
-                x_unpad, indices, cu_seqlens, max_s = unpad_input(x, key_padding_mask)
-                x_unpad = rearrange(
-                    x_unpad, 'nnz (three h d) -> nnz three h d', three=3, h=nheads
-                )
-                output_unpad = flash_attn_varlen_qkvpacked_func(
-                    x_unpad,
-                    cu_seqlens,
-                    max_s,
-                    self.dropout_p if self.training else 0.0,
-                    softmax_scale=self.softmax_scale,
-                    causal=causal,
-                )
-                output = rearrange(
-                    pad_input(
-                        rearrange(output_unpad, 'nnz h d -> nnz (h d)'),
-                        indices,
-                        batch_size,
-                        seqlen,
-                    ),
-                    'b s (h d) -> b s h d',
-                    h=nheads,
-                )
-        else:
-            assert max_s is not None
-            output = flash_attn_varlen_qkvpacked_func(
-                qkv,
-                cu_seqlens,
-                max_s,
-                self.dropout_p if self.training else 0.0,
-                softmax_scale=self.softmax_scale,
-                causal=causal,
-            )
-
-        return output, None
-
-
-logger = logging.get_logger(__name__)
 
 import warnings
 
@@ -148,42 +65,6 @@ warnings.filterwarnings("ignore")
 #############################################################
 #                 UniFlow Modules
 #############################################################
-def apply_rotary_emb(
-    xq: torch.Tensor,
-    xk: torch.Tensor,
-    freqs_cis: torch.Tensor,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    freqs_cis = freqs_cis[None, None, :, :]
-    # xq : B N H Hc
-    xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))  # B N H Hc/2
-    xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
-    xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(3)  # B, N, H, Hc
-    xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3)
-    return xq_out.type_as(xq), xk_out.type_as(xk)
-
-
-def precompute_freqs_cis_2d(
-    dim: int, height: int, width: int, theta: float = 10000.0, scale=1.0
-):
-    if isinstance(scale, float):
-        scale = (scale, scale)
-    x_pos = torch.linspace(0, height * scale[0], width)
-    y_pos = torch.linspace(0, width * scale[1], height)
-    y_pos, x_pos = torch.meshgrid(y_pos, x_pos, indexing="ij")
-    y_pos = y_pos.reshape(-1)
-    x_pos = x_pos.reshape(-1)
-    freqs = 1.0 / (
-        theta ** (torch.arange(0, dim, 4)[: (dim // 4)].float() / dim)
-    )  # Hc/4
-    x_freqs = torch.outer(x_pos, freqs).float()  # N Hc/4
-    y_freqs = torch.outer(y_pos, freqs).float()  # N Hc/4
-    x_cis = torch.polar(torch.ones_like(x_freqs), x_freqs)
-    y_cis = torch.polar(torch.ones_like(y_freqs), y_freqs)
-    freqs_cis = torch.cat(
-        [x_cis.unsqueeze(dim=-1), y_cis.unsqueeze(dim=-1)], dim=-1
-    )  # N,Hc/4,2
-    freqs_cis = freqs_cis.reshape(height * width, -1)
-    return freqs_cis
 
 
 def p2l_transform_tensor(x, patch_size):
@@ -277,6 +158,47 @@ def get_2d_sincos_pos_embed(embed_dim, grid_size, cls_token=False):
     return pos_embed
 
 
+#############################################################
+#                 UniFlow Modules
+#############################################################
+def apply_rotary_emb(
+    xq: torch.Tensor,
+    xk: torch.Tensor,
+    freqs_cis: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    freqs_cis = freqs_cis[None, None, :, :]
+    # xq : B N H Hc
+    xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))  # B N H Hc/2
+    xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
+    xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(3)  # B, N, H, Hc
+    xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3)
+    return xq_out.type_as(xq), xk_out.type_as(xk)
+
+
+def precompute_freqs_cis_2d(
+    dim: int, height: int, width: int, theta: float = 10000.0, scale=1.0
+):
+    if isinstance(scale, float):
+        scale = (scale, scale)
+    x_pos = torch.linspace(0, height * scale[0], width)
+    y_pos = torch.linspace(0, width * scale[1], height)
+    y_pos, x_pos = torch.meshgrid(y_pos, x_pos, indexing="ij")
+    y_pos = y_pos.reshape(-1)
+    x_pos = x_pos.reshape(-1)
+    freqs = 1.0 / (
+        theta ** (torch.arange(0, dim, 4)[: (dim // 4)].float() / dim)
+    )  # Hc/4
+    x_freqs = torch.outer(x_pos, freqs).float()  # N Hc/4
+    y_freqs = torch.outer(y_pos, freqs).float()  # N Hc/4
+    x_cis = torch.polar(torch.ones_like(x_freqs), x_freqs)
+    y_cis = torch.polar(torch.ones_like(y_freqs), y_freqs)
+    freqs_cis = torch.cat(
+        [x_cis.unsqueeze(dim=-1), y_cis.unsqueeze(dim=-1)], dim=-1
+    )  # N,Hc/4,2
+    freqs_cis = freqs_cis.reshape(height * width, -1)
+    return freqs_cis
+
+
 class UniFlowRMSNorm(nn.Module):
     def __init__(self, hidden_size, eps=1e-6):
         super().__init__()
@@ -350,6 +272,9 @@ class Attention(nn.Module):
 
         if self.use_flash_attn:
             self.inner_attn = FlashAttention(attention_dropout=attn_drop)
+
+    def _naive_attn(self, x: torch.Tensor, pos) -> torch.Tensor:
+        raise NotImplementedError
 
     def _flash_attn(self, x: torch.Tensor, pos) -> torch.Tensor:
         B, N, C = x.shape
@@ -897,36 +822,14 @@ class FlowDecoder(nn.Module):
         # Compute MSE loss on velocity
         mse_loss = F.mse_loss(v_pred, v_target)
 
-        # Derive predicted x1 from predicted velocity
-        # From flow matching: x_t = t * x1 + (1 - t) * x0
-        # And v = x1 - x0
-        # Therefore: x1_pred = x0 + v_pred = x_t + (1 - t) * v_pred
-        x1_pred = x_t + (1 - t_expanded) * v_pred
-
-        # Reshape to image format for LPIPS: [B*N, C] -> [B, C, H, W]
-        x1_pred_img = l2p_transform_tensor(
-            x1_pred.reshape(b, n, c),
-            patch_size=self.patch_size,
-        )
-        x1_target_img = l2p_transform_tensor(
-            x1.reshape(b, n, c),
-            patch_size=self.patch_size,
-        )
-
-        # Normalize to [-1, 1] range for LPIPS (it expects images in this range)
-        x1_pred_img = torch.clamp(x1_pred_img, -1, 1) * 0.5 + 0.5
-        x1_target_img = torch.clamp(x1_target_img, -1, 1) * 0.5 + 0.5
-
-        # Compute LPIPS loss
-        lpips_loss = self.lpips_loss(x1_pred_img, x1_target_img).mean()
-
         return {
             'mse_loss': mse_loss,
-            'lpips_loss': lpips_loss,
         }
 
     @torch.no_grad()
-    def forward(self, z, pos, schedule="linear", cfg=1.0, cfg_interval=None):
+    def forward(
+        self, z, pos, schedule="linear", cfg=1.0, cfg_interval=None, output_type="pixel"
+    ):
         # Temporary configuration override (comment out to use default parameters)
         # sample_steps = 25
         # schedule = "pow_0.25"
@@ -940,10 +843,7 @@ class FlowDecoder(nn.Module):
         z = self.nerf_embedder(z)
 
         z = z.reshape(b * n, c_z)
-        sample_steps = (
-            self.num_sampling_steps
-        )  # Original line, commented out for temporary override
-
+        sample_steps = self.num_sampling_steps
         # get all timesteps ts and intervals Δts
         if schedule == "linear":
             ts = torch.arange(1, sample_steps + 1).flip(0) / sample_steps
@@ -997,6 +897,10 @@ class FlowDecoder(nn.Module):
             trajs.append(x)
 
         sampled_token = trajs[-1]
+
+        if output_type == "latent":
+            return sampled_token.reshape(b, n, self.in_channels)
+
         sampled_image = l2p_transform_tensor(
             sampled_token.reshape(b, n, self.in_channels),
             patch_size=self.patch_size,
@@ -1053,37 +957,6 @@ class TimestepEmbedder(nn.Module):
         )
         t_emb = self.mlp(t_freq)
         return t_emb
-
-
-# class ResBlock(nn.Module):
-#     """
-#     A residual block with attention and feedforward layers.
-#     :param channels: the number of input channels.
-#     :param num_heads: number of attention heads (default: 8).
-#     :param mlp_ratio: ratio for mlp hidden dimension (default: 4).
-#     """
-
-#     def __init__(self, channels, num_heads=8, mlp_ratio=4):
-#         super().__init__()
-#         self.channels = channels
-
-#         self.norm1 = UniFlowRMSNorm(channels, eps=1e-6)
-#         self.attn = Attention(channels, num_heads=num_heads, qkv_bias=False)
-#         self.norm2 = UniFlowRMSNorm(channels, eps=1e-6)
-#         mlp_hidden_dim = int(channels * mlp_ratio)
-#         self.mlp = FeedForward(channels, mlp_hidden_dim)
-
-#         self.adaLN_modulation = nn.Sequential(
-#             nn.SiLU(), nn.Linear(channels, 6 * channels, bias=True)
-#         )
-
-#     def forward(self, x, y, pos):
-#         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
-#             self.adaLN_modulation(y).chunk(6, dim=-1)
-#         )
-#         x = x + gate_msa * self.attn(modulate(self.norm1(x), shift_msa, scale_msa), pos)
-#         x = x + gate_mlp * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
-#         return x
 
 
 class ResBlock(nn.Module):
@@ -1270,14 +1143,6 @@ class ChannelProjector(nn.Module):
         """
         B, N, C = x.shape
         H = W = int(N**0.5)
-
-        # 1. Space-to-Depth: [B, H, W, C] -> [B, N/4, 4C]
-        # x = rearrange(
-        #     x, 'b (h h2 w w2) c -> b (h w) (c h2 w2)', h=H // 2, w=W // 2, h2=2, w2=2
-        # )
-
-        # 2. Norm -> Projection
-        # Pre-Norm on the high-dimensional spatial features
         x_latent = self.down_proj(self.down_norm(x))
         return x_latent
 
@@ -1286,465 +1151,8 @@ class ChannelProjector(nn.Module):
         Args: x_latent: [B, N/4, latent_ch]
         Returns: x: [B, N, C]
         """
-        # B, N_latent, C_latent = x_latent.shape
-        # H_latent = W_latent = int(N_latent**0.5)
-
-        # 1. Projection -> Norm
-        # Post-Norm to stabilize features before PixelShuffle
         x_up = self.up_norm(self.up_proj(x_latent))
-
-        # 2. Depth-to-Space: [B, N/4, 4C] -> [B, N, C]
-        # x = rearrange(
-        #     x_up,
-        #     'b (h w) (c h2 w2) -> b (h h2 w w2) c',
-        #     h=H_latent,
-        #     w=W_latent,
-        #     h2=2,
-        #     w2=2,
-        # )
         return x_up
-
-
-class SemanticAutoEncoder(nn.Module):
-    """Semantic AutoEncoder for feature compression and reconstruction.
-
-    Architecture:
-        - Encoder: 6 ProjectorBlocks + Linear projection to latent space
-        - Decoder: Linear projection + 6 ProjectorBlocks + MLP projection
-        - Supports intermediate supervision at 4*vit_hidden_size dimension
-    """
-
-    def __init__(
-        self, llm_hidden_size, vit_hidden_size, latent_ch, add_norm=True, mlp_ratio=4
-    ):
-        super().__init__()
-        self.llm_hidden_size = llm_hidden_size
-        self.vit_hidden_size = vit_hidden_size
-        self.latent_ch = latent_ch
-        self.mid_dim = 4 * vit_hidden_size
-
-        # Encoder: downsample and compress
-        self.down_blocks = nn.ModuleList(
-            [ProjectorBlock(channels=llm_hidden_size) for _ in range(3)]
-        )
-        self.down_proj = nn.Linear(llm_hidden_size, latent_ch)
-
-        # Decoder: project and upsample to intermediate dimension (4*vit_hidden_size)
-        self.up_embedding = nn.Linear(latent_ch, llm_hidden_size)
-        self.up_blocks = nn.ModuleList(
-            [ProjectorBlock(channels=llm_hidden_size) for _ in range(12)]
-        )
-
-        # Final projection from intermediate to output dimension
-        self.up_proj = nn.Sequential(
-            nn.LayerNorm(llm_hidden_size),
-            nn.Linear(llm_hidden_size, llm_hidden_size),
-            nn.GELU(),
-            nn.Linear(llm_hidden_size, llm_hidden_size),
-        )
-
-    def downsample_and_project(self, x):
-        """Encode features to latent space.
-
-        Args:
-            x: [B, N, llm_hidden_size] feature tensor
-
-        Returns:
-            x_latent: [B, N, latent_ch] compressed features
-        """
-        for block in self.down_blocks:
-            x = block(x)
-        x_latent = self.down_proj(x)
-        x_latent = F.layer_norm(x_latent, (self.latent_ch,))
-        return x_latent
-
-    def project_and_upsample(self, x_latent, return_intermediate=False):
-        """Decode latent features back to original space.
-
-        Args:
-            x_latent: [B, N, latent_ch] compressed features
-            return_intermediate: if True, return intermediate features at 4*vit_hidden_size dimension
-
-        Returns:
-            if return_intermediate:
-                x_mid: [B, N, 4*vit_hidden_size] intermediate features
-                x_recon: [B, N, llm_hidden_size] reconstructed features
-            else:
-                x_recon: [B, N, llm_hidden_size] reconstructed features
-        """
-        # Project to intermediate dimension
-        x_up = self.up_embedding(x_latent)
-        for block in self.up_blocks:
-            x_up = block(x_up)
-
-        # x_up is now at intermediate dimension (4*vit_hidden_size)
-        # x_mid = x_up
-
-        # Project to final dimension
-        # x_recon = self.up_proj(x_mid)
-
-        # if return_intermediate:
-        #     return x_mid, x_recon
-        return self.up_proj(x_up)
-
-
-class ProjectorBlock(nn.Module):
-    """
-    A residual block that maintains channel dimensions.
-    Structure: x + MLP(Norm(x))
-    """
-
-    def __init__(self, channels):
-        super().__init__()
-        self.channels = channels
-        self.norm = nn.LayerNorm(channels)
-        # 注意：原代码 FeedForward 参数为 (channels, channels)，这里假设 hidden_dim=channels
-        self.mlp = FeedForward(dim=channels, hidden_dim=channels)
-
-    def forward(self, x):
-        return x + self.mlp(self.norm(x))
-
-
-class ProjectorBlock2d(nn.Module):
-    """
-    A residual block for 2D image data [B, C, H, W].
-    Structure: x + Conv(Norm(x))
-    """
-
-    def __init__(self, channels):
-        super().__init__()
-        self.channels = channels
-        self.norm = UniFlowRMSNorm2d(num_channels=channels, eps=1e-6)
-        self.conv = nn.Sequential(
-            nn.Conv2d(channels, channels, kernel_size=1, bias=True),
-            nn.SiLU(),
-            nn.Conv2d(channels, channels, kernel_size=1, bias=True),
-        )
-
-    def forward(self, x):
-        return x + self.conv(self.norm(x))
-
-
-class ChannelProjectorV2(nn.Module):
-    """
-    Channel projector V2 with Pixel Shuffle/Unshuffle.
-
-    Architecture:
-    1. Downsample: PixelUnshuffle (2x) -> Linear -> 3x ProjectorBlock -> Linear
-    2. Upsample: Linear -> FeedForward -> PixelShuffle (2x)
-    """
-
-    def __init__(self, vit_hidden_size, latent_ch):
-        super().__init__()
-        self.vit_hidden_size = vit_hidden_size
-        self.latent_ch = latent_ch
-
-        # --- Downsample path ---
-        # PixelUnshuffle (downscale_factor=2) 将空间折叠进通道
-        # C -> C * 2^2 = 4C
-        in_dim_after_unshuffle = 4 * vit_hidden_size
-
-        self.down_linear1 = nn.Linear(in_dim_after_unshuffle, vit_hidden_size)
-
-        self.down_blocks = nn.ModuleList(
-            [ProjectorBlock(vit_hidden_size) for _ in range(3)]
-        )
-        self.down_norm = UniFlowRMSNorm(vit_hidden_size, eps=1e-6)
-        self.down_linear2 = nn.Linear(vit_hidden_size, latent_ch)
-
-        # --- Upsample path ---
-        # 需要输出 4 * vit_hidden_size 以便 PixelShuffle 后变回 vit_hidden_size
-        self.up_proj = nn.Sequential(
-            OrderedDict(
-                [
-                    ("c_fc", nn.Linear(self.latent_ch, 4 * vit_hidden_size)),
-                    ("gelu", nn.SiLU()),
-                    ("c_proj", nn.Linear(4 * vit_hidden_size, 4 * vit_hidden_size)),
-                ]
-            )
-        )
-
-    def downsample_and_project(self, x):
-        """
-        Args: x: [B, N, C] (N must be square, e.g., H*W)
-        Returns: x_latent: [B, N/4, latent_ch]
-        """
-        B, N, C = x.shape
-        H = W = int(N**0.5)
-        assert H * W == N, f"Input sequence length {N} must be a perfect square."
-
-        # 1. Reshape to image format [B, C, H, W] for pixel_unshuffle
-        x = x.view(B, H, W, C).permute(0, 3, 1, 2)  # -> [B, C, H, W]
-
-        # 2. Apply pixel_unshuffle (equivalent to scale_factor=0.5)
-        # Output: [B, 4*C, H/2, W/2]
-        x = F.pixel_unshuffle(x, downscale_factor=2)
-
-        # 3. Reshape back to sequence [B, N/4, 4*C]
-        x = x.permute(0, 2, 3, 1).reshape(B, -1, 4 * C)
-
-        # 4. Linear projection to vit_hidden_size
-
-        x = self.down_linear1(x)
-
-        # 5. Apply blocks (Original code passed 'cond' but block definition didn't use it. removed.)
-        for block in self.down_blocks:
-            x = block(x)
-
-        x = self.down_norm(x)
-        # 6. Final projection to latent_ch
-        x_latent = self.down_linear2(x)
-
-        return x_latent
-
-    def project_and_upsample(self, x_latent):
-        """
-        Args: x_latent: [B, N/4, latent_ch]
-        Returns: x: [B, N, C]
-        """
-        B, N_latent, _ = x_latent.shape
-        H_latent = W_latent = int(N_latent**0.5)
-
-        # 1. Apply upsampling projection -> [B, N_latent, 4*vit_hidden_size]
-        x = self.up_proj(x_latent)
-
-        # 2. Reshape to [B, C_up, H_latent, W_latent] for pixel_shuffle
-        # C_up is 4 * vit_hidden_size
-        x = x.view(B, H_latent, W_latent, -1).permute(0, 3, 1, 2)
-
-        # 3. Apply pixel_shuffle (2x upsample)
-        # Input: [B, 4*C, H, W] -> Output: [B, C, 2*H, 2*W]
-        x = F.pixel_shuffle(x, upscale_factor=2)
-
-        # 4. Reshape back to sequence [B, N, vit_hidden_size]
-        x = x.permute(0, 2, 3, 1).reshape(B, -1, self.vit_hidden_size)
-
-        return x
-
-
-class DCDownBlock2d(nn.Module):
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        downsample: bool = False,
-        shortcut: bool = True,
-    ) -> None:
-        super().__init__()
-
-        self.downsample = downsample
-        self.factor = 2
-        self.stride = 1 if downsample else 2
-        self.group_size = in_channels * self.factor**2 // out_channels
-        self.shortcut = shortcut
-
-        out_ratio = self.factor**2
-        if downsample:
-            assert out_channels % out_ratio == 0
-            out_channels = out_channels // out_ratio
-
-        self.conv = nn.Conv2d(
-            in_channels,
-            out_channels,
-            kernel_size=3,
-            stride=self.stride,
-            padding=1,
-        )
-
-    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        x = self.conv(hidden_states)
-        if self.downsample:
-            x = F.pixel_unshuffle(x, self.factor)
-
-        if self.shortcut:
-            y = F.pixel_unshuffle(hidden_states, self.factor)
-            y = y.unflatten(1, (-1, self.group_size))
-            y = y.mean(dim=2)
-            hidden_states = x + y
-        else:
-            hidden_states = x
-
-        return hidden_states
-
-
-class DCUpBlock2d(nn.Module):
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        interpolate: bool = False,
-        shortcut: bool = True,
-        interpolation_mode: str = "nearest",
-    ) -> None:
-        super().__init__()
-
-        self.interpolate = interpolate
-        self.interpolation_mode = interpolation_mode
-        self.shortcut = shortcut
-        self.factor = 2
-        self.repeats = out_channels * self.factor**2 // in_channels
-
-        out_ratio = self.factor**2
-
-        if not interpolate:
-            out_channels = out_channels * out_ratio
-
-        self.conv = nn.Conv2d(in_channels, out_channels, 3, 1, 1)
-
-    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        if self.interpolate:
-            x = F.interpolate(
-                hidden_states, scale_factor=self.factor, mode=self.interpolation_mode
-            )
-            x = self.conv(x)
-        else:
-            x = self.conv(hidden_states)
-            x = F.pixel_shuffle(x, self.factor)
-
-        if self.shortcut:
-            y = hidden_states.repeat_interleave(
-                self.repeats, dim=1, output_size=hidden_states.shape[1] * self.repeats
-            )
-            y = F.pixel_shuffle(y, self.factor)
-            hidden_states = x + y
-        else:
-            hidden_states = x
-
-        return hidden_states
-
-
-class ChannelProjectorV5(nn.Module):
-    """
-    Channel Projector V5 - Corrected Shortcut Placement
-
-    Architecture:
-    Down: [ViT] -> DownBlock(H->H/2) -> ResBlock -> [Mid_Feat] -> (Conv + Mean) -> [Latent]
-    Up:   [Latent] -> (Conv + Repeat) -> [Mid_Feat] -> ResBlock -> UpBlock(H/2->H) -> [ViT]
-
-    Correction:
-    The "Channel Shortcut" is applied LOCALLY around the channel projection layers,
-    NOT globally across the spatial scaling layers.
-    """
-
-    def __init__(self, vit_hidden_size: int, latent_ch: int):
-        super().__init__()
-        self.vit_hidden_size = vit_hidden_size
-        self.latent_ch = latent_ch
-
-        # 中间维度：遵循 H/2 时通道翻倍的原则，保持信息容量
-        self.mid_dim = vit_hidden_size * 2
-
-        # ====================================================
-        # 1. Downsample Modules
-        # ====================================================
-
-        # [A] 空间变换部分 (Spatial Transform)
-        # 负责 H -> H/2 和 C -> 2C
-        self.down_sampler = DCDownBlock2d(
-            in_channels=vit_hidden_size,
-            out_channels=self.mid_dim,
-            downsample=True,
-            shortcut=True,  # 这是 Block 内部的空间 Shortcut
-        )
-        self.down_res = nn.ModuleList(
-            [ProjectorBlock2d(self.mid_dim) for _ in range(3)]
-        )
-
-        # [B] 通道投影部分 (Channel Projection)
-        # 负责 2C -> Latent
-        self.to_latent = nn.Conv2d(self.mid_dim, latent_ch, kernel_size=1)
-
-        # Shortcut 配置: Mid_Dim -> Latent
-        self.enc_shortcut_group = self.mid_dim // latent_ch
-        assert self.mid_dim % latent_ch == 0
-
-        # ====================================================
-        # 2. Upsample Modules
-        # ====================================================
-
-        # [A] 通道恢复部分 (Channel Projection)
-        # 负责 Latent -> 2C
-        self.from_latent = nn.Conv2d(latent_ch, self.mid_dim, kernel_size=1)
-
-        # Shortcut 配置: Latent -> Mid_Dim
-        self.dec_shortcut_repeat = self.mid_dim // latent_ch
-
-        # [B] 空间变换部分 (Spatial Transform)
-        self.up_res = ProjectorBlock2d(self.mid_dim)
-
-        # 负责 H/2 -> H 和 2C -> C
-        self.up_sampler = DCUpBlock2d(
-            in_channels=self.mid_dim,
-            out_channels=vit_hidden_size,
-            interpolate=True,  # 依然坚持使用插值
-            shortcut=True,  # 这是 Block 内部的空间 Shortcut
-            interpolation_mode="nearest",
-        )
-
-        # 最后的 Norm，因为 Projector 输出直接进 Transformer
-        self.out_norm = UniFlowRMSNorm(vit_hidden_size, eps=1e-6)
-
-    def _seq_to_img(self, x):
-        B, N, C = x.shape
-        H = W = int(N**0.5)
-        return x.view(B, H, W, C).permute(0, 3, 1, 2)
-
-    def _img_to_seq(self, x):
-        return x.permute(0, 2, 3, 1).reshape(x.shape[0], -1, x.shape[1])
-
-    def downsample_and_project(self, x):
-        """
-        ViT -> Latent
-        """
-        x = self._seq_to_img(x)  # [B, C, H, W]
-
-        # 1. Spatial Downsampling Phase
-        # 这一阶段只负责把图变小，特征变厚，不进行激进的压缩
-        x = self.down_sampler(x)  # [B, 2C, H/2, W/2]
-        for block in self.down_res:
-            x = block(x)
-
-        # 2. Channel Projection Phase (With Local Shortcut)
-        # 这一阶段对应 DCAE Encoder 最后的 conv_out + shortcut
-
-        # Main Path
-        feat = self.to_latent(x)
-
-        # Shortcut Path: Split -> Mean
-        # x: [B, 2C, H/2, W/2] -> Unflatten -> Mean -> [B, Latent, H/2, W/2]
-        sc = x.unflatten(1, (-1, self.enc_shortcut_group))
-        sc = sc.mean(dim=2)
-
-        return self._img_to_seq(feat + sc)
-
-    def project_and_upsample(self, x_latent):
-        """
-        Latent -> ViT
-        """
-        z = self._seq_to_img(x_latent)  # [B, Latent, H/2, W/2]
-
-        # 1. Channel Projection Phase (With Local Shortcut)
-        # 这一阶段对应 DCAE Decoder 最前的 conv_in + shortcut
-
-        # Main Path
-        feat = self.from_latent(z)
-
-        # Shortcut Path: Repeat
-        # z: [B, Latent, H/2, W/2] -> Repeat -> [B, 2C, H/2, W/2]
-        sc = z.repeat_interleave(self.dec_shortcut_repeat, dim=1)
-
-        x = feat + sc
-
-        # 2. Spatial Upsampling Phase
-        # 此时 x 已经是信息丰富的中间特征，开始进行空间恢复
-        x = self.up_res(x)
-        x = self.up_sampler(x)  # [B, C, H, W]
-
-        # 3. Final Norm
-        x = self._img_to_seq(x)
-        x = self.out_norm(x)
-
-        return x
 
 
 #############################################################
@@ -1778,12 +1186,12 @@ class UniFlowVisionModel(PreTrainedModel):
         self.latent_ch = config.latent_ch
         if self.use_chal_proj:
             # Use new ChannelProjectorV2 with pixel_shuffle and ProjectorBlock
-            self.channel_projector = ChannelProjector(vit_hidden_size, self.latent_ch)
-
-        # Semantic autoencoder for feature reconstruction
-        self.sem_ae = SemanticAutoEncoder(
-            llm_hidden_size, vit_hidden_size, self.latent_ch, add_norm=False
-        )
+            self.gen_ae = ChannelProjector(vit_hidden_size, self.latent_ch)
+            self.sem_proj = FeedForward(
+                dim=llm_hidden_size,
+                hidden_dim=4 * llm_hidden_size,
+                out_dim=self.latent_ch,
+            )
 
         # global transformer blocks
         self.global_blocks_depth = config.global_blocks_depth
@@ -1908,9 +1316,16 @@ class UniFlowVisionModel(PreTrainedModel):
             inputs_embeds=x,
             output_hidden_states=True,
         )
-        sem_tokens = encoder_outputs.last_hidden_state[:, 1:]  # Remove CLS token
 
-        return sem_tokens
+        gen_tokens = encoder_outputs.hidden_states[4][:, 1:]
+
+        sem_tokens = encoder_outputs.last_hidden_state[:, 1:]  # Remove CLS token
+        h = w = int(sem_tokens.shape[1] ** 0.5)
+        sem_tokens = sem_tokens.reshape(sem_tokens.shape[0], h, w, -1)
+        sem_tokens = pixel_shuffle(sem_tokens, scale_factor=0.5)
+        sem_tokens = sem_tokens.reshape(sem_tokens.shape[0], -1, sem_tokens.shape[-1])
+        sem_tokens = self.mlp1(sem_tokens)
+        return gen_tokens, sem_tokens
 
     def forward_condition(self, x, teacher_feat=None):
         """
@@ -1925,15 +1340,46 @@ class UniFlowVisionModel(PreTrainedModel):
             distill_loss: distillation loss (if teacher_feat is provided)
         """
         # 1. Encode image to semantic tokens
-        sem_tokens = self._encode_image(x)
+        gen_tokens, sem_tokens = self._encode_image(x)
 
         # 2. Channel projection for generation branch with 2x downsampling and upsampling
         B, N, C = sem_tokens.shape
         grid = int(N**0.5)
 
         # Use new ChannelProjectorV2: downsample and project
-        latent_tokens = self.channel_projector.downsample_and_project(sem_tokens)
-        condition_tokens = self.channel_projector.project_and_upsample(latent_tokens)
+        latent_tokens = self.gen_ae.downsample_and_project(gen_tokens)
+        latent_tokens = F.layer_norm(latent_tokens, (latent_tokens.shape[-1],))
+
+        sem_latent_tokens = self.sem_proj(sem_tokens)
+        sem_latent_tokens = F.layer_norm(
+            sem_latent_tokens, (sem_latent_tokens.shape[-1],)
+        )
+
+        # Interpolate sem_latent_tokens to match latent_tokens spatial dimensions
+        B_sem, N_sem, C_sem = sem_latent_tokens.shape
+        B_lat, N_lat, C_lat = latent_tokens.shape
+        if N_sem != N_lat:
+            grid_sem = int(N_sem**0.5)
+            grid_lat = int(N_lat**0.5)
+            # Reshape to [B, C, H, W] for interpolation
+            sem_latent_tokens = sem_latent_tokens.transpose(1, 2).reshape(
+                B_sem, C_sem, grid_sem, grid_sem
+            )
+            # Interpolate to target spatial size
+            sem_latent_tokens = F.interpolate(
+                sem_latent_tokens,
+                size=(grid_lat, grid_lat),
+                mode='bilinear',
+                align_corners=False,
+            )
+            # Reshape back to [B, N, C]
+            sem_latent_tokens = sem_latent_tokens.reshape(B_sem, C_sem, -1).transpose(
+                1, 2
+            )
+
+        condition_tokens = self.gen_ae.project_and_upsample(
+            sem_latent_tokens + latent_tokens
+        )
 
         # 3. Apply global blocks with RoPE
         B, N, C = condition_tokens.shape
@@ -1997,55 +1443,6 @@ class UniFlowVisionModel(PreTrainedModel):
             'lpips_loss': weighted_lpips_loss,
             'distill_loss': distill_loss,
         }
-
-    def forward_semantic_loss(self, pixel_values):
-        """
-        Compute semantic autoencoder loss with intermediate supervision.
-
-        Args:
-            pixel_values: input images [B, C, H, W]
-
-        Returns:
-            dict: loss components with semantic_loss, semantic_loss_mid, semantic_loss_final
-        """
-        # 1. Encode image to semantic tokens
-        sem_tokens = self._encode_image(pixel_values)
-
-        # 2. Get intermediate and final target features
-        # Intermediate: after pixel_shuffle (4*vit_hidden_size dimension)
-        h = w = int(sem_tokens.shape[1] ** 0.5)
-        vit_embeds = sem_tokens.reshape(sem_tokens.shape[0], h, w, -1)
-        vit_embeds = pixel_shuffle(vit_embeds, scale_factor=0.5)
-        target_feat_mid = vit_embeds.reshape(
-            vit_embeds.shape[0], -1, vit_embeds.shape[-1]
-        )
-
-        # Final: after mlp1 (llm_hidden_size dimension)
-        target_feat = self.mlp1(target_feat_mid)
-
-        # 3. Semantic autoencoder: encode and decode with intermediate output
-        latent = self.sem_ae.downsample_and_project(target_feat)
-        reconstructed_feat = self.sem_ae.project_and_upsample(latent)
-
-        # 4. Compute MSE losses
-        # Intermediate supervision loss (at 4*vit_hidden_size dimension)
-        # Apply layer normalization before computing loss
-        # normalized_shape = (reconstructed_feat_mid.shape[-1],)
-        # reconstructed_feat_mid_norm = F.layer_norm(
-        #     reconstructed_feat_mid, normalized_shape
-        # )
-        # target_feat_mid_norm = F.layer_norm(target_feat_mid.detach(), normalized_shape)
-        # semantic_loss_mid = F.mse_loss(
-        #     reconstructed_feat_mid_norm, target_feat_mid_norm
-        # )
-
-        # Final supervision loss (at llm_hidden_size dimension)
-        semantic_loss = F.mse_loss(reconstructed_feat, target_feat.detach())
-
-        # Total semantic loss (weighted sum)
-        # semantic_loss = semantic_loss_mid + semantic_loss_final
-
-        return {'loss': semantic_loss, 'semantic_loss': semantic_loss}
 
     def forward(self, pixel_values):
         # Inference: return_distill_loss=False
