@@ -150,7 +150,7 @@
     "vit_hidden_size": 1024,
     "llm_hidden_size": 1536,
     "use_chal_proj": true,
-    "latent_ch": 128,
+    "latent_ch": 32,
     "use_global_blocks": true,
     "global_blocks_depth": 6,
     "use_cfg": false,
