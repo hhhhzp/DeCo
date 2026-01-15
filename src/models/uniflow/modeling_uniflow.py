@@ -1354,6 +1354,8 @@ class UniFlowVisionModel(PreTrainedModel):
 
         # Use new ChannelProjectorV2: downsample and project
         latent_tokens = self.gen_ae.downsample_and_project(gen_tokens)
+        latent_tokens = F.layer_norm(latent_tokens, (latent_tokens.shape[-1],))
+
         sem_latent_tokens = self.sem_proj(sem_tokens)
         sem_latent_tokens = F.layer_norm(
             sem_latent_tokens, (sem_latent_tokens.shape[-1],)
