@@ -8,7 +8,7 @@ model = AutoModel.from_pretrained(
 )
 
 state_dict = torch.load(
-    "dual_internvit_2b/exp_sem_layer4_r14_mlp_c32_norm_448px/epoch=16-step=70000.ckpt",
+    "dual_internvit_2b/exp_sem_layer4_r14_mlp_c32_norm_448px/epoch=19-step=70000.ckpt",
     map_location='cpu',
 )['state_dict']
 new_state_dict = {}
