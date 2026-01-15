@@ -1,6 +1,6 @@
 seed_everything: true
 tags:
-  exp: &exp sem_layer4_r14_mlp_c32
+  exp: &exp sem_layer4_r14_mlp_c32_norm
 torch_hub_dir: ~/.cache/torch/hub
 huggingface_cache_dir: null
 
