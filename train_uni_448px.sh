@@ -26,3 +26,6 @@ python main.py fit -c  configs_flow/uniflow_internvit_2b_blip3o_448px.yaml \
     --trainer.devices=8 \
     --ckpt_path=dual_internvit_2b/exp_sem_layer4_r14_mlp_c32_norm/epoch=14-step=50000.ckpt
 
+
+python main.py validate -c  configs_flow/uniflow_internvit_2b_blip3o_448px.yaml \
+    --ckpt_path=dual_internvit_2b/exp_sem_layer4_r14_mlp_c32_norm_448px/epoch=16-step=70000.ckpt
