@@ -1246,22 +1246,22 @@ class UniFlowVisionModel(PreTrainedModel):
         if self.enable_semantic_branch:
             if self.use_chal_proj:
                 self.sem_proj = FeedForward(
-                    dim=llm_hidden_size,
-                    hidden_dim=4 * llm_hidden_size,
+                    dim=4 * vit_hidden_size,
+                    hidden_dim=4 * vit_hidden_size,
                     out_dim=128,
                 )
                 # Project sem_latent_tokens from latent_ch back to llm_hidden_size for sem_global_blocks
                 self.sem_latent_proj = FeedForward(
                     dim=128,
-                    hidden_dim=4 * llm_hidden_size,
-                    out_dim=llm_hidden_size,
+                    hidden_dim=4 * vit_hidden_size,
+                    out_dim=2 * vit_hidden_size,
                 )
 
             self.sem_global_blocks = nn.ModuleList(
                 [
                     FlattenDiTBlock(
-                        hidden_size=llm_hidden_size,
-                        groups=16,
+                        hidden_size=2 * vit_hidden_size,
+                        groups=32,
                         mlp_ratio=4.0,
                         is_causal=True,
                     )
@@ -1269,9 +1269,8 @@ class UniFlowVisionModel(PreTrainedModel):
                 ]
             )
             self.sem_flow_head = FlowDecoder(
-                target_channels=vit_hidden_size
-                * 4,  # Target is sem_tokens before mlp1 (after pixel_shuffle)
-                z_channels=llm_hidden_size,
+                target_channels=vit_hidden_size * 4,
+                z_channels=2 * vit_hidden_size,
                 width=2048,
                 depth=3,
                 num_sampling_steps=config.num_sampling_steps,
@@ -1443,7 +1442,7 @@ class UniFlowVisionModel(PreTrainedModel):
             grid,
             grid,
             sem_processed.device,
-            hidden_size=self.config.llm_hidden_size,
+            hidden_size=2 * self.config.vit_hidden_size,
         )
 
         # Apply sem_global_blocks
@@ -1538,7 +1537,7 @@ class UniFlowVisionModel(PreTrainedModel):
         # ============================================================
         if self.enable_semantic_branch:
             # Step 2: Encode semantic latent
-            sem_latent_tokens = self.sem_proj(sem_tokens_after_mlp)
+            sem_latent_tokens = self.sem_proj(sem_tokens)
             sem_latent_tokens = F.layer_norm(
                 sem_latent_tokens, (sem_latent_tokens.shape[-1],)
             )
