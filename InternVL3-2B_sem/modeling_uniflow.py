@@ -1781,10 +1781,14 @@ class UniFlowVisionModel(PreTrainedModel):
             )
 
             # Step 3: Forward semantic decoder (inference mode)
-            sem_tokens_pred = self.forward_semantic_decoder(
-                sem_tokens_target=None,  # Not needed for inference
-                sem_latent_tokens=sem_latent_tokens,
-                training=False,
+            sem_tokens_pred = (
+                self.forward_semantic_decoder(
+                    sem_tokens_target=None,  # Not needed for inference
+                    sem_latent_tokens=sem_latent_tokens,
+                    training=False,
+                )
+                .flatten(2)
+                .transpose(1, 2)
             )
 
             # Apply mlp1 to get final semantic tokens
