@@ -1245,16 +1245,16 @@ class UniFlowVisionModel(PreTrainedModel):
         # ============================================================
         if self.enable_semantic_branch:
             if self.use_chal_proj:
-                self.sem_proj = FeedForward(
-                    dim=4 * vit_hidden_size,
-                    hidden_dim=4 * vit_hidden_size,
-                    out_dim=128,
+                self.sem_proj = nn.Sequential(
+                    nn.Linear(4 * vit_hidden_size, 4 * vit_hidden_size),
+                    nn.GELU(),
+                    nn.Linear(4 * vit_hidden_size, 128),
                 )
                 # Project sem_latent_tokens from latent_ch back to llm_hidden_size for sem_global_blocks
-                self.sem_latent_proj = FeedForward(
-                    dim=128,
-                    hidden_dim=4 * vit_hidden_size,
-                    out_dim=2 * vit_hidden_size,
+                self.sem_latent_proj = nn.Sequential(
+                    nn.Linear(128, 4 * vit_hidden_size),
+                    nn.GELU(),
+                    nn.Linear(4 * vit_hidden_size, 2 * vit_hidden_size),
                 )
 
             self.sem_global_blocks = nn.ModuleList(
