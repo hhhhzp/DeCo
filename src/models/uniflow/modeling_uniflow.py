@@ -1243,7 +1243,7 @@ class UniFlowVisionModel(PreTrainedModel):
         self.sem_flow_head = FlowDecoder(
             target_channels=vit_hidden_size * 4,
             z_channels=2 * vit_hidden_size,
-            width=2048,
+            width=vit_hidden_size * 4,
             depth=3,
             num_sampling_steps=config.num_sampling_steps,
             grad_checkpointing=False,
@@ -1408,7 +1408,10 @@ class UniFlowVisionModel(PreTrainedModel):
         B, N, C = sem_processed.shape
         grid = int(N**0.5)
         pos = self.fetch_pos(
-            grid, grid, sem_processed.device, hidden_size=self.config.llm_hidden_size
+            grid,
+            grid,
+            sem_processed.device,
+            hidden_size=2 * self.config.vit_hidden_size,
         )
         # Apply sem_global_blocks to process sem_latent_tokens
         for block in self.sem_global_blocks:
@@ -1463,32 +1466,6 @@ class UniFlowVisionModel(PreTrainedModel):
         # sem_tokens_pred: [B, N, 4*vit_hidden_size] -> pass through mlp1 -> [B, N, llm_hidden_size]
         sem_tokens_pred_after_mlp = self.mlp1(sem_tokens_pred)
         distill_loss = F.mse_loss(sem_tokens_pred_after_mlp, sem_tokens_after_mlp)
-
-        # Interpolate sem_latent_tokens to match latent_tokens spatial dimensions
-        # B_sem, N_sem, C_sem = sem_latent_tokens.shape
-        # B_lat, N_lat, C_lat = latent_tokens.shape
-        # if N_sem != N_lat:
-        #     grid_sem = int(N_sem**0.5)
-        #     grid_lat = int(N_lat**0.5)
-        #     # Reshape to [B, C, H, W] for interpolation
-        #     sem_latent_tokens = sem_latent_tokens.transpose(1, 2).reshape(
-        #         B_sem, C_sem, grid_sem, grid_sem
-        #     )
-        #     # Interpolate to target spatial size
-        #     sem_latent_tokens = F.interpolate(
-        #         sem_latent_tokens,
-        #         size=(grid_lat, grid_lat),
-        #         mode='bilinear',
-        #         align_corners=False,
-        #     ).to(sem_latent_tokens.dtype)
-        #     # Reshape back to [B, N, C]
-        #     sem_latent_tokens = sem_latent_tokens.reshape(B_sem, C_sem, -1).transpose(
-        #         1, 2
-        #     )
-
-        # condition_tokens = self.gen_ae.project_and_upsample(
-        #     sem_latent_tokens + latent_tokens
-        # )
         condition_tokens = self.gen_ae.project_and_upsample(latent_tokens)
 
         # 3. Apply global blocks with RoPE
