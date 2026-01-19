@@ -1401,12 +1401,16 @@ class UniFlowVisionModel(PreTrainedModel):
         sem_tokens = sem_tokens.reshape(sem_tokens.shape[0], -1, sem_tokens.shape[-1])
 
         # Normalize semantic tokens
-        sem_tokens = F.layer_norm(sem_tokens, (sem_tokens.shape[-1],))
+        # sem_tokens = F.layer_norm(sem_tokens, (sem_tokens.shape[-1],))
 
         # Apply mlp1 to get semantic tokens for downstream processing
         sem_tokens_after_mlp = self.mlp1(sem_tokens)
 
-        return gen_tokens, sem_tokens, sem_tokens_after_mlp
+        return (
+            gen_tokens,
+            F.layer_norm(sem_tokens, (sem_tokens.shape[-1],)),
+            sem_tokens_after_mlp,
+        )
 
     # ============================================================
     # Step 3: Forward Semantic Decoder
