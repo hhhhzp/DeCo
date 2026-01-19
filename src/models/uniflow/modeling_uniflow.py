@@ -1559,7 +1559,7 @@ class UniFlowVisionModel(PreTrainedModel):
 
         # Step 5: Combine losses
         weighted_lpips_loss = 1.1 * flow_losses['lpips_loss']
-        weighted_sem_mse_loss = sem_reconstruction_losses['mse_loss']
+        weighted_sem_mse_loss = 0.5 * sem_reconstruction_losses['mse_loss']
 
         total_loss = (
             flow_losses['mse_loss']
