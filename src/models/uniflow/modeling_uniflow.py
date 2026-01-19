@@ -1203,7 +1203,7 @@ class UniFlowVisionModel(PreTrainedModel):
             # Use new ChannelProjectorV2 with pixel_shuffle and ProjectorBlock
             self.gen_ae = ChannelProjector(vit_hidden_size, self.latent_ch)
             self.sem_proj = FeedForward(
-                dim=vit_hidden_size,
+                dim=4 * vit_hidden_size,
                 hidden_dim=4 * vit_hidden_size,
                 out_dim=128,
             )
@@ -1211,7 +1211,7 @@ class UniFlowVisionModel(PreTrainedModel):
             self.sem_latent_proj = FeedForward(
                 dim=128,
                 hidden_dim=4 * vit_hidden_size,
-                out_dim=2*vit_hidden_size,
+                out_dim=2 * vit_hidden_size,
             )
 
         # global transformer blocks
