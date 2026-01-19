@@ -1232,7 +1232,7 @@ class UniFlowVisionModel(PreTrainedModel):
         self.sem_global_blocks = nn.ModuleList(
             [
                 FlattenDiTBlock(
-                    hidden_size=llm_hidden_size,
+                    hidden_size=2 * vit_hidden_size,
                     groups=16,
                     mlp_ratio=4.0,
                     is_causal=True,
@@ -1241,7 +1241,7 @@ class UniFlowVisionModel(PreTrainedModel):
             ]
         )
         self.sem_flow_head = FlowDecoder(
-            target_channels=vit_hidden_size * 4,  # Target is sem_tokens before mlp1 (after pixel_shuffle)
+            target_channels=vit_hidden_size * 4,
             z_channels=llm_hidden_size,
             width=2048,
             depth=3,
