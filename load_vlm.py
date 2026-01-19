@@ -8,7 +8,7 @@ model = AutoModel.from_pretrained(
 )
 
 state_dict = torch.load(
-    "dual_internvit_2b/exp_sem_layer4_r14_mlp_c32_c256_norm/epoch\=2-step\=10000.ckpt",
+    "dual_internvit_2b/exp_sem_layer4_r14_mlp_c32_c256_norm/epoch=2-step=10000.ckpt",
     map_location='cpu',
 )['state_dict']
 new_state_dict = {}
@@ -25,7 +25,7 @@ for key, value in state_dict.items():
 msg = model.vision_model.load_state_dict(new_state_dict)
 print(msg)
 
-model.save_pretrained("./InternVL3-2B-bak")
+model.save_pretrained("exp_sem_layer4_r14_mlp_c32_c256_norm/InternVL3-2B-step10000")
 
 # Evaluate semantic reconstruction quality
 print("\nEvaluating semantic reconstruction quality...")
