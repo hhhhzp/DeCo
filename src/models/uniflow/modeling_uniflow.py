@@ -1363,7 +1363,7 @@ class UniFlowVisionModel(PreTrainedModel):
     # ============================================================
     # Step 1: Forward Encoder
     # ============================================================
-    def forward_encoder(self, pixel_values):
+    def forward_encoder(self, pixel_values, normalize_type='siglip'):
         """
         Encode images through ViT encoder.
 
@@ -1378,9 +1378,12 @@ class UniFlowVisionModel(PreTrainedModel):
         assert pixel_values.ndim == 4, f'wrong pixel_values size: {pixel_values.shape}'
 
         # Normalize and embed
-        x = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(
-            pixel_values * 0.5 + 0.5
-        )
+        if normalize_type == 'siglip':
+            x = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(
+                pixel_values * 0.5 + 0.5
+            )
+        else:
+            x = pixel_values
         x = self.embeddings(x)
 
         # Extract features from encoder
@@ -1588,36 +1591,73 @@ class UniFlowVisionModel(PreTrainedModel):
     # ============================================================
     # Step 6: Forward (Inference Main Function)
     # ============================================================
-    def forward(self, pixel_values):
+    def forward(self, pixel_values, mode='pixel', normalize_type='siglip'):
         """
         Forward pass for inference (Main function for inference).
 
         Args:
             pixel_values: input images [B, C, H, W]
+            mode: inference mode, either 'pixel' or 'semantic'
+                - 'pixel': pixel generation mode, returns reconstructed image [B, C, H, W]
+                - 'semantic': semantic reconstruction mode, returns semantic tokens [B, N/4, llm_hidden_size]
 
         Returns:
-            reconstructed_image: [B, C, H, W]
+            If mode='pixel':
+                reconstructed_image: [B, C, H, W]
+            If mode='semantic':
+                sem_tokens_pred_after_mlp: [B, N/4, llm_hidden_size]
         """
-        if not self.enable_pixel_branch:
+        # Validate mode
+        if mode not in ['pixel', 'semantic']:
+            raise ValueError(f"Invalid mode: {mode}. Must be 'pixel' or 'semantic'.")
+
+        # Check branch availability
+        if mode == 'pixel' and not self.enable_pixel_branch:
             raise RuntimeError(
-                "Pixel generation branch is disabled. Cannot perform inference without pixel branch."
+                "Pixel generation branch is disabled. Cannot perform inference in pixel mode."
+            )
+        if mode == 'semantic' and not self.enable_semantic_branch:
+            raise RuntimeError(
+                "Semantic reconstruction branch is disabled. Cannot perform inference in semantic mode."
             )
 
         # Step 1: Forward encoder
         gen_tokens, sem_tokens, sem_tokens_after_mlp = self.forward_encoder(
-            pixel_values
+            pixel_values, normalize_type=normalize_type
         )
 
-        # Step 2: Encode latent
-        latent_tokens = self.gen_ae.downsample_and_project(gen_tokens)
-        latent_tokens = F.layer_norm(latent_tokens, (latent_tokens.shape[-1],))
+        # ============================================================
+        # Pixel Generation Mode
+        # ============================================================
+        if mode == 'pixel':
+            # Step 2: Encode pixel latent
+            latent_tokens = self.gen_ae.downsample_and_project(gen_tokens)
+            latent_tokens = F.layer_norm(latent_tokens, (latent_tokens.shape[-1],))
 
-        # Step 3: Forward pixel decoder (inference mode)
-        reconstructed_image = self.forward_pixel_decoder(
-            latent_tokens=latent_tokens, training=False
-        )
+            # Step 3: Forward pixel decoder (inference mode)
+            reconstructed_image = self.forward_pixel_decoder(
+                latent_tokens=latent_tokens, training=False
+            )
 
-        return reconstructed_image
+            return reconstructed_image
+
+        # ============================================================
+        # Semantic Reconstruction Mode
+        # ============================================================
+        elif mode == 'semantic':
+            # Step 2: Encode semantic latent
+            sem_latent_tokens = self.sem_proj(sem_tokens)
+            sem_latent_tokens = F.layer_norm(
+                sem_latent_tokens, (sem_latent_tokens.shape[-1],)
+            )
+
+            # Step 3: Forward semantic decoder (inference mode)
+            sem_tokens = self.forward_semantic_decoder(
+                sem_tokens_target=None,  # Not needed for inference
+                sem_latent_tokens=sem_latent_tokens,
+                training=False,
+            )
+            return sem_tokens
 
 
 def pixel_shuffle(x, scale_factor=0.5):
