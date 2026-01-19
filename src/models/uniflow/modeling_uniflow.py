@@ -1312,7 +1312,7 @@ class UniFlowVisionModel(PreTrainedModel):
             return self.precompute_pos[cache_key].to(device)
         else:
             # Compute position embeddings based on head_dim
-            head_dim = hidden_size // 16  # num_heads=16
+            head_dim = 64
             pos = precompute_freqs_cis_2d(head_dim, height, width).to(device)
             self.precompute_pos[cache_key] = pos
             return pos
@@ -1535,7 +1535,9 @@ class UniFlowVisionModel(PreTrainedModel):
         )
 
         # Step 2: Encode latent
-        latent_tokens, sem_latent_tokens = self.encode_latent(gen_tokens, sem_tokens_after_mlp)
+        latent_tokens, sem_latent_tokens = self.encode_latent(
+            gen_tokens, sem_tokens_after_mlp
+        )
 
         # Step 3: Forward semantic decoder (training mode)
         sem_reconstruction_losses, sem_tokens_pred = self.forward_semantic_decoder(
