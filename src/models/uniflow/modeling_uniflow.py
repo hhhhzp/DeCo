@@ -1445,30 +1445,31 @@ class UniFlowVisionModel(PreTrainedModel):
         )
 
         # Interpolate sem_latent_tokens to match latent_tokens spatial dimensions
-        B_sem, N_sem, C_sem = sem_latent_tokens.shape
-        B_lat, N_lat, C_lat = latent_tokens.shape
-        if N_sem != N_lat:
-            grid_sem = int(N_sem**0.5)
-            grid_lat = int(N_lat**0.5)
-            # Reshape to [B, C, H, W] for interpolation
-            sem_latent_tokens = sem_latent_tokens.transpose(1, 2).reshape(
-                B_sem, C_sem, grid_sem, grid_sem
-            )
-            # Interpolate to target spatial size
-            sem_latent_tokens = F.interpolate(
-                sem_latent_tokens,
-                size=(grid_lat, grid_lat),
-                mode='bilinear',
-                align_corners=False,
-            ).to(sem_latent_tokens.dtype)
-            # Reshape back to [B, N, C]
-            sem_latent_tokens = sem_latent_tokens.reshape(B_sem, C_sem, -1).transpose(
-                1, 2
-            )
+        # B_sem, N_sem, C_sem = sem_latent_tokens.shape
+        # B_lat, N_lat, C_lat = latent_tokens.shape
+        # if N_sem != N_lat:
+        #     grid_sem = int(N_sem**0.5)
+        #     grid_lat = int(N_lat**0.5)
+        #     # Reshape to [B, C, H, W] for interpolation
+        #     sem_latent_tokens = sem_latent_tokens.transpose(1, 2).reshape(
+        #         B_sem, C_sem, grid_sem, grid_sem
+        #     )
+        #     # Interpolate to target spatial size
+        #     sem_latent_tokens = F.interpolate(
+        #         sem_latent_tokens,
+        #         size=(grid_lat, grid_lat),
+        #         mode='bilinear',
+        #         align_corners=False,
+        #     ).to(sem_latent_tokens.dtype)
+        #     # Reshape back to [B, N, C]
+        #     sem_latent_tokens = sem_latent_tokens.reshape(B_sem, C_sem, -1).transpose(
+        #         1, 2
+        #     )
 
-        condition_tokens = self.gen_ae.project_and_upsample(
-            sem_latent_tokens + latent_tokens
-        )
+        # condition_tokens = self.gen_ae.project_and_upsample(
+        #     sem_latent_tokens + latent_tokens
+        # )
+        condition_tokens = self.gen_ae.project_and_upsample(latent_tokens)
 
         # 3. Apply global blocks with RoPE
         B, N, C = condition_tokens.shape
