@@ -1380,12 +1380,12 @@ class UniFlowVisionModel(PreTrainedModel):
         sem_tokens = sem_tokens.reshape(sem_tokens.shape[0], -1, sem_tokens.shape[-1])
 
         # sem_tokens_before_mlp: [B, N/4, 4*vit_hidden_size] - this is the new prediction target
-        sem_tokens_before_mlp = F.layer_norm(sem_tokens, (sem_tokens.shape[-1],))
+        # sem_tokens_before_mlp = F.layer_norm(sem_tokens, (sem_tokens.shape[-1],))
 
         # sem_tokens_after_mlp: [B, N/4, llm_hidden_size] - this is used for downstream processing
-        sem_tokens_after_mlp = self.mlp1(sem_tokens_before_mlp)
+        sem_tokens_after_mlp = self.mlp1(sem_tokens)
 
-        return gen_tokens, sem_tokens_before_mlp, sem_tokens_after_mlp
+        return gen_tokens, sem_tokens, sem_tokens_after_mlp
 
     def _reconstruct_sem_tokens(self, sem_tokens_target, sem_latent_tokens):
         """
@@ -1439,7 +1439,7 @@ class UniFlowVisionModel(PreTrainedModel):
             sem_reconstruction_losses: dict with mse_loss and lpips_loss for sem_tokens reconstruction
         """
         # 1. Encode image to semantic tokens
-        gen_tokens, sem_tokens_before_mlp, sem_tokens_after_mlp = self._encode_image(x)
+        gen_tokens, sem_tokens, sem_tokens_after_mlp = self._encode_image(x)
 
         # 2. Channel projection for generation branch with 2x downsampling and upsampling
         B, N, C = sem_tokens_after_mlp.shape
@@ -1449,7 +1449,7 @@ class UniFlowVisionModel(PreTrainedModel):
         latent_tokens = self.gen_ae.downsample_and_project(gen_tokens)
         latent_tokens = F.layer_norm(latent_tokens, (latent_tokens.shape[-1],))
 
-        sem_latent_tokens = self.sem_proj(sem_tokens_before_mlp)
+        sem_latent_tokens = self.sem_proj(sem_tokens)
         sem_latent_tokens = F.layer_norm(
             sem_latent_tokens, (sem_latent_tokens.shape[-1],)
         )
@@ -1457,7 +1457,7 @@ class UniFlowVisionModel(PreTrainedModel):
         # Reconstruct sem_tokens using sem_global_blocks and sem_flow_head
         # Target is now sem_tokens_before_mlp (4*vit_hidden_size)
         sem_reconstruction_losses, sem_tokens_pred = self._reconstruct_sem_tokens(
-            sem_tokens_before_mlp, sem_latent_tokens
+            sem_tokens, sem_latent_tokens
         )
 
         # Calculate distill_loss: compare predicted sem_tokens (after mlp1) with target sem_tokens (after mlp1)
