@@ -1190,7 +1190,7 @@ class UniFlowVisionModel(PreTrainedModel):
 
         # Branch control flags
         self.enable_semantic_branch = config.enable_semantic_branch
-        self.enable_pixel_branch = config.enable_pixel_branch
+        self.enable_pixel_branch = False
 
         # vit encoder (shared by both branches)
         self.embeddings = UniFlowVisionEmbeddings(config)
