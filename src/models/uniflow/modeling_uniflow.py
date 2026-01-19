@@ -1243,7 +1243,7 @@ class UniFlowVisionModel(PreTrainedModel):
         self.sem_flow_head = FlowDecoder(
             target_channels=vit_hidden_size * 4,
             z_channels=2 * vit_hidden_size,
-            width=vit_hidden_size * 4,
+            width=vit_hidden_size * 2,
             depth=3,
             num_sampling_steps=config.num_sampling_steps,
             grad_checkpointing=False,
@@ -1380,9 +1380,7 @@ class UniFlowVisionModel(PreTrainedModel):
         sem_tokens = sem_tokens.reshape(sem_tokens.shape[0], -1, sem_tokens.shape[-1])
 
         # sem_tokens_before_mlp: [B, N/4, 4*vit_hidden_size] - this is the new prediction target
-        sem_tokens_before_mlp = F.layer_norm(
-            sem_tokens, (sem_tokens.shape[-1],), eps=0.0
-        )
+        sem_tokens_before_mlp = F.layer_norm(sem_tokens, (sem_tokens.shape[-1],))
 
         # sem_tokens_after_mlp: [B, N/4, llm_hidden_size] - this is used for downstream processing
         sem_tokens_after_mlp = self.mlp1(sem_tokens_before_mlp)
