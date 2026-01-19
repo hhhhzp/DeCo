@@ -43,6 +43,9 @@ class UniFlowVisionConfig(PretrainedConfig):
         use_disp_loss=False,
         compression_layers=[-1, 4],
         num_query_per_layer=[64, 191],
+        # branch control
+        enable_semantic_branch=True,
+        enable_pixel_branch=True,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -76,6 +79,9 @@ class UniFlowVisionConfig(PretrainedConfig):
         self.global_blocks_depth = global_blocks_depth
         self.num_decoder_layers = num_decoder_layers
         self.num_sampling_steps = num_sampling_steps
+        # branch control
+        self.enable_semantic_branch = enable_semantic_branch
+        self.enable_pixel_branch = enable_pixel_branch
 
     @classmethod
     def from_pretrained(
