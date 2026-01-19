@@ -1536,7 +1536,7 @@ class UniFlowVisionModel(PreTrainedModel):
         weighted_lpips_loss = 1.1 * flow_losses['lpips_loss']
 
         # Apply weight to sem reconstruction loss (only MSE, no LPIPS for token-level reconstruction)
-        weighted_sem_mse_loss = 0.5 * sem_reconstruction_losses['mse_loss']
+        weighted_sem_mse_loss = sem_reconstruction_losses['mse_loss']
 
         # Calculate total loss as sum of all losses
         total_loss = (
