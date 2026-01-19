@@ -1203,15 +1203,15 @@ class UniFlowVisionModel(PreTrainedModel):
             # Use new ChannelProjectorV2 with pixel_shuffle and ProjectorBlock
             self.gen_ae = ChannelProjector(vit_hidden_size, self.latent_ch)
             self.sem_proj = FeedForward(
-                dim=llm_hidden_size,
-                hidden_dim=4 * llm_hidden_size,
+                dim=vit_hidden_size,
+                hidden_dim=4 * vit_hidden_size,
                 out_dim=128,
             )
             # Project sem_latent_tokens from latent_ch back to llm_hidden_size for sem_global_blocks
             self.sem_latent_proj = FeedForward(
                 dim=128,
-                hidden_dim=4 * llm_hidden_size,
-                out_dim=llm_hidden_size,
+                hidden_dim=4 * vit_hidden_size,
+                out_dim=2*vit_hidden_size,
             )
 
         # global transformer blocks
@@ -1448,7 +1448,7 @@ class UniFlowVisionModel(PreTrainedModel):
         latent_tokens = self.gen_ae.downsample_and_project(gen_tokens)
         latent_tokens = F.layer_norm(latent_tokens, (latent_tokens.shape[-1],))
 
-        sem_latent_tokens = self.sem_proj(sem_tokens_after_mlp)
+        sem_latent_tokens = self.sem_proj(sem_tokens_before_mlp)
         sem_latent_tokens = F.layer_norm(
             sem_latent_tokens, (sem_latent_tokens.shape[-1],)
         )
