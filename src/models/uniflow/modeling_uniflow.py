@@ -1408,7 +1408,7 @@ class UniFlowVisionModel(PreTrainedModel):
 
         return (
             gen_tokens,
-            F.layer_norm(sem_tokens, (sem_tokens.shape[-1],)),
+            sem_tokens,
             sem_tokens_after_mlp,
         )
 
@@ -1545,7 +1545,9 @@ class UniFlowVisionModel(PreTrainedModel):
 
             # Step 3: Forward semantic decoder (training mode)
             sem_reconstruction_losses, sem_tokens_pred = self.forward_semantic_decoder(
-                sem_tokens_target=sem_tokens,
+                sem_tokens_target=F.layer_norm(
+                    sem_tokens, (sem_tokens.shape[-1],), eps=1e-8
+                ),
                 sem_latent_tokens=sem_latent_tokens,
                 training=True,
             )
