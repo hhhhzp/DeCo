@@ -1,6 +1,6 @@
 seed_everything: true
 tags:
-  exp: &exp sem_layer4_r14_mlp_c32_c128_norm
+  exp: &exp sem_layer4_r14_mlp_c32_c128_norm_lr1e-4_cosine
 torch_hub_dir: ~/.cache/torch/hub
 huggingface_cache_dir: null
 
@@ -53,7 +53,7 @@ model:
   optimizer:
     class_path: torch.optim.AdamW
     init_args:
-      lr: 2e-4
+      lr: 1e-4
       weight_decay: 0.0
       betas: [0.9, 0.95]
   # Pretrained model path
