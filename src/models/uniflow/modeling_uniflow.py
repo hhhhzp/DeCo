@@ -1295,7 +1295,7 @@ class UniFlowVisionModel(PreTrainedModel):
                 torch.from_numpy(pos_embed_spatial).float()
             )
 
-        self.apply(self._init_weights)
+        # self.apply(self._init_weights)
 
         # Initialize RoPE position cache for FlattenDiTBlock
         self.precompute_pos = dict()
