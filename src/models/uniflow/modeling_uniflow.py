@@ -1203,8 +1203,8 @@ class UniFlowVisionModel(PreTrainedModel):
             # Use new ChannelProjectorV2 with pixel_shuffle and ProjectorBlock
             self.gen_ae = ChannelProjector(vit_hidden_size, self.latent_ch)
             self.sem_proj = FeedForward(
-                dim=4 * vit_hidden_size,
-                hidden_dim=4 * vit_hidden_size,
+                dim=llm_hidden_size,
+                hidden_dim=llm_hidden_size,
                 out_dim=128,
             )
             # Project sem_latent_tokens from latent_ch back to llm_hidden_size for sem_global_blocks
@@ -1233,7 +1233,7 @@ class UniFlowVisionModel(PreTrainedModel):
             [
                 FlattenDiTBlock(
                     hidden_size=2 * vit_hidden_size,
-                    groups=16,
+                    groups=32,
                     mlp_ratio=4.0,
                     is_causal=True,
                 )
@@ -1326,6 +1326,7 @@ class UniFlowVisionModel(PreTrainedModel):
         return vit_embeds
 
     def _get_pos_embed(self, pos_embed, H, W):
+        """Interpolate position embeddings to match spatial dimensions."""
         target_dtype = pos_embed.dtype
         pos_embed = (
             pos_embed.float()
@@ -1345,17 +1346,20 @@ class UniFlowVisionModel(PreTrainedModel):
         )
         return pos_embed
 
-    def _encode_image(self, pixel_values):
+    # ============================================================
+    # Step 1: Forward Encoder
+    # ============================================================
+    def forward_encoder(self, pixel_values):
         """
-        Encode images to semantic tokens.
+        Encode images through ViT encoder.
 
         Args:
             pixel_values: input images [B, C, H, W]
 
         Returns:
             gen_tokens: encoder features from layer 4 [B, N, C]
-            sem_tokens_before_mlp: sem_tokens before mlp1, after pixel_shuffle [B, N/4, 4*vit_hidden_size]
-            sem_tokens_after_mlp: sem_tokens after mlp1 [B, N/4, llm_hidden_size]
+            sem_tokens: semantic tokens before mlp1, after pixel_shuffle [B, N/4, 4*vit_hidden_size]
+            sem_tokens_after_mlp: semantic tokens after mlp1 [B, N/4, llm_hidden_size]
         """
         assert pixel_values.ndim == 4, f'wrong pixel_values size: {pixel_values.shape}'
 
@@ -1371,35 +1375,70 @@ class UniFlowVisionModel(PreTrainedModel):
             output_hidden_states=True,
         )
 
+        # Get generation tokens from layer 4
         gen_tokens = encoder_outputs.hidden_states[4][:, 1:]
 
+        # Get semantic tokens from last layer
         sem_tokens = encoder_outputs.last_hidden_state[:, 1:]  # Remove CLS token
         h = w = int(sem_tokens.shape[1] ** 0.5)
         sem_tokens = sem_tokens.reshape(sem_tokens.shape[0], h, w, -1)
         sem_tokens = pixel_shuffle(sem_tokens, scale_factor=0.5)
         sem_tokens = sem_tokens.reshape(sem_tokens.shape[0], -1, sem_tokens.shape[-1])
 
-        # sem_tokens_before_mlp: [B, N/4, 4*vit_hidden_size] - this is the new prediction target
-        # sem_tokens_before_mlp = F.layer_norm(sem_tokens, (sem_tokens.shape[-1],))
-
-        # sem_tokens_after_mlp: [B, N/4, llm_hidden_size] - this is used for downstream processing
+        # Apply mlp1 to get semantic tokens for downstream processing
         sem_tokens_after_mlp = self.mlp1(sem_tokens)
 
         return gen_tokens, sem_tokens, sem_tokens_after_mlp
 
-    def _reconstruct_sem_tokens(self, sem_tokens_target, sem_latent_tokens):
+    # ============================================================
+    # Step 2: Encode Latent
+    # ============================================================
+    def encode_latent(self, gen_tokens, sem_tokens):
         """
-        Reconstruct semantic tokens using sem_global_blocks and sem_flow_head.
+        Encode tokens to latent representations.
 
         Args:
-            sem_tokens_target: original semantic tokens before mlp1 [B, N, 4*vit_hidden_size] (target for reconstruction)
-            sem_latent_tokens: projected latent tokens [B, N, latent_ch]
+            gen_tokens: generation tokens [B, N, C]
+            sem_tokens: semantic tokens [B, N/4, 4*vit_hidden_size]
 
         Returns:
-            reconstruction_losses: dict containing mse_loss and lpips_loss
-            sem_tokens_pred: predicted sem_tokens before mlp1 [B, N, 4*vit_hidden_size]
+            latent_tokens: latent tokens for generation [B, N, latent_ch]
+            sem_latent_tokens: latent tokens for semantic reconstruction [B, N/4, 128]
         """
-        # Project sem_latent_tokens from latent_ch to llm_hidden_size
+        # Project generation tokens to latent space
+        latent_tokens = self.gen_ae.downsample_and_project(gen_tokens)
+        latent_tokens = F.layer_norm(latent_tokens, (latent_tokens.shape[-1],))
+
+        # Project semantic tokens to latent space
+        sem_latent_tokens = self.sem_proj(sem_tokens)
+        sem_latent_tokens = F.layer_norm(
+            sem_latent_tokens, (sem_latent_tokens.shape[-1],)
+        )
+
+        return latent_tokens, sem_latent_tokens
+
+    # ============================================================
+    # Step 3: Forward Semantic Decoder
+    # ============================================================
+    def forward_semantic_decoder(
+        self, sem_tokens_target, sem_latent_tokens, training=True
+    ):
+        """
+        Reconstruct semantic tokens using semantic decoder.
+
+        Args:
+            sem_tokens_target: target semantic tokens [B, N, 4*vit_hidden_size]
+            sem_latent_tokens: latent tokens [B, N, 128]
+            training: whether in training mode
+
+        Returns:
+            If training:
+                reconstruction_losses: dict containing mse_loss and lpips_loss
+                sem_tokens_pred: predicted semantic tokens [B, N, 4*vit_hidden_size]
+            If inference:
+                sem_tokens_pred: predicted semantic tokens [B, N, 4*vit_hidden_size]
+        """
+        # Project sem_latent_tokens to hidden size
         sem_processed = self.sem_latent_proj(sem_latent_tokens)
 
         # Get spatial dimensions and position embeddings
@@ -1411,62 +1450,45 @@ class UniFlowVisionModel(PreTrainedModel):
             sem_processed.device,
             hidden_size=2 * self.config.vit_hidden_size,
         )
-        # Apply sem_global_blocks to process sem_latent_tokens
+
+        # Apply sem_global_blocks
         for block in self.sem_global_blocks:
             sem_processed = block(sem_processed, pos)
 
-        # Use sem_flow_head to reconstruct sem_tokens (target is now sem_tokens_before_mlp with 4*vit_hidden_size)
-        reconstruction_losses = self.sem_flow_head.forward_train(
-            x1=sem_tokens_target, z=sem_processed, pos=pos
-        )
+        if training:
+            # Training: compute reconstruction loss
+            reconstruction_losses = self.sem_flow_head.forward_train(
+                x1=sem_tokens_target, z=sem_processed, pos=pos
+            )
+            sem_tokens_pred = reconstruction_losses['pred']
+            return reconstruction_losses, sem_tokens_pred
+        else:
+            # Inference: just reconstruct
+            sem_tokens_pred = self.sem_flow_head(z=sem_processed, pos=pos)
+            return sem_tokens_pred
 
-        # Get predicted sem_tokens from reconstruction_losses
-        sem_tokens_pred = reconstruction_losses['pred']
-
-        return reconstruction_losses, sem_tokens_pred
-
-    def forward_condition(self, x, teacher_feat=None):
+    # ============================================================
+    # Step 4: Forward Pixel Decoder
+    # ============================================================
+    def forward_pixel_decoder(self, latent_tokens, target_pixels=None, training=True):
         """
-        Encode images and extract features for generation.
+        Decode latent tokens to pixel space.
 
         Args:
-            x: input images [B, C, H, W]
-            teacher_feat: teacher model features for distillation (optional)
+            latent_tokens: latent tokens [B, N, latent_ch]
+            target_pixels: target pixel values [B, C, H, W] (only for training)
+            training: whether in training mode
 
         Returns:
-            gen_feat: generation features [B, N, C]
-            distill_loss: distillation loss (comparing predicted and target sem_tokens after mlp1)
-            sem_reconstruction_losses: dict with mse_loss and lpips_loss for sem_tokens reconstruction
+            If training:
+                flow_losses: dict containing mse_loss and lpips_loss
+            If inference:
+                reconstructed_image: [B, C, H, W]
         """
-        # 1. Encode image to semantic tokens
-        gen_tokens, sem_tokens, sem_tokens_after_mlp = self._encode_image(x)
-
-        # 2. Channel projection for generation branch with 2x downsampling and upsampling
-        B, N, C = sem_tokens_after_mlp.shape
-        grid = int(N**0.5)
-
-        # Use new ChannelProjectorV2: downsample and project
-        latent_tokens = self.gen_ae.downsample_and_project(gen_tokens)
-        latent_tokens = F.layer_norm(latent_tokens, (latent_tokens.shape[-1],))
-
-        sem_latent_tokens = self.sem_proj(sem_tokens)
-        sem_latent_tokens = F.layer_norm(
-            sem_latent_tokens, (sem_latent_tokens.shape[-1],)
-        )
-
-        # Reconstruct sem_tokens using sem_global_blocks and sem_flow_head
-        # Target is now sem_tokens_before_mlp (4*vit_hidden_size)
-        sem_reconstruction_losses, sem_tokens_pred = self._reconstruct_sem_tokens(
-            sem_tokens, sem_latent_tokens
-        )
-
-        # Calculate distill_loss: compare predicted sem_tokens (after mlp1) with target sem_tokens (after mlp1)
-        # sem_tokens_pred: [B, N, 4*vit_hidden_size] -> pass through mlp1 -> [B, N, llm_hidden_size]
-        sem_tokens_pred_after_mlp = self.mlp1(sem_tokens_pred)
-        distill_loss = F.mse_loss(sem_tokens_pred_after_mlp, sem_tokens_after_mlp)
+        # Project latent tokens back to hidden size
         condition_tokens = self.gen_ae.project_and_upsample(latent_tokens)
 
-        # 3. Apply global blocks with RoPE
+        # Apply global blocks with position embeddings
         B, N, C = condition_tokens.shape
         grid = int(N**0.5)
         pos_embed = self._get_pos_embed(self.global_block_pos_embed, grid, grid)
@@ -1476,44 +1498,67 @@ class UniFlowVisionModel(PreTrainedModel):
         for block in self.global_blocks:
             condition_tokens = block(condition_tokens, pos)
 
-        # 4. Return with distillation loss
-        return condition_tokens, distill_loss, sem_reconstruction_losses
+        if training:
+            # Training: compute flow matching loss
+            target_latent = p2l_transform_tensor(target_pixels, self.config.patch_size)
+            flow_losses = self.flow_head.forward_train(
+                x1=target_latent, z=condition_tokens, pos=pos
+            )
+            return flow_losses
+        else:
+            # Inference: generate image
+            reconstructed_image = self.flow_head(z=condition_tokens, pos=pos)
+            return reconstructed_image
 
+    # ============================================================
+    # Step 5: Forward Loss (Training Main Function)
+    # ============================================================
     def forward_loss(self, target_pixel_values, teacher_feat=None):
         """
-        Compute training loss.
+        Compute training loss (Main function for training).
 
         Args:
             target_pixel_values: target images [B, C, H, W]
             teacher_feat: teacher model features for distillation (optional)
 
         Returns:
-            dict: loss components including mse_loss, lpips_loss, distill_loss, and sem_reconstruction_losses
+            dict: loss components including:
+                - loss: total loss
+                - flow_loss: pixel reconstruction MSE loss
+                - lpips_loss: perceptual loss
+                - distill_loss: distillation loss
+                - sem_mse_loss: semantic reconstruction loss
         """
-        # 1. Get generation features, distillation loss, and sem reconstruction losses
-        z, distill_loss, sem_reconstruction_losses = self.forward_condition(
-            target_pixel_values, teacher_feat=teacher_feat
+        # Step 1: Forward encoder
+        gen_tokens, sem_tokens, sem_tokens_after_mlp = self.forward_encoder(
+            target_pixel_values
         )
 
-        # 2. Transform target to latent space
-        t = p2l_transform_tensor(target_pixel_values, self.config.patch_size)
+        # Step 2: Encode latent
+        latent_tokens, sem_latent_tokens = self.encode_latent(gen_tokens, sem_tokens_after_mlp)
 
-        # 3. Get position embeddings (reuse from forward_condition)
-        B, N, C = z.shape
-        grid = int(N**0.5)
-        pos = self.fetch_pos(grid, grid, z.device)
+        # Step 3: Forward semantic decoder (training mode)
+        sem_reconstruction_losses, sem_tokens_pred = self.forward_semantic_decoder(
+            sem_tokens_target=sem_tokens,
+            sem_latent_tokens=sem_latent_tokens,
+            training=True,
+        )
 
-        # 4. Compute flow matching losses (returns dict with mse_loss and lpips_loss)
-        flow_losses = self.flow_head.forward_train(x1=t, z=z, pos=pos)
+        # Calculate distillation loss
+        sem_tokens_pred_after_mlp = self.mlp1(sem_tokens_pred)
+        distill_loss = F.mse_loss(sem_tokens_pred_after_mlp, sem_tokens_after_mlp)
 
-        # 5. Combine losses into separate components
-        # Apply 1.1 weight to LPIPS loss
+        # Step 4: Forward pixel decoder (training mode)
+        flow_losses = self.forward_pixel_decoder(
+            latent_tokens=latent_tokens,
+            target_pixels=target_pixel_values,
+            training=True,
+        )
+
+        # Step 5: Combine losses
         weighted_lpips_loss = 1.1 * flow_losses['lpips_loss']
-
-        # Apply weight to sem reconstruction loss (only MSE, no LPIPS for token-level reconstruction)
         weighted_sem_mse_loss = sem_reconstruction_losses['mse_loss']
 
-        # Calculate total loss as sum of all losses
         total_loss = (
             flow_losses['mse_loss']
             + weighted_lpips_loss
@@ -1529,16 +1574,33 @@ class UniFlowVisionModel(PreTrainedModel):
             'sem_mse_loss': weighted_sem_mse_loss,
         }
 
+    # ============================================================
+    # Step 6: Forward (Inference Main Function)
+    # ============================================================
     def forward(self, pixel_values):
-        # Inference: return_distill_loss=False
-        z, _, _ = self.forward_condition(pixel_values)
+        """
+        Forward pass for inference (Main function for inference).
 
-        # Get position embeddings (reuse from forward_condition)
-        B, N, C = z.shape
-        grid = int(N**0.5)
-        pos = self.fetch_pos(grid, grid, z.device)
+        Args:
+            pixel_values: input images [B, C, H, W]
 
-        return self.flow_head(z=z, pos=pos)
+        Returns:
+            reconstructed_image: [B, C, H, W]
+        """
+        # Step 1: Forward encoder
+        gen_tokens, sem_tokens, sem_tokens_after_mlp = self.forward_encoder(
+            pixel_values
+        )
+
+        # Step 2: Encode latent
+        latent_tokens, sem_latent_tokens = self.encode_latent(gen_tokens, sem_tokens)
+
+        # Step 3: Forward pixel decoder (inference mode)
+        reconstructed_image = self.forward_pixel_decoder(
+            latent_tokens=latent_tokens, training=False
+        )
+
+        return reconstructed_image
 
 
 def pixel_shuffle(x, scale_factor=0.5):
