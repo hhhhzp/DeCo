@@ -1205,7 +1205,13 @@ class UniFlowVisionModel(PreTrainedModel):
             self.sem_proj = FeedForward(
                 dim=llm_hidden_size,
                 hidden_dim=4 * llm_hidden_size,
-                out_dim=self.latent_ch,
+                out_dim=128,
+            )
+            # Project sem_latent_tokens from latent_ch back to llm_hidden_size for sem_global_blocks
+            self.sem_latent_proj = FeedForward(
+                dim=128,
+                hidden_dim=4 * llm_hidden_size,
+                out_dim=llm_hidden_size,
             )
 
         # global transformer blocks
@@ -1379,13 +1385,15 @@ class UniFlowVisionModel(PreTrainedModel):
         Returns:
             reconstruction_losses: dict containing mse_loss and lpips_loss
         """
+        # Project sem_latent_tokens from latent_ch to llm_hidden_size
+        sem_processed = self.sem_latent_proj(sem_latent_tokens)
+
         # Get spatial dimensions and position embeddings
-        B, N, C = sem_latent_tokens.shape
+        B, N, C = sem_processed.shape
         grid = int(N**0.5)
-        pos = self.fetch_pos(grid, grid, sem_latent_tokens.device)
+        pos = self.fetch_pos(grid, grid, sem_processed.device)
 
         # Apply sem_global_blocks to process sem_latent_tokens
-        sem_processed = sem_latent_tokens
         for block in self.sem_global_blocks:
             sem_processed = block(sem_processed, pos)
 
