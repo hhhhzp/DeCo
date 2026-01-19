@@ -1326,7 +1326,7 @@ class UniFlowVisionModel(PreTrainedModel):
             return self.precompute_pos[cache_key].to(device)
         else:
             # Compute position embeddings based on head_dim
-            head_dim = hidden_size // 16  # num_heads=16
+            head_dim = 64  # num_heads=16
             pos = precompute_freqs_cis_2d(head_dim, height, width).to(device)
             self.precompute_pos[cache_key] = pos
             return pos
