@@ -1392,7 +1392,7 @@ class UniFlowVisionModel(PreTrainedModel):
         B, N, C = sem_processed.shape
         grid = int(N**0.5)
         pos = self.fetch_pos(grid, grid, sem_processed.device)
-
+        print(sem_processed.shape)
         # Apply sem_global_blocks to process sem_latent_tokens
         for block in self.sem_global_blocks:
             sem_processed = block(sem_processed, pos)
