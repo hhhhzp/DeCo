@@ -1032,6 +1032,7 @@ class FlowDecoder(nn.Module):
 
             # update x
             x = x + dt * vc
+            x = F.layer_norm(x, (x.shape[-1],))
             trajs.append(x)
 
         sampled_token = trajs[-1]
