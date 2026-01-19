@@ -716,6 +716,7 @@ class FlowDecoder(nn.Module):
         max_freqs=8,
         num_heads=8,
         mlp_ratio=4,
+        use_lpips=True,
     ):
         super().__init__()
         self.patch_size = patch_size
@@ -727,8 +728,10 @@ class FlowDecoder(nn.Module):
         self.train_schedule = train_schedule
         self.num_sampling_steps = int(num_sampling_steps)
         self.noise_concat = noise_concat
+        self.use_lpips = use_lpips
         print(f"Sampling Step: {self.num_sampling_steps}")
         print(f"Train Schedule: {self.train_schedule}")
+        print(f"Use LPIPS Loss: {self.use_lpips}")
 
         # mlp head (latent to pixel)
         self.in_channels = (
@@ -756,9 +759,12 @@ class FlowDecoder(nn.Module):
         # Learnable mask token for CFG training
         # self.mask_token = nn.Parameter(torch.zeros(1, 1, z_channels))
 
-        # Perceptual loss network (LPIPS-based)
-        self.lpips_loss = PerceptualLoss(model_name='lpips-convnext_s-1.0-0.1')
-        # PerceptualLoss already freezes parameters in its __init__
+        # Perceptual loss network (LPIPS-based) - only initialize if use_lpips is True
+        if self.use_lpips:
+            self.lpips_loss = PerceptualLoss(model_name='lpips-convnext_s-1.0-0.1')
+            # PerceptualLoss already freezes parameters in its __init__
+        else:
+            self.lpips_loss = None
 
     def forward_train(self, x1, z, pos):
         """
@@ -809,28 +815,32 @@ class FlowDecoder(nn.Module):
         # Compute MSE loss on velocity
         mse_loss = F.mse_loss(v_pred, v_target)
 
-        # Derive predicted x1 from predicted velocity
-        # From flow matching: x_t = t * x1 + (1 - t) * x0
-        # And v = x1 - x0
-        # Therefore: x1_pred = x0 + v_pred = x_t + (1 - t) * v_pred
-        x1_pred = x_t + (1 - t_expanded) * v_pred
+        # Compute LPIPS loss only if use_lpips is True
+        if self.use_lpips:
+            # Derive predicted x1 from predicted velocity
+            # From flow matching: x_t = t * x1 + (1 - t) * x0
+            # And v = x1 - x0
+            # Therefore: x1_pred = x0 + v_pred = x_t + (1 - t) * v_pred
+            x1_pred = x_t + (1 - t_expanded) * v_pred
 
-        # Reshape to image format for LPIPS: [B*N, C] -> [B, C, H, W]
-        x1_pred_img = l2p_transform_tensor(
-            x1_pred.reshape(b, n, c),
-            patch_size=self.patch_size,
-        )
-        x1_target_img = l2p_transform_tensor(
-            x1.reshape(b, n, c),
-            patch_size=self.patch_size,
-        )
+            # Reshape to image format for LPIPS: [B*N, C] -> [B, C, H, W]
+            x1_pred_img = l2p_transform_tensor(
+                x1_pred.reshape(b, n, c),
+                patch_size=self.patch_size,
+            )
+            x1_target_img = l2p_transform_tensor(
+                x1.reshape(b, n, c),
+                patch_size=self.patch_size,
+            )
 
-        # Normalize to [-1, 1] range for LPIPS (it expects images in this range)
-        x1_pred_img = torch.clamp(x1_pred_img, -1, 1) * 0.5 + 0.5
-        x1_target_img = torch.clamp(x1_target_img, -1, 1) * 0.5 + 0.5
+            # Normalize to [-1, 1] range for LPIPS (it expects images in this range)
+            x1_pred_img = torch.clamp(x1_pred_img, -1, 1) * 0.5 + 0.5
+            x1_target_img = torch.clamp(x1_target_img, -1, 1) * 0.5 + 0.5
 
-        # Compute LPIPS loss
-        lpips_loss = self.lpips_loss(x1_pred_img, x1_target_img).mean()
+            # Compute LPIPS loss
+            lpips_loss = self.lpips_loss(x1_pred_img, x1_target_img).mean()
+        else:
+            lpips_loss = torch.tensor(0.0, device=mse_loss.device, dtype=mse_loss.dtype)
 
         return {
             'mse_loss': mse_loss,
@@ -1213,6 +1223,32 @@ class UniFlowVisionModel(PreTrainedModel):
                 for _ in range(self.global_blocks_depth)
             ]
         )
+        self.sem_global_blocks = nn.ModuleList(
+            [
+                FlattenDiTBlock(
+                    hidden_size=llm_hidden_size,
+                    groups=16,
+                    mlp_ratio=4.0,
+                    is_causal=True,
+                )
+                for _ in range(self.global_blocks_depth)
+            ]
+        )
+        self.sem_flow_head = FlowDecoder(
+            target_channels=llm_hidden_size,
+            z_channels=llm_hidden_size,
+            width=2048,
+            depth=3,
+            num_sampling_steps=config.num_sampling_steps,
+            grad_checkpointing=False,
+            patch_size=1,
+            img_size=config.image_size // 28,
+            use_cfg=config.use_cfg,
+            max_freqs=32,
+            num_heads=16,
+            mlp_ratio=2 / 3,
+            use_lpips=False,  # Semantic token reconstruction doesn't need LPIPS loss
+        )
         # token-level flow head
         self.flow_head = FlowDecoder(
             target_channels=3 * config.patch_size * config.patch_size,
@@ -1332,6 +1368,34 @@ class UniFlowVisionModel(PreTrainedModel):
         sem_tokens = self.mlp1(sem_tokens)
         return gen_tokens, sem_tokens
 
+    def _reconstruct_sem_tokens(self, sem_tokens, sem_latent_tokens):
+        """
+        Reconstruct semantic tokens using sem_global_blocks and sem_flow_head.
+
+        Args:
+            sem_tokens: original semantic tokens [B, N, C] (target for reconstruction)
+            sem_latent_tokens: projected latent tokens [B, N, latent_ch]
+
+        Returns:
+            reconstruction_losses: dict containing mse_loss and lpips_loss
+        """
+        # Get spatial dimensions and position embeddings
+        B, N, C = sem_latent_tokens.shape
+        grid = int(N**0.5)
+        pos = self.fetch_pos(grid, grid, sem_latent_tokens.device)
+
+        # Apply sem_global_blocks to process sem_latent_tokens
+        sem_processed = sem_latent_tokens
+        for block in self.sem_global_blocks:
+            sem_processed = block(sem_processed, pos)
+
+        # Use sem_flow_head to reconstruct sem_tokens
+        reconstruction_losses = self.sem_flow_head.forward_train(
+            x1=sem_tokens, z=sem_processed, pos=pos
+        )
+
+        return reconstruction_losses
+
     def forward_condition(self, x, teacher_feat=None):
         """
         Encode images and extract features for generation.
@@ -1343,6 +1407,7 @@ class UniFlowVisionModel(PreTrainedModel):
         Returns:
             gen_feat: generation features [B, N, C]
             distill_loss: distillation loss (if teacher_feat is provided)
+            sem_reconstruction_losses: dict with mse_loss and lpips_loss for sem_tokens reconstruction
         """
         # 1. Encode image to semantic tokens
         gen_tokens, sem_tokens = self._encode_image(x)
@@ -1358,6 +1423,11 @@ class UniFlowVisionModel(PreTrainedModel):
         sem_latent_tokens = self.sem_proj(sem_tokens)
         sem_latent_tokens = F.layer_norm(
             sem_latent_tokens, (sem_latent_tokens.shape[-1],)
+        )
+
+        # Reconstruct sem_tokens using sem_global_blocks and sem_flow_head
+        sem_reconstruction_losses = self._reconstruct_sem_tokens(
+            sem_tokens, sem_latent_tokens
         )
 
         # Interpolate sem_latent_tokens to match latent_tokens spatial dimensions
@@ -1376,7 +1446,7 @@ class UniFlowVisionModel(PreTrainedModel):
                 size=(grid_lat, grid_lat),
                 mode='bilinear',
                 align_corners=False,
-            )
+            ).to(sem_latent_tokens.dtype)
             # Reshape back to [B, N, C]
             sem_latent_tokens = sem_latent_tokens.reshape(B_sem, C_sem, -1).transpose(
                 1, 2
@@ -1406,7 +1476,7 @@ class UniFlowVisionModel(PreTrainedModel):
                 0.0, device=condition_tokens.device, dtype=condition_tokens.dtype
             )
 
-        return condition_tokens, distill_loss
+        return condition_tokens, distill_loss, sem_reconstruction_losses
 
     def forward_loss(self, target_pixel_values, teacher_feat=None):
         """
@@ -1417,10 +1487,10 @@ class UniFlowVisionModel(PreTrainedModel):
             teacher_feat: teacher model features for distillation (optional)
 
         Returns:
-            dict: loss components including mse_loss, lpips_loss, and distill_loss
+            dict: loss components including mse_loss, lpips_loss, distill_loss, and sem_reconstruction_losses
         """
-        # 1. Get generation features and distillation loss
-        z, distill_loss = self.forward_condition(
+        # 1. Get generation features, distillation loss, and sem reconstruction losses
+        z, distill_loss, sem_reconstruction_losses = self.forward_condition(
             target_pixel_values, teacher_feat=teacher_feat
         )
 
@@ -1439,19 +1509,28 @@ class UniFlowVisionModel(PreTrainedModel):
         # Apply 1.1 weight to LPIPS loss
         weighted_lpips_loss = 1.1 * flow_losses['lpips_loss']
 
+        # Apply weight to sem reconstruction loss (only MSE, no LPIPS for token-level reconstruction)
+        weighted_sem_mse_loss = 0.5 * sem_reconstruction_losses['mse_loss']
+
         # Calculate total loss as sum of all losses
-        total_loss = flow_losses['mse_loss'] + weighted_lpips_loss + distill_loss
+        total_loss = (
+            flow_losses['mse_loss']
+            + weighted_lpips_loss
+            + distill_loss
+            + weighted_sem_mse_loss
+        )
 
         return {
             'loss': total_loss,
             'flow_loss': flow_losses['mse_loss'],
             'lpips_loss': weighted_lpips_loss,
             'distill_loss': distill_loss,
+            'sem_mse_loss': weighted_sem_mse_loss,
         }
 
     def forward(self, pixel_values):
         # Inference: return_distill_loss=False
-        z, _ = self.forward_condition(pixel_values)
+        z, _, _ = self.forward_condition(pixel_values)
 
         # Get position embeddings (reuse from forward_condition)
         B, N, C = z.shape
