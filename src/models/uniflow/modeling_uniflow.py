@@ -1301,15 +1301,20 @@ class UniFlowVisionModel(PreTrainedModel):
         return {}
 
     @lru_cache
-    def fetch_pos(self, height, width, device):
+    def fetch_pos(self, height, width, device, hidden_size=None):
         """Fetch or compute RoPE position embeddings for given spatial dimensions"""
-        if (height, width) in self.precompute_pos:
-            return self.precompute_pos[(height, width)].to(device)
+        # Use vit_hidden_size by default for backward compatibility
+        if hidden_size is None:
+            hidden_size = self.config.vit_hidden_size
+
+        cache_key = (height, width, hidden_size)
+        if cache_key in self.precompute_pos:
+            return self.precompute_pos[cache_key].to(device)
         else:
             # Compute position embeddings based on head_dim
-            head_dim = self.config.vit_hidden_size // 16  # num_heads=16
+            head_dim = hidden_size // 16  # num_heads=16
             pos = precompute_freqs_cis_2d(head_dim, height, width).to(device)
-            self.precompute_pos[(height, width)] = pos
+            self.precompute_pos[cache_key] = pos
             return pos
 
     def forward_feature(self, vit_embeds):
@@ -1391,8 +1396,9 @@ class UniFlowVisionModel(PreTrainedModel):
         # Get spatial dimensions and position embeddings
         B, N, C = sem_processed.shape
         grid = int(N**0.5)
-        pos = self.fetch_pos(grid, grid, sem_processed.device)
-        print(sem_processed.shape)
+        pos = self.fetch_pos(
+            grid, grid, sem_processed.device, hidden_size=self.config.llm_hidden_size
+        )
         # Apply sem_global_blocks to process sem_latent_tokens
         for block in self.sem_global_blocks:
             sem_processed = block(sem_processed, pos)
