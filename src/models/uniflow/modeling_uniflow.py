@@ -1505,7 +1505,7 @@ class UniFlowVisionModel(PreTrainedModel):
         pos_embed = self._get_pos_embed(self.global_block_pos_embed, grid, grid)
         condition_tokens = condition_tokens + pos_embed
 
-        pos = self.fetch_pos(grid, grid, condition_tokens.device)
+        pos = self.fetch_pos(grid, grid, condition_tokens.device, hidden_size=C)
         for block in self.global_blocks:
             condition_tokens = block(condition_tokens, pos)
 
