@@ -978,49 +978,119 @@ class ResBlock(nn.Module):
     """
     A residual block that can optionally change the number of channels.
     :param channels: the number of input channels.
+    :param use_gate: whether to use AdaLN modulation (default: True)
     """
 
-    def __init__(self, channels):
+    def __init__(self, channels, use_gate=True):
         super().__init__()
         self.channels = channels
+        self.use_gate = use_gate
 
         self.in_ln = UniFlowRMSNorm(channels, eps=1e-6)
-        self.mlp = nn.Sequential(
-            nn.Linear(channels, channels, bias=True),
-            nn.SiLU(),
-            nn.Linear(channels, channels, bias=True),
-        )
+        self.mlp = FeedForward(channels, channels)
 
-        self.adaLN_modulation = nn.Sequential(
-            nn.SiLU(), nn.Linear(channels, 3 * channels, bias=True)
-        )
+        if self.use_gate:
+            self.adaLN_modulation = nn.Sequential(
+                nn.SiLU(), nn.Linear(channels, 3 * channels, bias=True)
+            )
 
-    def forward(self, x, y, pos):
-        shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(y).chunk(3, dim=-1)
-        h = modulate(self.in_ln(x), shift_mlp, scale_mlp)
-        h = self.mlp(h)
-        return x + gate_mlp * h
+    def forward(self, x, y=None, pos=None):
+        if self.use_gate:
+            # With AdaLN modulation
+            shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(y).chunk(3, dim=-1)
+            h = modulate(self.in_ln(x), shift_mlp, scale_mlp)
+            h = self.mlp(h)
+            return x + gate_mlp * h
+        else:
+            # Without AdaLN modulation (simple residual)
+            h = self.in_ln(x)
+            h = self.mlp(h)
+            return x + h
 
 
 class FinalLayer(nn.Module):
     """
     The final layer adopted from DiT.
+    :param use_gate: whether to use AdaLN modulation (default: True)
     """
 
-    def __init__(self, model_channels, out_channels):
+    def __init__(self, model_channels, out_channels, use_gate=True):
         super().__init__()
-        self.norm_final = nn.LayerNorm(
-            model_channels, elementwise_affine=False, eps=1e-6
-        )
+        self.use_gate = use_gate
+
+        if self.use_gate:
+            self.norm_final = nn.LayerNorm(
+                model_channels, elementwise_affine=False, eps=1e-6
+            )
+            self.adaLN_modulation = nn.Sequential(
+                nn.SiLU(), nn.Linear(model_channels, 2 * model_channels, bias=True)
+            )
+        else:
+            self.norm_final = UniFlowRMSNorm(model_channels, eps=1e-6)
+
         self.linear = nn.Linear(model_channels, out_channels, bias=True)
-        self.adaLN_modulation = nn.Sequential(
-            nn.SiLU(), nn.Linear(model_channels, 2 * model_channels, bias=True)
+
+    def forward(self, x, c=None):
+        if self.use_gate:
+            # With AdaLN modulation
+            shift, scale = self.adaLN_modulation(c).chunk(2, dim=-1)
+            x = modulate(self.norm_final(x), shift, scale)
+        else:
+            # Without AdaLN modulation
+            x = self.norm_final(x)
+
+        x = self.linear(x)
+        return x
+
+
+class LatentProjector(nn.Module):
+    """
+    Latent projector using ResBlock*3 + FinalLayer structure (without condition gate).
+    Projects from 4*vit_hidden_size to latent_ch (256).
+    """
+
+    def __init__(self, in_channels, out_channels, num_res_blocks=3):
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+
+        # Input projection to intermediate dimension
+        self.input_proj = nn.Linear(in_channels, in_channels)
+
+        # Residual blocks without gate
+        self.res_blocks = nn.ModuleList(
+            [ResBlock(in_channels, use_gate=False) for _ in range(num_res_blocks)]
         )
 
-    def forward(self, x, c):
-        shift, scale = self.adaLN_modulation(c).chunk(2, dim=-1)
-        x = modulate(self.norm_final(x), shift, scale)
-        x = self.linear(x)
+        # Final projection layer without gate
+        self.final_layer = FinalLayer(in_channels, out_channels, use_gate=False)
+
+        self.initialize_weights()
+
+    def initialize_weights(self):
+        def _basic_init(module):
+            if isinstance(module, nn.Linear):
+                torch.nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0)
+
+        self.apply(_basic_init)
+
+        # Zero-out final layer for stable training
+        nn.init.constant_(self.final_layer.linear.weight, 0)
+        nn.init.constant_(self.final_layer.linear.bias, 0)
+
+    def forward(self, x):
+        """
+        Args:
+            x: [B, N, in_channels] input tokens
+        Returns:
+            x: [B, N, out_channels] projected tokens
+        """
+        x = self.input_proj(x)
+        for block in self.res_blocks:
+            x = block(x)  # No need to pass y and pos since use_gate=False
+        x = self.final_layer(x)  # No need to pass c since use_gate=False
         return x
 
 
@@ -1119,57 +1189,6 @@ class SimpleMLPAdaLN(nn.Module):
         return self.final_layer(x, y)
 
 
-class ChannelProjector(nn.Module):
-    """
-    Channel projector assuming SQUARE images.
-    Features:
-    1. 2x spatial downsampling (Space-to-Depth) -> Norm -> Projection
-    2. Projection -> Norm -> 2x spatial upsampling (Depth-to-Space)
-    """
-
-    def __init__(self, hidden_size, latent_ch, add_norm=True, mlp_ratio=4):
-        super().__init__()
-        self.latent_ch = latent_ch
-
-        # Space-to-Depth results in 4x channels
-        in_dim_down = hidden_size
-        out_dim_up = hidden_size
-        mlp_hidden_dim = int(hidden_size * mlp_ratio)
-        # Down path components
-        self.down_norm = (
-            UniFlowRMSNorm(in_dim_down, eps=1e-6) if add_norm else nn.Identity()
-        )
-        self.down_proj = FeedForward(
-            dim=in_dim_down, hidden_dim=mlp_hidden_dim, out_dim=latent_ch
-        )
-
-        # Up path components
-        self.up_norm = (
-            UniFlowRMSNorm(out_dim_up, eps=1e-6) if add_norm else nn.Identity()
-        )
-        self.up_proj = FeedForward(
-            dim=latent_ch, hidden_dim=mlp_hidden_dim, out_dim=out_dim_up
-        )
-
-    def downsample_and_project(self, x):
-        """
-        Args: x: [B, N, C] (N must be square)
-        Returns: x_latent: [B, N/4, latent_ch]
-        """
-        B, N, C = x.shape
-        H = W = int(N**0.5)
-        x_latent = self.down_proj(self.down_norm(x))
-        return x_latent
-
-    def project_and_upsample(self, x_latent):
-        """
-        Args: x_latent: [B, N/4, latent_ch]
-        Returns: x: [B, N, C]
-        """
-        x_up = self.up_norm(self.up_proj(x_latent))
-        return x_up
-
-
 #############################################################
 #                 UniFlowVisionModel
 #############################################################
@@ -1189,8 +1208,8 @@ class UniFlowVisionModel(PreTrainedModel):
         self.patch_size = config.patch_size
 
         # Branch control flags
-        self.enable_semantic_branch = False  # config.enable_semantic_branch
-        self.enable_pixel_branch = True
+        self.enable_semantic_branch = True  # config.enable_semantic_branch
+        self.enable_pixel_branch = False
 
         # vit encoder (shared by both branches)
         self.embeddings = UniFlowVisionEmbeddings(config)
@@ -1205,16 +1224,22 @@ class UniFlowVisionModel(PreTrainedModel):
         self.latent_ch = config.latent_ch
 
         # ============================================================
+        # Shared Latent Projection (used by both branches)
+        # ============================================================
+        if self.use_chal_proj:
+            # Unified latent projection from sem_tokens using ResBlock*3 + FinalLayer
+            self.shared_latent_proj = LatentProjector(
+                in_channels=4 * vit_hidden_size,
+                out_channels=256,
+                num_res_blocks=3,
+            )
+
+        # ============================================================
         # Pixel Generation Branch
         # ============================================================
         if self.enable_pixel_branch:
             if self.use_chal_proj:
-                self.gen_proj = nn.Sequential(
-                    nn.Linear(4 * vit_hidden_size, 4 * vit_hidden_size),
-                    nn.GELU(),
-                    nn.Linear(4 * vit_hidden_size, 256),
-                )
-                # Project sem_latent_tokens from latent_ch back to llm_hidden_size for sem_global_blocks
+                # Project latent tokens back to vit_hidden_size for pixel global_blocks
                 self.gen_latent_proj = nn.Sequential(
                     nn.Linear(64, 4 * vit_hidden_size),
                     nn.GELU(),
@@ -1257,23 +1282,19 @@ class UniFlowVisionModel(PreTrainedModel):
         # ============================================================
         if self.enable_semantic_branch:
             if self.use_chal_proj:
-                self.sem_proj = nn.Sequential(
-                    nn.Linear(4 * vit_hidden_size, 4 * vit_hidden_size),
-                    nn.GELU(),
-                    nn.Linear(4 * vit_hidden_size, 256),
-                )
-                # Project sem_latent_tokens from latent_ch back to llm_hidden_size for sem_global_blocks
+                # Project latent tokens back to vit_hidden_size for semantic global_blocks
+                # Similar to gen_latent_proj in pixel branch
                 self.sem_latent_proj = nn.Sequential(
-                    nn.Linear(256, 4 * vit_hidden_size),
+                    nn.Linear(64, 4 * vit_hidden_size),
                     nn.GELU(),
-                    nn.Linear(4 * vit_hidden_size, 2 * vit_hidden_size),
+                    nn.Linear(4 * vit_hidden_size, vit_hidden_size),
                 )
 
             self.sem_global_blocks = nn.ModuleList(
                 [
                     FlattenDiTBlock(
-                        hidden_size=2 * vit_hidden_size,
-                        groups=32,
+                        hidden_size=vit_hidden_size,
+                        groups=16,
                         mlp_ratio=4.0,
                         is_causal=True,
                     )
@@ -1282,9 +1303,9 @@ class UniFlowVisionModel(PreTrainedModel):
             )
             self.sem_flow_head = FlowDecoder(
                 target_channels=vit_hidden_size * 4,
-                z_channels=2 * vit_hidden_size,
+                z_channels=vit_hidden_size * 4,
                 width=2048,
-                depth=4,
+                depth=6,
                 num_sampling_steps=config.num_sampling_steps,
                 grad_checkpointing=False,
                 patch_size=1,
@@ -1343,14 +1364,6 @@ class UniFlowVisionModel(PreTrainedModel):
             self.precompute_pos[cache_key] = pos
             return pos
 
-    def forward_feature(self, vit_embeds):
-        h = w = int(vit_embeds.shape[1] ** 0.5)
-        vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], h, w, -1)
-        vit_embeds = pixel_shuffle(vit_embeds, scale_factor=0.5)
-        vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], -1, vit_embeds.shape[-1])
-        vit_embeds = self.mlp1(vit_embeds)
-        return vit_embeds
-
     def _get_pos_embed(self, pos_embed, H, W):
         """Interpolate position embeddings to match spatial dimensions."""
         target_dtype = pos_embed.dtype
@@ -1381,15 +1394,19 @@ class UniFlowVisionModel(PreTrainedModel):
 
         Args:
             pixel_values: input images [B, C, H, W]
+            normalize_type: normalization type ('siglip' or other)
 
         Returns:
-            gen_tokens: encoder features from layer 4 [B, N, C]
-            sem_tokens: semantic tokens before mlp1, after pixel_shuffle [B, N/4, 4*vit_hidden_size]
-            sem_tokens_after_mlp: semantic tokens after mlp1 [B, N/4, llm_hidden_size]
+            Tuple of:
+                - sem_tokens: semantic tokens after pixel_shuffle [B, N/4, 4*vit_hidden_size]
+                  (used for shared latent projection)
+                - sem_tokens: same as above (kept for backward compatibility)
+                - sem_tokens_after_mlp: semantic tokens after mlp1 [B, N/4, llm_hidden_size]
+                  (used for distillation loss)
         """
         assert pixel_values.ndim == 4, f'wrong pixel_values size: {pixel_values.shape}'
 
-        # Normalize and embed
+        # Step 1.1: Normalize and embed
         if normalize_type == 'siglip':
             x = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(
                 pixel_values * 0.5 + 0.5
@@ -1398,37 +1415,46 @@ class UniFlowVisionModel(PreTrainedModel):
             x = pixel_values
         x = self.embeddings(x)
 
-        # Extract features from encoder
+        # Step 1.2: Extract features from encoder
         encoder_outputs = self.encoder(
             inputs_embeds=x,
-            output_hidden_states=True,
+            output_hidden_states=False,
         )
 
-        # Get generation tokens from layer 4
-        gen_tokens = encoder_outputs.hidden_states[4][:, 1:]
-        h = w = int(gen_tokens.shape[1] ** 0.5)
-        gen_tokens = gen_tokens.reshape(gen_tokens.shape[0], h, w, -1)
-        gen_tokens = pixel_shuffle(gen_tokens, scale_factor=0.5)
-        gen_tokens = gen_tokens.reshape(gen_tokens.shape[0], -1, gen_tokens.shape[-1])
-
-        # Get semantic tokens from last layer
+        # Step 1.3: Get semantic tokens from last layer and apply pixel_shuffle
         sem_tokens = encoder_outputs.last_hidden_state[:, 1:]  # Remove CLS token
         h = w = int(sem_tokens.shape[1] ** 0.5)
         sem_tokens = sem_tokens.reshape(sem_tokens.shape[0], h, w, -1)
         sem_tokens = pixel_shuffle(sem_tokens, scale_factor=0.5)
         sem_tokens = sem_tokens.reshape(sem_tokens.shape[0], -1, sem_tokens.shape[-1])
 
-        # Normalize semantic tokens
-        # sem_tokens = F.layer_norm(sem_tokens, (sem_tokens.shape[-1],))
-
-        # Apply mlp1 to get semantic tokens for downstream processing
+        # Step 1.4: Apply mlp1 for distillation loss computation
         sem_tokens_after_mlp = self.mlp1(sem_tokens)
 
-        return (
-            gen_tokens,
-            sem_tokens,
-            sem_tokens_after_mlp,
+        return sem_tokens, sem_tokens_after_mlp
+
+    # ============================================================
+    # Step 2: Encode Latent
+    # ============================================================
+    def encode_latent(self, sem_tokens):
+        """
+        Encode semantic tokens to shared latent space.
+
+        Args:
+            sem_tokens: semantic tokens after pixel_shuffle [B, N/4, 4*vit_hidden_size]
+
+        Returns:
+            shared_latent_tokens: normalized latent tokens [B, N/4, 256]
+        """
+        # Project to shared latent space
+        shared_latent_tokens = self.shared_latent_proj(sem_tokens)
+
+        # Apply layer normalization
+        shared_latent_tokens = F.layer_norm(
+            shared_latent_tokens, (shared_latent_tokens.shape[-1],)
         )
+
+        return shared_latent_tokens
 
     # ============================================================
     # Step 3: Forward Semantic Decoder
@@ -1438,46 +1464,68 @@ class UniFlowVisionModel(PreTrainedModel):
     ):
         """
         Reconstruct semantic tokens using semantic decoder.
+        Flow: latent -> pixel_shuffle (2x upsample) -> sem_latent_proj -> sem_global_blocks -> sem_flow_head
 
         Args:
-            sem_tokens_target: target semantic tokens [B, N, 4*vit_hidden_size]
-            sem_latent_tokens: latent tokens [B, N, 128]
+            sem_tokens_target: target semantic tokens [B, N/4, 4*vit_hidden_size]
+            sem_latent_tokens: latent tokens [B, N/4, 256]
             training: whether in training mode
 
         Returns:
             If training:
                 reconstruction_losses: dict containing mse_loss and lpips_loss
-                sem_tokens_pred: predicted semantic tokens [B, N, 4*vit_hidden_size]
+                sem_tokens_pred: predicted semantic tokens [B, N/4, 4*vit_hidden_size]
             If inference:
-                sem_tokens_pred: predicted semantic tokens [B, N, 4*vit_hidden_size]
+                sem_tokens_pred: predicted semantic tokens [B, N/4, 4*vit_hidden_size]
         """
-        # Project sem_latent_tokens to hidden size
-        sem_processed = self.sem_latent_proj(sem_latent_tokens)
+        # Step 1: Upsample latent tokens by 2x (N/4 -> N) using pixel_shuffle
+        B, N, C = sem_latent_tokens.shape
+        h = w = int(N**0.5)
+        # Reshape to [B, h, w, C] for pixel_shuffle
+        sem_latent_tokens = sem_latent_tokens.reshape(B, h, w, C)
+        sem_latent_tokens = pixel_shuffle(sem_latent_tokens, scale_factor=2)
+        # Reshape back to [B, N*4, C/4]
+        sem_latent_tokens = sem_latent_tokens.reshape(
+            sem_latent_tokens.shape[0], -1, sem_latent_tokens.shape[-1]
+        )
 
-        # Get spatial dimensions and position embeddings
-        B, N, C = sem_processed.shape
+        # Step 2: Project latent tokens back to vit_hidden_size
+        condition_tokens = self.sem_latent_proj(sem_latent_tokens)
+
+        # Step 3: Apply sem_global_blocks with position embeddings
+        B, N, C = condition_tokens.shape
         grid = int(N**0.5)
         pos = self.fetch_pos(
             grid,
             grid,
-            sem_processed.device,
-            hidden_size=sem_processed.shape[-1],
+            condition_tokens.device,
+            hidden_size=C,
         )
 
-        # Apply sem_global_blocks
         for block in self.sem_global_blocks:
-            sem_processed = block(sem_processed, pos)
+            condition_tokens = block(condition_tokens, pos)
 
+        # Step 3.5: Downsample condition_tokens using pixel_shuffle (similar to forward_feature)
+        # [B, N, vit_hidden_size] -> [B, N/4, 4*vit_hidden_size]
+        B, N, C = condition_tokens.shape
+        h = w = int(N**0.5)
+        condition_tokens = condition_tokens.reshape(B, h, w, C)
+        condition_tokens = pixel_shuffle(condition_tokens, scale_factor=0.5)
+        condition_tokens = condition_tokens.reshape(
+            condition_tokens.shape[0], -1, condition_tokens.shape[-1]
+        )
+
+        # Step 4: Apply sem_flow_head
         if training:
             # Training: compute reconstruction loss
             reconstruction_losses = self.sem_flow_head.forward_train(
-                x1=sem_tokens_target, z=sem_processed, pos=pos
+                x1=sem_tokens_target, z=condition_tokens, pos=pos
             )
             sem_tokens_pred = reconstruction_losses['pred']
             return reconstruction_losses, sem_tokens_pred
         else:
             # Inference: just reconstruct
-            sem_tokens_pred = self.sem_flow_head(z=sem_processed, pos=pos)
+            sem_tokens_pred = self.sem_flow_head(z=condition_tokens, pos=pos)
             return sem_tokens_pred
 
     # ============================================================
@@ -1551,9 +1599,10 @@ class UniFlowVisionModel(PreTrainedModel):
                 - sem_mse_loss: semantic reconstruction loss (if semantic branch enabled)
         """
         # Step 1: Forward encoder
-        gen_tokens, sem_tokens, sem_tokens_after_mlp = self.forward_encoder(
-            target_pixel_values
-        )
+        sem_tokens, sem_tokens_after_mlp = self.forward_encoder(target_pixel_values)
+
+        # Step 2: Encode to shared latent space
+        shared_latent_tokens = self.encode_latent(sem_tokens)
 
         # Initialize loss dict
         loss_dict = {}
@@ -1563,18 +1612,10 @@ class UniFlowVisionModel(PreTrainedModel):
         # Semantic Branch Loss
         # ============================================================
         if self.enable_semantic_branch:
-            # Step 2: Encode semantic latent
-            sem_latent_tokens = self.sem_proj(sem_tokens)
-            sem_latent_tokens = F.layer_norm(
-                sem_latent_tokens, (sem_latent_tokens.shape[-1],)
-            )
-
-            # Step 3: Forward semantic decoder (training mode)
+            # Step 3: Forward semantic decoder (training mode) using shared latent
             sem_reconstruction_losses, sem_tokens_pred = self.forward_semantic_decoder(
-                sem_tokens_target=F.layer_norm(
-                    sem_tokens, (sem_tokens.shape[-1],), eps=1e-8
-                ),
-                sem_latent_tokens=sem_latent_tokens,
+                sem_tokens_target=F.layer_norm(sem_tokens, (sem_tokens.shape[-1],)),
+                sem_latent_tokens=shared_latent_tokens,
                 training=True,
             )
 
@@ -1597,13 +1638,9 @@ class UniFlowVisionModel(PreTrainedModel):
         # Pixel Generation Branch Loss
         # ============================================================
         if self.enable_pixel_branch:
-            # Step 2: Encode pixel latent
-            latent_tokens = self.gen_proj(gen_tokens)
-            latent_tokens = F.layer_norm(latent_tokens, (latent_tokens.shape[-1],))
-
-            # Step 4: Forward pixel decoder (training mode)
+            # Step 4: Forward pixel decoder (training mode) using shared latent
             flow_losses = self.forward_pixel_decoder(
-                latent_tokens=latent_tokens,
+                latent_tokens=shared_latent_tokens,
                 target_pixels=target_pixel_values,
                 training=True,
             )
@@ -1651,21 +1688,20 @@ class UniFlowVisionModel(PreTrainedModel):
             )
 
         # Step 1: Forward encoder
-        gen_tokens, sem_tokens, sem_tokens_after_mlp = self.forward_encoder(
+        sem_tokens, sem_tokens_after_mlp = self.forward_encoder(
             pixel_values, normalize_type=normalize_type
         )
+
+        # Step 2: Encode to shared latent space
+        shared_latent_tokens = self.encode_latent(sem_tokens)
 
         # ============================================================
         # Pixel Generation Mode
         # ============================================================
         if mode == 'pixel':
-            # Step 2: Encode pixel latent
-            latent_tokens = self.gen_proj(gen_tokens)
-            latent_tokens = F.layer_norm(latent_tokens, (latent_tokens.shape[-1],))
-
-            # Step 3: Forward pixel decoder (inference mode)
+            # Step 3: Forward pixel decoder (inference mode) using shared latent
             reconstructed_image = self.forward_pixel_decoder(
-                latent_tokens=latent_tokens, training=False
+                latent_tokens=shared_latent_tokens, training=False
             )
 
             return reconstructed_image
@@ -1674,33 +1710,21 @@ class UniFlowVisionModel(PreTrainedModel):
         # Semantic Reconstruction Mode
         # ============================================================
         elif mode == 'semantic':
-            # Step 2: Encode semantic latent
-            sem_latent_tokens = self.sem_proj(sem_tokens)
-            sem_latent_tokens = F.layer_norm(
-                sem_latent_tokens, (sem_latent_tokens.shape[-1],)
-            )
-
-            # Step 3: Forward semantic decoder (inference mode)
+            # Step 3: Forward semantic decoder (inference mode) using shared latent
             sem_tokens = self.forward_semantic_decoder(
                 sem_tokens_target=None,  # Not needed for inference
-                sem_latent_tokens=sem_latent_tokens,
+                sem_latent_tokens=shared_latent_tokens,
                 training=False,
             )
             return sem_tokens
 
 
-def pixel_shuffle(x, scale_factor=0.5):
-    n, w, h, c = x.size()
-    # N, W, H, C --> N, W, H * scale, C // scale
-    x = x.view(n, w, int(h * scale_factor), int(c / scale_factor))
-    # N, W, H * scale, C // scale --> N, H * scale, W, C // scale
-    x = x.permute(0, 2, 1, 3).contiguous()
-    # N, H * scale, W, C // scale --> N, H * scale, W * scale, C // (scale ** 2)
-    x = x.view(
-        n,
-        int(h * scale_factor),
-        int(w * scale_factor),
-        int(c / (scale_factor * scale_factor)),
-    )
-    x = x.permute(0, 2, 1, 3).contiguous()
-    return x
+def pixel_shuffle(x, scale_factor):
+    if scale_factor > 1:
+        # 上采样: h w 变大，c 变小
+        r = int(scale_factor)
+        return rearrange(x, 'b (c r1 r2) h w -> b c (h r1) (w r2)', r1=r, r2=r)
+    else:
+        # 下采样: h w 变小，c 变大
+        r = int(1 / scale_factor)
+        return rearrange(x, 'b c (h r1) (w r2) -> b (c r1 r2) h w', r1=r, r2=r)
