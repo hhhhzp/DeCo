@@ -1505,6 +1505,9 @@ class UniFlowVisionModel(PreTrainedModel):
         latent_tokens = latent_tokens.reshape(B, h, w, C)
         latent_tokens = pixel_shuffle(latent_tokens, scale_factor=2)
         # Project latent tokens back to hidden size
+        latent_tokens = latent_tokens.reshape(
+            latent_tokens.shape[0], -1, latent_tokens.shape[-1]
+        )
         condition_tokens = self.gen_latent_proj(latent_tokens)
         # Apply global blocks with position embeddings
         B, N, C = condition_tokens.shape
