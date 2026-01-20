@@ -145,23 +145,24 @@ class StandardMultiHeadAttention(nn.Module):
         # QKV projection for FlashAttention: (B, N, 3, H, D)
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.attention_head_dim)
 
-        # QK normalization
-        if self.qk_normalization:
-            q, k, v = qkv.unbind(2)
-            q = self.q_norm(q.flatten(-2, -1)).view(q.shape)
-            k = self.k_norm(k.flatten(-2, -1)).view(k.shape)
-            qkv = torch.stack([q, k, v], dim=2)
-
-        # Apply RoPE if enabled
+        # Apply RoPE if enabled (before QK normalization for better performance)
         if self.use_rope and pos is not None:
-            q, k, v = qkv.unbind(2)
+            q, k, v = qkv.unbind(2)  # Each: (B, N, H, D)
             # Rearrange for RoPE: (B, N, H, D) -> (B, H, N, D)
             q = q.transpose(1, 2)
             k = k.transpose(1, 2)
+            # Apply RoPE: expects (B, H, N, D) and freqs_cis (N, D)
             q, k = apply_rotary_emb(q, k, freqs_cis=pos)
             # Rearrange back: (B, H, N, D) -> (B, N, H, D)
             q = q.transpose(1, 2)
             k = k.transpose(1, 2)
+            qkv = torch.stack([q, k, v], dim=2)
+
+        # QK normalization (after RoPE)
+        if self.qk_normalization:
+            q, k, v = qkv.unbind(2)
+            q = self.q_norm(q.flatten(-2, -1)).view(q.shape)
+            k = self.k_norm(k.flatten(-2, -1)).view(k.shape)
             qkv = torch.stack([q, k, v], dim=2)
 
         # Apply FlashAttention
@@ -199,7 +200,7 @@ class StandardMultiHeadAttention(nn.Module):
         if self.use_flash_attn:
             x = self._flash_attn(x, pos)
         else:
-            x = self._naive_attn(x, pos)
+            raise NotImplementedError("Non-FlashAttention implementation not supported")
 
         # Apply normalization
         if self.norm_type == "rms_norm":
