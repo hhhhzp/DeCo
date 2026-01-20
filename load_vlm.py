@@ -1,31 +1,78 @@
 from transformers import AutoModel
 import torch
 
+# ============ Configuration / Naming Rules ============
+# Model paths
+PRETRAINED_MODEL_PATH = "./InternVL3-2B_sem"
+CHECKPOINT_PATH = "dual_internvit_2b/exp_sem_layer4_r14_mlp_c32_c256_norm_448px/epoch=28-step=100000.ckpt"
+
+# Output paths
+OUTPUT_BASE_DIR = "exp_sem_layer4_r14_mlp_c32_c256_norm"
+OUTPUT_MODEL_NAME = "InternVL3-2B-step100000-model"
+OUTPUT_EMA_NAME = "InternVL3-2B-step100000-emamodel"
+OUTPUT_MODEL_PATH = f"{OUTPUT_BASE_DIR}/{OUTPUT_MODEL_NAME}"
+OUTPUT_EMA_PATH = f"{OUTPUT_BASE_DIR}/{OUTPUT_EMA_NAME}"
+
+# Test image path
+TEST_IMAGE_PATH = "examples/image1.jpg"
+
+# Model configuration
+MODEL_DTYPE = torch.bfloat16
+IMAGE_SIZE = (448, 448)
+NORMALIZE_MEAN = [0.485, 0.456, 0.406]
+NORMALIZE_STD = [0.229, 0.224, 0.225]
+
+# State dict key prefixes
+MODEL_PREFIX = 'model.'
+EMA_MODEL_PREFIX = 'ema_model.'
+SKIP_KEY_PATTERN = '.lpips_loss'
+# ======================================================
+
 model = AutoModel.from_pretrained(
-    "./InternVL3-2B_sem",
-    dtype=torch.bfloat16,
+    PRETRAINED_MODEL_PATH,
+    dtype=MODEL_DTYPE,
     trust_remote_code=True,
 )
 
 state_dict = torch.load(
-    "dual_internvit_2b/exp_sem_layer4_r14_mlp_c32_c256_norm_448px/epoch=26-step=95000.ckpt",
+    CHECKPOINT_PATH,
     map_location='cpu',
 )['state_dict']
-new_state_dict = {}
+# Process model version
+new_state_dict_model = {}
 for key, value in state_dict.items():
-    if '.lpips_loss' in key or key.startswith('ema_model.'):
+    if SKIP_KEY_PATTERN in key or key.startswith(EMA_MODEL_PREFIX):
         continue
     new_key = key
     # Remove module and _orig_mod prefixes
-    if key.startswith('model.'):
-        new_key = key[6:]
+    if key.startswith(MODEL_PREFIX):
+        new_key = key[len(MODEL_PREFIX) :]
     new_key = new_key.replace('.module.', '.')
     new_key = new_key.replace('._orig_mod.', '.')
-    new_state_dict[new_key] = value
-msg = model.vision_model.load_state_dict(new_state_dict)
-print(msg)
+    new_state_dict_model[new_key] = value
 
-model.save_pretrained("exp_sem_layer4_r14_mlp_c32_c256_norm/InternVL3-2B-step95000")
+# Process ema_model version
+new_state_dict_ema = {}
+for key, value in state_dict.items():
+    if SKIP_KEY_PATTERN in key or not key.startswith(EMA_MODEL_PREFIX):
+        continue
+    new_key = key
+    # Remove ema_model prefix
+    if key.startswith(EMA_MODEL_PREFIX):
+        new_key = key[len(EMA_MODEL_PREFIX) :]
+    new_key = new_key.replace('.module.', '.')
+    new_key = new_key.replace('._orig_mod.', '.')
+    new_state_dict_ema[new_key] = value
+
+# Save model version
+msg = model.vision_model.load_state_dict(new_state_dict_model)
+print("Model version:", msg)
+model.save_pretrained(OUTPUT_MODEL_PATH)
+
+# Save ema_model version
+msg_ema = model.vision_model.load_state_dict(new_state_dict_ema)
+print("EMA model version:", msg_ema)
+model.save_pretrained(OUTPUT_EMA_PATH)
 
 # Evaluate semantic reconstruction quality
 print("\nEvaluating semantic reconstruction quality...")
@@ -33,15 +80,15 @@ from PIL import Image
 import torchvision.transforms as transforms
 
 # Load and preprocess the image
-image = Image.open("examples/image1.jpg").convert("RGB")
+image = Image.open(TEST_IMAGE_PATH).convert("RGB")
 transform = transforms.Compose(
     [
-        transforms.Resize((448, 448)),
+        transforms.Resize(IMAGE_SIZE),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        transforms.Normalize(mean=NORMALIZE_MEAN, std=NORMALIZE_STD),
     ]
 )
-image_tensor = transform(image).unsqueeze(0).to(torch.bfloat16)
+image_tensor = transform(image).unsqueeze(0).to(MODEL_DTYPE)
 
 with torch.no_grad():
     sem_tokens, distill_loss = model.vision_model(
