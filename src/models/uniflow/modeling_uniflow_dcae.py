@@ -1177,7 +1177,7 @@ class UniFlowVisionModel_DCAE(PreTrainedModel):
                 depth=12,
                 num_sampling_steps=config.num_sampling_steps,
                 grad_checkpointing=False,
-                patch_size=self.patch_size,
+                patch_size=1,
                 img_size=config.image_size,
                 use_cfg=config.use_cfg,
                 max_freqs=32,
