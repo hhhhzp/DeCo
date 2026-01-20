@@ -65,7 +65,7 @@ class LightningUniFlowModel(pl.LightningModule):
     ):
         super().__init__()
         config = UniFlowVisionConfig.from_pretrained(config_path)
-        self.model = UniFlowVisionModel_DCAE(config)
+        self.model = UniFlowVisionModel(config)
         self.use_ema = use_ema
         self.train_semantic_ae = train_semantic_ae
         self.frozen_encoder = frozen_encoder
