@@ -609,7 +609,7 @@ class PixWebDataset(IterableDataset):
         处理分片逻辑（优化版）：
         将 Global Rank 和 Local Worker 合并计算，只进行一次 Shard 操作。
         """
-        dataset = dataset.shuffle(buffer_size=10000, seed=self.seed)
+        dataset = dataset.shuffle(buffer_size=1000, seed=self.seed)
         # 1. 获取分布式环境信息 (Global Info)
         if dist.is_available() and dist.is_initialized():
             world_size = dist.get_world_size()
@@ -617,13 +617,10 @@ class PixWebDataset(IterableDataset):
         else:
             world_size = 1
             rank = 0
-        from datasets.distributed import split_dataset_by_node
 
-        dataset = split_dataset_by_node(
-            dataset,
-            rank=rank,
-            world_size=world_size,
-        )
+        # 4. 执行一次性分片
+        # 相比分两次 shard，这样底层不仅效率更高，而且能保证数据绝对不重复
+        dataset = dataset.shard(num_shards=world_size, index=rank)
 
         return dataset
 

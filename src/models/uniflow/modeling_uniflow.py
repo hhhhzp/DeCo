@@ -1216,7 +1216,7 @@ class UniFlowVisionModel(PreTrainedModel):
                 )
                 # Project sem_latent_tokens from latent_ch back to llm_hidden_size for sem_global_blocks
                 self.gen_latent_proj = nn.Sequential(
-                    nn.Linear(256, 4 * vit_hidden_size),
+                    nn.Linear(64, 4 * vit_hidden_size),
                     nn.GELU(),
                     nn.Linear(4 * vit_hidden_size, vit_hidden_size),
                 )
@@ -1504,7 +1504,8 @@ class UniFlowVisionModel(PreTrainedModel):
         # Reshape to [B, C, H, W] for F.interpolate
         latent_tokens = latent_tokens.reshape(B, h, w, C).permute(0, 3, 1, 2)
         # Upsample by 2x: [B, C, H, W] -> [B, C, 2H, 2W]
-        latent_tokens = F.interpolate(latent_tokens, scale_factor=2.0, mode='nearest')
+
+        latent_tokens = pixel_shuffle(latent_tokens, scale_factor=2)
         # Reshape back to [B, 4N, C]
         latent_tokens = latent_tokens.permute(0, 2, 3, 1).reshape(B, -1, C)
 
