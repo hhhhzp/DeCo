@@ -237,20 +237,6 @@ class LightningUniFlowModel(pl.LightningModule):
         ]
 
         optimizer: torch.optim.Optimizer = self.optimizer(param_groups)
-        if self.train_semantic_ae:
-            lr_scheduler = get_cosine_schedule_with_warmup(
-                optimizer,
-                num_warmup_steps=0,
-                num_training_steps=200000,
-            )
-            return dict(
-                optimizer=optimizer,
-                lr_scheduler={
-                    "scheduler": lr_scheduler,
-                    "interval": "step",
-                    "frequency": 1,
-                },
-            )
 
         lr_scheduler = get_cosine_with_min_lr_schedule_with_warmup(
             optimizer,
