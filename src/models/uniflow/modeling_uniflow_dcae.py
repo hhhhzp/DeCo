@@ -1169,7 +1169,6 @@ class UniFlowVisionModel_DCAE(PreTrainedModel):
                 "/apdcephfs/share_300000800/datamultimodal/models/Sana_600M_512px_diffusers/vae",
                 torch_dtype=torch.bfloat16,
             ).decoder
-            print(self.global_blocks.dtype)
 
             self.flow_head = FlowDecoder(
                 target_channels=3,

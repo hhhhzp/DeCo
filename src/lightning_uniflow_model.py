@@ -142,6 +142,17 @@ class LightningUniFlowModel(pl.LightningModule):
         print(f"  Frozen parameters: {total_frozen:,} ({100-trainable_percent:.2f}%)")
         print("=" * 80 + "\n")
 
+        # Print global_blocks module dtype information
+        if hasattr(self.model, 'global_blocks'):
+            print("=" * 80)
+            print("global_blocks Module dtype Information:")
+            print("=" * 80)
+            for name, param in self.model.global_blocks.named_parameters():
+                print(
+                    f"  - {name}: dtype={param.dtype}, shape={tuple(param.shape)}, requires_grad={param.requires_grad}"
+                )
+            print("=" * 80 + "\n")
+
     def init_vision_model(
         self,
         pretrained_model_path: str = "/apdcephfs/share_300000800/datamultimodal/models/InternVL3-2B",
