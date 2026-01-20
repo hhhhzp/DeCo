@@ -1694,64 +1694,59 @@ class UniFlowVisionModel(PreTrainedModel):
             return sem_tokens
 
 
-def downsample_tokens(tokens, scale_factor=0.5):
+def resample_tokens(tokens, scale_factor):
     """
-    Downsample tokens using pixel_shuffle.
+    Resample tokens using pixel_shuffle (supports both upsampling and downsampling).
 
     Args:
         tokens: input tokens [B, N, C]
-        scale_factor: downsampling factor (default: 0.5, which means 2x downsample)
+        scale_factor: resampling factor
+            - scale_factor < 1: downsampling (e.g., 0.5 means 2x downsample)
+            - scale_factor > 1: upsampling (e.g., 2 means 2x upsample)
 
     Returns:
-        downsampled tokens [B, N/(1/scale_factor)^2, C*(1/scale_factor)^2]
+        resampled tokens [B, N', C']
+        - If downsampling (scale_factor=0.5): [B, N/4, C*4]
+        - If upsampling (scale_factor=2): [B, N*4, C/4]
 
-    Example:
-        Input: [B, 256, 1024] with scale_factor=0.5
-        Output: [B, 64, 4096]
+    Examples:
+        Downsample: [B, 256, 1024] with scale_factor=0.5 -> [B, 64, 4096]
+        Upsample: [B, 64, 256] with scale_factor=2 -> [B, 256, 64]
     """
     B, N, C = tokens.shape
     h = w = int(N**0.5)
-    # Reshape to [B, h, w, C]
+    # Reshape to [B, h, w, C] then permute to [B, C, h, w] for pixel_shuffle
     tokens = tokens.reshape(B, h, w, C)
-    # Apply pixel_shuffle downsampling
+    # Apply pixel_shuffle resampling
     tokens = pixel_shuffle(tokens, scale_factor=scale_factor)
-    # Reshape back to [B, N', C']
-    tokens = tokens.reshape(tokens.shape[0], -1, tokens.shape[-1])
+    # Permute back to [B, h', w', C'] then reshape to [B, N', C']
+    tokens = tokens.permute(0, 2, 3, 1).reshape(B, -1, tokens.shape[1])
     return tokens
+
+
+# Backward compatibility aliases
+def downsample_tokens(tokens, scale_factor=0.5):
+    """Downsample tokens (wrapper for resample_tokens with scale_factor=0.5)"""
+    return resample_tokens(tokens, scale_factor)
 
 
 def upsample_tokens(tokens, scale_factor=2):
-    """
-    Upsample tokens using pixel_shuffle.
-
-    Args:
-        tokens: input tokens [B, N, C]
-        scale_factor: upsampling factor (default: 2, which means 2x upsample)
-
-    Returns:
-        upsampled tokens [B, N*scale_factor^2, C/scale_factor^2]
-
-    Example:
-        Input: [B, 64, 256] with scale_factor=2
-        Output: [B, 256, 64]
-    """
-    B, N, C = tokens.shape
-    h = w = int(N**0.5)
-    # Reshape to [B, h, w, C]
-    tokens = tokens.reshape(B, h, w, C)
-    # Apply pixel_shuffle upsampling
-    tokens = pixel_shuffle(tokens, scale_factor=scale_factor)
-    # Reshape back to [B, N', C']
-    tokens = tokens.reshape(tokens.shape[0], -1, tokens.shape[-1])
-    return tokens
+    """Upsample tokens (wrapper for resample_tokens with scale_factor=2)"""
+    return resample_tokens(tokens, scale_factor)
 
 
-def pixel_shuffle(x, scale_factor):
-    if scale_factor > 1:
-        # 上采样: h w 变大，c 变小
-        r = int(scale_factor)
-        return rearrange(x, 'b (c r1 r2) h w -> b c (h r1) (w r2)', r1=r, r2=r)
-    else:
-        # 下采样: h w 变小，c 变大
-        r = int(1 / scale_factor)
-        return rearrange(x, 'b c (h r1) (w r2) -> b (c r1 r2) h w', r1=r, r2=r)
+def pixel_shuffle(x, scale_factor=0.5):
+    n, w, h, c = x.size()
+    # N, W, H, C --> N, W, H * scale, C // scale
+    x = x.view(n, w, int(h * scale_factor), int(c / scale_factor))
+    # N, W, H * scale, C // scale --> N, H * scale, W, C // scale
+    x = x.permute(0, 2, 1, 3).contiguous()
+    # N, H * scale, W, C // scale --> N, H * scale, W * scale, C // (scale ** 2)
+    x = x.view(
+        n,
+        int(h * scale_factor),
+        int(w * scale_factor),
+        int(c / (scale_factor * scale_factor)),
+    )
+    x = x.permute(0, 2, 1, 3).contiguous()
+    return x
