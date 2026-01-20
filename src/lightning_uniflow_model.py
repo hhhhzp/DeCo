@@ -175,27 +175,105 @@ class LightningUniFlowModel(pl.LightningModule):
         pretrained_model_path: str = "/apdcephfs/share_300000800/datamultimodal/models/InternVL3-2B",
     ):
         """
-        Initialize frozen teacher model for distillation
+        Initialize lightweight frozen teacher model for distillation.
+        Only loads vision_model and mlp1 components needed for extract_feature.
 
         Args:
             pretrained_model_path: 预训练模型路径
         """
-        # 从预训练模型加载 InternVLChatModel
+        # 从预训练模型加载完整模型
         config = AutoConfig.from_pretrained(
             pretrained_model_path, trust_remote_code=True
         )
         config.vision_config.drop_path_rate = 0.0
-        self.teacher_model = AutoModel.from_pretrained(
+        full_model = AutoModel.from_pretrained(
             pretrained_model_path,
             config=config,
             dtype=torch.bfloat16,
             trust_remote_code=True,
         )
 
-        # Freeze teacher model
+        # 创建轻量级 teacher model，只包含必要组件
+        class LightweightTeacherModel(nn.Module):
+            def __init__(
+                self, vision_model, mlp1, select_layer, downsample_ratio, ps_version
+            ):
+                super().__init__()
+                self.vision_model = vision_model
+                self.mlp1 = mlp1
+                self.select_layer = select_layer
+                self.downsample_ratio = downsample_ratio
+                self.ps_version = ps_version
+
+            def pixel_shuffle(self, x, scale_factor=0.5):
+                n, w, h, c = x.size()
+                # N, W, H, C --> N, W, H * scale, C // scale
+                x = x.view(n, w, int(h * scale_factor), int(c / scale_factor))
+                # N, W, H * scale, C // scale --> N, H * scale, W, C // scale
+                x = x.permute(0, 2, 1, 3).contiguous()
+                # N, H * scale, W, C // scale --> N, H * scale, W * scale, C // (scale ** 2)
+                x = x.view(
+                    n,
+                    int(h * scale_factor),
+                    int(w * scale_factor),
+                    int(c / (scale_factor * scale_factor)),
+                )
+                if self.ps_version == 'v1':
+                    import warnings
+
+                    warnings.warn(
+                        "In ps_version 'v1', the height and width have not been swapped back, "
+                        'which results in a transposed image.'
+                    )
+                else:
+                    x = x.permute(0, 2, 1, 3).contiguous()
+                return x
+
+            def extract_feature(self, pixel_values):
+                if self.select_layer == -1:
+                    vit_embeds = self.vision_model(
+                        pixel_values=pixel_values,
+                        output_hidden_states=False,
+                        return_dict=True,
+                    ).last_hidden_state
+                else:
+                    vit_embeds = self.vision_model(
+                        pixel_values=pixel_values,
+                        output_hidden_states=True,
+                        return_dict=True,
+                    ).hidden_states[self.select_layer]
+                vit_embeds = vit_embeds[:, 1:, :]
+
+                h = w = int(vit_embeds.shape[1] ** 0.5)
+                vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], h, w, -1)
+                vit_embeds = self.pixel_shuffle(
+                    vit_embeds, scale_factor=self.downsample_ratio
+                )
+                vit_embeds = vit_embeds.reshape(
+                    vit_embeds.shape[0], -1, vit_embeds.shape[-1]
+                )
+                vit_embeds = self.mlp1(vit_embeds)
+                return vit_embeds
+
+        # 创建轻量级 teacher model
+        self.teacher_model = LightweightTeacherModel(
+            vision_model=full_model.vision_model,
+            mlp1=full_model.mlp1,
+            select_layer=full_model.select_layer,
+            downsample_ratio=full_model.downsample_ratio,
+            ps_version=full_model.ps_version,
+        )
+
+        # 删除完整模型以释放内存
+        del full_model
 
         if self.global_rank == 0:
-            print(f"Initialized frozen teacher model from {pretrained_model_path}")
+            print(
+                f"Initialized lightweight frozen teacher model from {pretrained_model_path}"
+            )
+            print(
+                "Teacher model only contains: vision_model, mlp1, and extract_feature method"
+            )
 
     def configure_model(self) -> None:
         """Initialize model weights and load pretrained checkpoints"""
