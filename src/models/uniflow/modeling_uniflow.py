@@ -1423,10 +1423,7 @@ class UniFlowVisionModel(PreTrainedModel):
 
         # Step 1.3: Get semantic tokens from last layer and apply pixel_shuffle
         sem_tokens = encoder_outputs.last_hidden_state[:, 1:]  # Remove CLS token
-        h = w = int(sem_tokens.shape[1] ** 0.5)
-        sem_tokens = sem_tokens.reshape(sem_tokens.shape[0], h, w, -1)
-        sem_tokens = pixel_shuffle(sem_tokens, scale_factor=0.5)
-        sem_tokens = sem_tokens.reshape(sem_tokens.shape[0], -1, sem_tokens.shape[-1])
+        sem_tokens = downsample_tokens(sem_tokens, scale_factor=0.5)
 
         # Step 1.4: Apply mlp1 for distillation loss computation
         sem_tokens_after_mlp = self.mlp1(sem_tokens)
@@ -1479,15 +1476,7 @@ class UniFlowVisionModel(PreTrainedModel):
                 sem_tokens_pred: predicted semantic tokens [B, N/4, 4*vit_hidden_size]
         """
         # Step 1: Upsample latent tokens by 2x (N/4 -> N) using pixel_shuffle
-        B, N, C = sem_latent_tokens.shape
-        h = w = int(N**0.5)
-        # Reshape to [B, h, w, C] for pixel_shuffle
-        sem_latent_tokens = sem_latent_tokens.reshape(B, h, w, C)
-        sem_latent_tokens = pixel_shuffle(sem_latent_tokens, scale_factor=2)
-        # Reshape back to [B, N*4, C/4]
-        sem_latent_tokens = sem_latent_tokens.reshape(
-            sem_latent_tokens.shape[0], -1, sem_latent_tokens.shape[-1]
-        )
+        sem_latent_tokens = upsample_tokens(sem_latent_tokens, scale_factor=2)
 
         # Step 2: Project latent tokens back to vit_hidden_size
         condition_tokens = self.sem_latent_proj(sem_latent_tokens)
@@ -1507,13 +1496,7 @@ class UniFlowVisionModel(PreTrainedModel):
 
         # Step 3.5: Downsample condition_tokens using pixel_shuffle (similar to forward_feature)
         # [B, N, vit_hidden_size] -> [B, N/4, 4*vit_hidden_size]
-        B, N, C = condition_tokens.shape
-        h = w = int(N**0.5)
-        condition_tokens = condition_tokens.reshape(B, h, w, C)
-        condition_tokens = pixel_shuffle(condition_tokens, scale_factor=0.5)
-        condition_tokens = condition_tokens.reshape(
-            condition_tokens.shape[0], -1, condition_tokens.shape[-1]
-        )
+        condition_tokens = downsample_tokens(condition_tokens, scale_factor=0.5)
 
         # Step 4: Apply sem_flow_head
         if training:
@@ -1547,15 +1530,7 @@ class UniFlowVisionModel(PreTrainedModel):
                 reconstructed_image: [B, C, H, W]
         """
         # Upsample latent tokens by 2x (N -> 4N)
-        B, N, C = latent_tokens.shape
-        h = w = int(N**0.5)
-        # Reshape to [B, C, H, W] for F.interpolate
-        latent_tokens = latent_tokens.reshape(B, h, w, C)
-        latent_tokens = pixel_shuffle(latent_tokens, scale_factor=2)
-        # Project latent tokens back to hidden size
-        latent_tokens = latent_tokens.reshape(
-            latent_tokens.shape[0], -1, latent_tokens.shape[-1]
-        )
+        latent_tokens = upsample_tokens(latent_tokens, scale_factor=2)
         condition_tokens = self.gen_latent_proj(latent_tokens)
         # Apply global blocks with position embeddings
         B, N, C = condition_tokens.shape
@@ -1717,6 +1692,58 @@ class UniFlowVisionModel(PreTrainedModel):
                 training=False,
             )
             return sem_tokens
+
+
+def downsample_tokens(tokens, scale_factor=0.5):
+    """
+    Downsample tokens using pixel_shuffle.
+
+    Args:
+        tokens: input tokens [B, N, C]
+        scale_factor: downsampling factor (default: 0.5, which means 2x downsample)
+
+    Returns:
+        downsampled tokens [B, N/(1/scale_factor)^2, C*(1/scale_factor)^2]
+
+    Example:
+        Input: [B, 256, 1024] with scale_factor=0.5
+        Output: [B, 64, 4096]
+    """
+    B, N, C = tokens.shape
+    h = w = int(N**0.5)
+    # Reshape to [B, h, w, C]
+    tokens = tokens.reshape(B, h, w, C)
+    # Apply pixel_shuffle downsampling
+    tokens = pixel_shuffle(tokens, scale_factor=scale_factor)
+    # Reshape back to [B, N', C']
+    tokens = tokens.reshape(tokens.shape[0], -1, tokens.shape[-1])
+    return tokens
+
+
+def upsample_tokens(tokens, scale_factor=2):
+    """
+    Upsample tokens using pixel_shuffle.
+
+    Args:
+        tokens: input tokens [B, N, C]
+        scale_factor: upsampling factor (default: 2, which means 2x upsample)
+
+    Returns:
+        upsampled tokens [B, N*scale_factor^2, C/scale_factor^2]
+
+    Example:
+        Input: [B, 64, 256] with scale_factor=2
+        Output: [B, 256, 64]
+    """
+    B, N, C = tokens.shape
+    h = w = int(N**0.5)
+    # Reshape to [B, h, w, C]
+    tokens = tokens.reshape(B, h, w, C)
+    # Apply pixel_shuffle upsampling
+    tokens = pixel_shuffle(tokens, scale_factor=scale_factor)
+    # Reshape back to [B, N', C']
+    tokens = tokens.reshape(tokens.shape[0], -1, tokens.shape[-1])
+    return tokens
 
 
 def pixel_shuffle(x, scale_factor):
