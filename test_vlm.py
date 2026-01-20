@@ -3,7 +3,7 @@ import torch
 
 model = (
     AutoModel.from_pretrained(
-        "dual_internvit_2b/exp_sem_layer4_r14_mlp_c32_c256_norm_448px/epoch=26-step=95000.ckpt",
+        "exp_sem_layer4_r14_mlp_c32_c256_norm/InternVL3-2B-step95000",
         dtype=torch.bfloat16,
         trust_remote_code=True,
     )
