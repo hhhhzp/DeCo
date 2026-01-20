@@ -161,7 +161,6 @@ class LightningUniFlowModel(pl.LightningModule):
     def configure_model(self) -> None:
         """Initialize model weights and load pretrained checkpoints"""
         self.trainer.strategy.barrier()
-        self.init_vision_model()
 
         # Load pretrained weights if specified
         if self.pretrain_model_path is not None:
@@ -169,6 +168,10 @@ class LightningUniFlowModel(pl.LightningModule):
             msg = self.load_state_dict(checkpoint['state_dict'], strict=False)
             if self.global_rank == 0:
                 print(f"Loaded pretrained model from {self.pretrain_model_path}: {msg}")
+        else:
+            self.init_vision_model()
+        if self.distill:
+            self.init_teacher_model()
 
         # Copy parameters to EMA model after loading checkpoint if not resuming
         if not self.resume and self.use_ema:
