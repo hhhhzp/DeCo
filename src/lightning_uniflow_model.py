@@ -70,16 +70,7 @@ class LightningUniFlowModel(pl.LightningModule):
         self.frozen_encoder = frozen_encoder
         self.frozen_mlp = frozen_mlp
         self.resume = resume
-
-        # Ensure distill is True if any frozen parameter is True
-        if frozen_encoder or frozen_mlp:
-            self.distill = True
-            if self.global_rank == 0 and not distill:
-                print(
-                    "Warning: distill automatically set to True because frozen_encoder or frozen_mlp is True"
-                )
-        else:
-            self.distill = distill
+        self.distill = distill
 
         # Create EMA model if enabled
         if self.use_ema:
