@@ -1235,7 +1235,7 @@ class UniFlowVisionModel(PreTrainedModel):
             self.shared_latent_proj = LatentProjector(
                 in_channels=4 * vit_hidden_size,
                 out_channels=256,
-                num_res_blocks=1,
+                num_res_blocks=2,
             )
 
         # ============================================================
