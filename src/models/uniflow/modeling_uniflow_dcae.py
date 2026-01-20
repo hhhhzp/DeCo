@@ -782,10 +782,7 @@ class FlowDecoder(nn.Module):
         # cfg_mask = torch.rand((b, 1, 1), device=z.device) > 0.1
         # z = z * cfg_mask + self.mask_token * (~cfg_mask)
         # Apply NerfEmbedder to condition tokens
-        print(f"[DEBUG] Before nerf_embedder: z.shape = {z.shape}")
         z = self.nerf_embedder(z)
-        print(f"[DEBUG] After nerf_embedder: z.shape = {z.shape}")
-        print(f"[DEBUG] b={b}, n={n}, c={c}, b*n={b*n}")
 
         # Flatten batch and sequence dimensions
         x1 = x1.reshape(b * n, c)
