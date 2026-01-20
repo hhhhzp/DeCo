@@ -1173,7 +1173,7 @@ class UniFlowVisionModel_DCAE(PreTrainedModel):
             self.flow_head = FlowDecoder(
                 target_channels=3,
                 z_channels=128,
-                width=32,
+                width=64,
                 depth=6,
                 num_sampling_steps=config.num_sampling_steps,
                 grad_checkpointing=False,
