@@ -1241,7 +1241,7 @@ class UniFlowVisionModel(PreTrainedModel):
                 target_channels=3 * self.patch_size * self.patch_size,
                 z_channels=config.vit_hidden_size,
                 width=2048,
-                depth=4,
+                depth=6,
                 num_sampling_steps=config.num_sampling_steps,
                 grad_checkpointing=False,
                 patch_size=self.patch_size,
