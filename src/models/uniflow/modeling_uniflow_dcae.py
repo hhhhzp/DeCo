@@ -1174,7 +1174,7 @@ class UniFlowVisionModel_DCAE(PreTrainedModel):
                 target_channels=3,
                 z_channels=128,
                 width=32,
-                depth=12,
+                depth=6,
                 num_sampling_steps=config.num_sampling_steps,
                 grad_checkpointing=False,
                 patch_size=1,
