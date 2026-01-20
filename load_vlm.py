@@ -1,5 +1,7 @@
 from transformers import AutoModel
 import torch
+import shutil
+import os
 
 # ============ Configuration / Naming Rules ============
 # Model paths
@@ -26,6 +28,17 @@ NORMALIZE_STD = [0.229, 0.224, 0.225]
 MODEL_PREFIX = 'model.'
 EMA_MODEL_PREFIX = 'ema_model.'
 SKIP_KEY_PATTERN = '.lpips_loss'
+
+# Files to copy from pretrained model (excluding safetensors)
+FILES_TO_COPY = [
+    'added_tokens.json',
+    'merges.txt',
+    'preprocessor_config.json',
+    'special_tokens_map.json',
+    'tokenizer_config.json',
+    'tokenizer.json',
+    'vocab.json',
+]
 # ======================================================
 
 model = AutoModel.from_pretrained(
@@ -64,15 +77,50 @@ for key, value in state_dict.items():
     new_key = new_key.replace('._orig_mod.', '.')
     new_state_dict_ema[new_key] = value
 
+
+# Helper function to copy additional files
+def copy_additional_files(src_dir, dst_dir, files_list):
+    """Copy additional files from source to destination directory"""
+    os.makedirs(dst_dir, exist_ok=True)
+    copied_files = []
+    missing_files = []
+
+    for filename in files_list:
+        src_file = os.path.join(src_dir, filename)
+        dst_file = os.path.join(dst_dir, filename)
+
+        if os.path.exists(src_file):
+            shutil.copy2(src_file, dst_file)
+            copied_files.append(filename)
+        else:
+            missing_files.append(filename)
+
+    return copied_files, missing_files
+
+
 # Save model version
 msg = model.vision_model.load_state_dict(new_state_dict_model)
 print("Model version:", msg)
 model.save_pretrained(OUTPUT_MODEL_PATH)
+print(f"\nCopying additional files to {OUTPUT_MODEL_PATH}...")
+copied, missing = copy_additional_files(
+    PRETRAINED_MODEL_PATH, OUTPUT_MODEL_PATH, FILES_TO_COPY
+)
+print(f"Copied {len(copied)} files: {', '.join(copied)}")
+if missing:
+    print(f"Missing {len(missing)} files: {', '.join(missing)}")
 
 # Save ema_model version
 msg_ema = model.vision_model.load_state_dict(new_state_dict_ema)
-print("EMA model version:", msg_ema)
+print("\nEMA model version:", msg_ema)
 model.save_pretrained(OUTPUT_EMA_PATH)
+print(f"\nCopying additional files to {OUTPUT_EMA_PATH}...")
+copied_ema, missing_ema = copy_additional_files(
+    PRETRAINED_MODEL_PATH, OUTPUT_EMA_PATH, FILES_TO_COPY
+)
+print(f"Copied {len(copied_ema)} files: {', '.join(copied_ema)}")
+if missing_ema:
+    print(f"Missing {len(missing_ema)} files: {', '.join(missing_ema)}")
 
 # Evaluate semantic reconstruction quality
 print("\nEvaluating semantic reconstruction quality...")
