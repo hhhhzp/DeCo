@@ -1231,7 +1231,7 @@ class UniFlowVisionModel(PreTrainedModel):
                 [
                     FlattenDiTBlock(
                         hidden_size=vit_hidden_size,
-                        groups=32,
+                        groups=16,
                         mlp_ratio=4.0,
                     )
                     for _ in range(self.global_blocks_depth)
