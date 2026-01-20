@@ -1704,7 +1704,7 @@ def resample_tokens(tokens, scale_factor):
     h = w = int(N**0.5)
     tokens = tokens.reshape(B, h, w, C)
     tokens = pixel_shuffle(tokens, scale_factor=scale_factor)
-    tokens = tokens.reshape(B, -1, tokens.shape[1])
+    tokens = tokens.reshape(B, -1, tokens.shape[-1])
     return tokens
 
 
