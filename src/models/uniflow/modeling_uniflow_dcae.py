@@ -1165,7 +1165,7 @@ class UniFlowVisionModel_DCAE(PreTrainedModel):
                 )
             from .modeling_dcae import AutoencoderDC
 
-            self.global_blocks = AutoencoderDC.from_config(
+            self.global_blocks = AutoencoderDC.from_pretrained(
                 "/apdcephfs/share_300000800/datamultimodal/models/Sana_600M_512px_diffusers/vae",
                 torch_dtype=torch.bfloat16,
             ).decoder.to(torch.bfloat16)

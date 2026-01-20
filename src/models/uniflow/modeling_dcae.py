@@ -322,7 +322,7 @@ def get_block(
             norm_type=norm_type,
             attention_dropout=0.0,
             dropout=0.0,
-            qkv_bias=True,
+            qkv_bias=False,
             qk_normalization=True,
             use_flash_attn=use_flash_attn,
             use_rope=use_rope,
