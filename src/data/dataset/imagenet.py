@@ -609,7 +609,7 @@ class PixWebDataset(IterableDataset):
         处理分片逻辑（优化版）：
         将 Global Rank 和 Local Worker 合并计算，只进行一次 Shard 操作。
         """
-        dataset = dataset.shuffle(buffer_size=1000, seed=self.seed)
+        dataset = dataset.shuffle(buffer_size=10000, seed=self.seed)
         # 1. 获取分布式环境信息 (Global Info)
         if dist.is_available() and dist.is_initialized():
             world_size = dist.get_world_size()
@@ -617,25 +617,13 @@ class PixWebDataset(IterableDataset):
         else:
             world_size = 1
             rank = 0
+        from datasets.distributed import split_dataset_by_node
 
-        # 2. 获取本地 Worker 信息 (Local Info)
-        worker_info = torch.utils.data.get_worker_info()
-        if worker_info is not None:
-            num_workers = worker_info.num_workers
-            worker_id = worker_info.id
-        else:
-            num_workers = 1
-            worker_id = 0
-
-        # 3. 计算全局唯一的 Worker ID 和总分片数 (关键修改)
-        # 公式：Current_Global_ID = Rank_ID * Workers_Per_GPU + Local_Worker_ID
-        total_shards = world_size * num_workers
-        global_worker_id = rank * num_workers + worker_id
-
-        # 4. 执行一次性分片
-        # 相比分两次 shard，这样底层不仅效率更高，而且能保证数据绝对不重复
-        if total_shards > 1:
-            dataset = dataset.shard(num_shards=total_shards, index=global_worker_id)
+        dataset = split_dataset_by_node(
+            dataset,
+            rank=rank,
+            world_size=world_size,
+        )
 
         return dataset
 
@@ -643,21 +631,18 @@ class PixWebDataset(IterableDataset):
         """Iterate over the dataset"""
         dataset = self._setup_sharded_dataset(self.hf_dataset)
         rank = dist.get_rank() if dist.is_initialized() else 0
-
+        dataset_iter = iter(dataset)
         while True:
             try:
-                for sample in dataset:
-                    try:
-                        yield self._process_sample(sample)
-                    except Exception as e:
-                        print(f"[Rank {rank}] Warning: Failed to process sample: {e}")
-                        continue
-                # 正常遍历完成，退出循环
-                break
+                sample = next(dataset_iter)
+                yield self._process_sample(sample)
+            except StopIteration:
+                # Normal end of iteration
+                return
+            except GeneratorExit:
+                # Always propagate GeneratorExit
+                raise
             except Exception as e:
-                print(
-                    f"[Rank {rank}] Warning: Dataset iteration error: {e}, restarting iterator..."
-                )
-                # 重新创建 dataset iterator
-                dataset = self._setup_sharded_dataset(self.hf_dataset)
+                # Skip bad samples (both iterator errors and processing errors)
+                print(f"[Rank {rank}] Warning: Skipping bad sample: {e}")
                 continue
