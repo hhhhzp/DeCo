@@ -1186,7 +1186,7 @@ class UniFlowVisionModel(PreTrainedModel):
         llm_hidden_size = config.llm_hidden_size
         self.use_disp_loss = config.use_disp_loss
         self.image_size = config.image_size
-        self.patch_size = 2 * config.patch_size
+        self.patch_size = config.patch_size
 
         # Branch control flags
         self.enable_semantic_branch = False  # config.enable_semantic_branch
@@ -1218,19 +1218,19 @@ class UniFlowVisionModel(PreTrainedModel):
                 self.gen_latent_proj = nn.Sequential(
                     nn.Linear(256, 4 * vit_hidden_size),
                     nn.GELU(),
-                    nn.Linear(4 * vit_hidden_size, 2 * vit_hidden_size),
+                    nn.Linear(4 * vit_hidden_size, vit_hidden_size),
                 )
 
             self.global_blocks_depth = config.global_blocks_depth
             self.global_block_pos_embed = nn.Parameter(
                 torch.randn(
-                    1, (self.image_size // self.patch_size) ** 2, 2 * vit_hidden_size
+                    1, (self.image_size // self.patch_size) ** 2, vit_hidden_size
                 )
             )
             self.global_blocks = nn.ModuleList(
                 [
                     FlattenDiTBlock(
-                        hidden_size=2 * vit_hidden_size,
+                        hidden_size=vit_hidden_size,
                         groups=32,
                         mlp_ratio=4.0,
                     )
@@ -1240,8 +1240,8 @@ class UniFlowVisionModel(PreTrainedModel):
             self.flow_head = FlowDecoder(
                 target_channels=3 * self.patch_size * self.patch_size,
                 z_channels=2 * config.vit_hidden_size,
-                width=2 * config.vit_hidden_size,
-                depth=3,
+                width=2048,
+                depth=4,
                 num_sampling_steps=config.num_sampling_steps,
                 grad_checkpointing=False,
                 patch_size=self.patch_size,
@@ -1284,7 +1284,7 @@ class UniFlowVisionModel(PreTrainedModel):
                 target_channels=vit_hidden_size * 4,
                 z_channels=2 * vit_hidden_size,
                 width=2048,
-                depth=3,
+                depth=4,
                 num_sampling_steps=config.num_sampling_steps,
                 grad_checkpointing=False,
                 patch_size=1,
@@ -1461,7 +1461,7 @@ class UniFlowVisionModel(PreTrainedModel):
             grid,
             grid,
             sem_processed.device,
-            hidden_size=2 * self.config.vit_hidden_size,
+            hidden_size=sem_processed.shape[-1],
         )
 
         # Apply sem_global_blocks
@@ -1498,9 +1498,20 @@ class UniFlowVisionModel(PreTrainedModel):
             If inference:
                 reconstructed_image: [B, C, H, W]
         """
+        # Upsample latent tokens by 2x (N -> 4N)
+        B, N, C = latent_tokens.shape
+        h = w = int(N**0.5)
+        # Reshape to [B, C, H, W] for F.interpolate
+        latent_tokens = latent_tokens.reshape(B, h, w, C).permute(0, 3, 1, 2)
+        # Upsample by 2x: [B, C, H, W] -> [B, C, 2H, 2W]
+        latent_tokens = F.interpolate(
+            latent_tokens, scale_factor=2.0, mode='bilinear', align_corners=False
+        )
+        # Reshape back to [B, 4N, C]
+        latent_tokens = latent_tokens.permute(0, 2, 3, 1).reshape(B, -1, C)
+
         # Project latent tokens back to hidden size
         condition_tokens = self.gen_latent_proj(latent_tokens)
-
         # Apply global blocks with position embeddings
         B, N, C = condition_tokens.shape
         grid = int(N**0.5)
