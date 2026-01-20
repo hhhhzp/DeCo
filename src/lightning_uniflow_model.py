@@ -227,12 +227,13 @@ class LightningUniFlowModel(pl.LightningModule):
             else:
                 other_params.append(param)
 
-        # Build parameter groups
+        # Build parameter groups with custom names
         param_groups = [
-            {"params": other_params},  # Default learning rate
+            {"params": other_params, "name": "default"},  # Default learning rate
             {
                 "params": vision_encoder_params,
                 "lr": 5e-5,
+                "name": "vision_encoder",
             },  # Lower learning rate for vision encoder
         ]
 
@@ -302,11 +303,14 @@ class LightningUniFlowModel(pl.LightningModule):
         # Compute total loss
         total_loss = loss_dict["loss"]
 
-        # Log learning rate
+        # Log learning rate for different parameter groups
         if self.trainer.optimizers:
             optimizer = self.trainer.optimizers[0]
-            current_lr = optimizer.param_groups[0]['lr']
-            loss_dict["learning_rate"] = current_lr
+            for group_idx, param_group in enumerate(optimizer.param_groups):
+                # Use custom name if available, otherwise use group index
+                group_name = param_group.get('name', f'group_{group_idx}')
+                lr_key = f"lr/{group_name}"
+                loss_dict[lr_key] = param_group['lr']
 
         # Log metrics
         self.log_dict(loss_dict, prog_bar=True, on_step=True, sync_dist=False)
