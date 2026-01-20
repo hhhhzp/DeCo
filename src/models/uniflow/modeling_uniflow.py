@@ -1328,21 +1328,8 @@ class UniFlowVisionModel(PreTrainedModel):
                 torch.from_numpy(pos_embed_spatial).float()
             )
 
-        # self.apply(self._init_weights)
-
         # Initialize RoPE position cache for FlattenDiTBlock
         self.precompute_pos = dict()
-
-    def _init_weights(self, m):
-        if isinstance(m, nn.Linear):
-            trunc_normal_(m.weight, std=0.02)
-            if isinstance(m, nn.Linear) and m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.LayerNorm):
-            if m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-            if m.weight is not None:
-                nn.init.constant_(m.weight, 1.0)
 
     def no_weight_decay(self):
         return {}
@@ -1715,12 +1702,9 @@ def resample_tokens(tokens, scale_factor):
     """
     B, N, C = tokens.shape
     h = w = int(N**0.5)
-    # Reshape to [B, h, w, C] then permute to [B, C, h, w] for pixel_shuffle
     tokens = tokens.reshape(B, h, w, C)
-    # Apply pixel_shuffle resampling
     tokens = pixel_shuffle(tokens, scale_factor=scale_factor)
-    # Permute back to [B, h', w', C'] then reshape to [B, N', C']
-    tokens = tokens.permute(0, 2, 3, 1).reshape(B, -1, tokens.shape[1])
+    tokens = tokens.reshape(B, -1, tokens.shape[1])
     return tokens
 
 
