@@ -1591,7 +1591,7 @@ class UniFlowVisionModel(PreTrainedModel):
                 )
 
             # Add semantic losses
-            weighted_sem_mse_loss = 0.5 * sem_reconstruction_losses['mse_loss']
+            weighted_sem_mse_loss = sem_reconstruction_losses['mse_loss']
             loss_dict['distill_loss'] = distill_loss
             loss_dict['sem_mse_loss'] = weighted_sem_mse_loss
             total_loss = total_loss + distill_loss + weighted_sem_mse_loss
@@ -1612,7 +1612,7 @@ class UniFlowVisionModel(PreTrainedModel):
             )
 
             # Add pixel losses
-            weighted_lpips_loss = 1.1 * flow_losses['lpips_loss']
+            weighted_lpips_loss = 0.1 * flow_losses['lpips_loss']
             loss_dict['flow_loss'] = flow_losses['mse_loss']
             loss_dict['lpips_loss'] = weighted_lpips_loss
             total_loss = total_loss + flow_losses['mse_loss'] + weighted_lpips_loss

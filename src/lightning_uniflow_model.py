@@ -65,7 +65,7 @@ class LightningUniFlowModel(pl.LightningModule):
     ):
         super().__init__()
         config = UniFlowVisionConfig.from_pretrained(config_path)
-        self.model = UniFlowVisionModel_DCAE(config)
+        self.model = UniFlowVisionModel(config)
         self.use_ema = use_ema
         self.train_semantic_ae = train_semantic_ae
         self.frozen_encoder = frozen_encoder
@@ -141,17 +141,6 @@ class LightningUniFlowModel(pl.LightningModule):
         print(f"  Trainable parameters: {total_trainable:,} ({trainable_percent:.2f}%)")
         print(f"  Frozen parameters: {total_frozen:,} ({100-trainable_percent:.2f}%)")
         print("=" * 80 + "\n")
-
-        # Print global_blocks module dtype information
-        if hasattr(self.model, 'global_blocks'):
-            print("=" * 80)
-            print("global_blocks Module dtype Information:")
-            print("=" * 80)
-            for name, param in self.model.global_blocks.named_parameters():
-                print(
-                    f"  - {name}: dtype={param.dtype}, shape={tuple(param.shape)}, requires_grad={param.requires_grad}"
-                )
-            print("=" * 80 + "\n")
 
     def init_vision_model(
         self,
