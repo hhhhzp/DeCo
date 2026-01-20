@@ -15,7 +15,7 @@ export SETUPTOOLS_USE_DISTUTILS=stdlib
 export http_proxy="http://star-proxy.oa.com:3128"
 export https_proxy="http://star-proxy.oa.com:3128"
 # multi-node training in lightning style, e.g., 4 nodes
-export MASTER_ADDR=29.111.45.59
+export MASTER_ADDR=29.111.44.202
 export MASTER_PORT=28778
 export NNODES=4
 export NGPUS_PER_NODE=8
