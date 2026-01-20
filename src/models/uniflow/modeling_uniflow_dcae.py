@@ -1411,7 +1411,7 @@ class UniFlowVisionModel_DCAE(PreTrainedModel):
 
         if training:
             # Training: compute flow matching loss
-            target_latent = p2l_transform_tensor(target_pixels, self.patch_size)
+            target_latent = p2l_transform_tensor(target_pixels, 1)
             flow_losses = self.flow_head.forward_train(
                 x1=target_latent, z=condition_tokens, pos=None
             )
