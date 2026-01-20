@@ -1223,7 +1223,7 @@ class UniFlowVisionModel(PreTrainedModel):
 
             self.global_blocks_depth = config.global_blocks_depth
             self.global_block_pos_embed = nn.Parameter(
-                torch.randn(1, self.embeddings.num_patches, vit_hidden_size)
+                torch.randn(1, self.embeddings.num_patches, 2 * vit_hidden_size)
             )
             self.global_blocks = nn.ModuleList(
                 [
