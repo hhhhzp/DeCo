@@ -300,28 +300,15 @@ class LightningUniFlowModel(pl.LightningModule):
         """
         # Unpack batch: input image is both source and target for reconstruction
         img, _, metadata = batch
-
-        # Mode 1: Semantic autoencoder training
-        if self.train_semantic_ae:
-            loss_dict = self.model.forward_semantic_loss(img)
-        # Mode 2: Flow matching training (default)
+        if self.distill and self.teacher_model is not None:
+            with torch.no_grad():
+                teacher_img = Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)(
+                    img * 0.5 + 0.5
+                )
+                teacher_feat = self.teacher_model.extract_feature(teacher_img)
         else:
-            # Get teacher features if distillation is enabled
             teacher_feat = None
-            if self.distill and self.teacher_model is not None:
-                with torch.no_grad():
-                    teacher_img = Normalize(
-                        IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
-                    )(img * 0.5 + 0.5)
-                    teacher_feat = self.teacher_model.extract_feature(teacher_img)
-
-            # Forward pass with flow matching loss
-            # The model internally:
-            # 1. Encodes image to get condition tokens
-            # 2. Converts target image to patch tokens
-            # 3. Samples noise and timestep
-            # 4. Computes flow matching loss (velocity prediction)
-            loss_dict = self.model.forward_loss(img, teacher_feat=teacher_feat)
+        loss_dict = self.model.forward_loss(img, teacher_feat=teacher_feat)
 
         # Compute total loss
         total_loss = loss_dict["loss"]
