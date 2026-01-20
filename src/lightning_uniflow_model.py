@@ -95,6 +95,53 @@ class LightningUniFlowModel(pl.LightningModule):
         self._strict_loading = False
         self._logged_images_count = 0
 
+    def print_trainable_parameters(self):
+        """
+        Print trainable parameters of self.model (only on rank 0)
+        """
+        if self.global_rank != 0:
+            return
+
+        print("\n" + "=" * 80)
+        print("Trainable Parameters in self.model:")
+        print("=" * 80)
+
+        trainable_params = []
+        frozen_params = []
+        total_trainable = 0
+        total_frozen = 0
+
+        for name, param in self.model.named_parameters():
+            num_params = param.numel()
+            if param.requires_grad:
+                trainable_params.append((name, num_params))
+                total_trainable += num_params
+            else:
+                frozen_params.append((name, num_params))
+                total_frozen += num_params
+
+        # Print trainable parameters
+        print(f"\n✓ TRAINABLE MODULES ({len(trainable_params)} parameters):")
+        for name, num_params in trainable_params:
+            print(f"  - {name}: {num_params:,} params")
+
+        # Print frozen parameters
+        print(f"\n✗ FROZEN MODULES ({len(frozen_params)} parameters):")
+        for name, num_params in frozen_params:
+            print(f"  - {name}: {num_params:,} params")
+
+        # Print summary
+        total_params = total_trainable + total_frozen
+        trainable_percent = (
+            100 * total_trainable / total_params if total_params > 0 else 0
+        )
+        print("\n" + "-" * 80)
+        print(f"SUMMARY:")
+        print(f"  Total parameters: {total_params:,}")
+        print(f"  Trainable parameters: {total_trainable:,} ({trainable_percent:.2f}%)")
+        print(f"  Frozen parameters: {total_frozen:,} ({100-trainable_percent:.2f}%)")
+        print("=" * 80 + "\n")
+
     def init_vision_model(
         self,
         pretrained_model_path: str = "/apdcephfs/share_300000800/datamultimodal/models/InternVL3-2B",
@@ -188,6 +235,9 @@ class LightningUniFlowModel(pl.LightningModule):
             no_grad(self.model.mlp1)
             if self.global_rank == 0:
                 print("Frozen mlp1")
+
+        # Print trainable parameters summary (only on rank 0)
+        self.print_trainable_parameters()
 
     def configure_callbacks(self) -> Union[Sequence[Callback], Callback]:
         """Configure EMA callback"""

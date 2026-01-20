@@ -1405,7 +1405,21 @@ class UniFlowVisionModel_DCAE(PreTrainedModel):
         # Apply DCAE decoder to get intermediate features [B, 128, H*2, W*2]
         condition_tokens = self.global_blocks(latent_spatial)
 
-        # Convert back to token format for flow_head: [B, 128, H*2, W*2] -> [B, N*4, 128]
+        # Resize from 32x32 back to 28x28 spatial resolution
+        # This matches the original image_size // patch_size = 224 // 8 = 28
+        target_size = self.image_size // (self.patch_size // 2)
+        if (
+            condition_tokens.shape[2] != target_size
+            or condition_tokens.shape[3] != target_size
+        ):
+            condition_tokens = F.interpolate(
+                condition_tokens,
+                size=(target_size, target_size),
+                mode='bilinear',
+                align_corners=False,
+            )
+
+        # Convert back to token format for flow_head: [B, 128, 28, 28] -> [B, 784, 128]
         B, C_out, H_out, W_out = condition_tokens.shape
         condition_tokens = condition_tokens.permute(0, 2, 3, 1).reshape(B, -1, C_out)
 
