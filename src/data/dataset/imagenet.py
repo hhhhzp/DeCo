@@ -641,7 +641,7 @@ class PixWebDataset(IterableDataset):
                 return
             except GeneratorExit:
                 # Always propagate GeneratorExit
-                raise
+                return
             except Exception as e:
                 # Skip bad samples (both iterator errors and processing errors)
                 print(f"[Rank {rank}] Warning: Skipping bad sample: {e}")
