@@ -1504,9 +1504,7 @@ class UniFlowVisionModel(PreTrainedModel):
         # Reshape to [B, C, H, W] for F.interpolate
         latent_tokens = latent_tokens.reshape(B, h, w, C).permute(0, 3, 1, 2)
         # Upsample by 2x: [B, C, H, W] -> [B, C, 2H, 2W]
-        latent_tokens = F.interpolate(
-            latent_tokens, scale_factor=2.0, mode='nearest', align_corners=False
-        )
+        latent_tokens = F.interpolate(latent_tokens, scale_factor=2.0, mode='nearest')
         # Reshape back to [B, 4N, C]
         latent_tokens = latent_tokens.permute(0, 2, 3, 1).reshape(B, -1, C)
 
