@@ -1243,12 +1243,11 @@ class UniFlowVisionModel(PreTrainedModel):
         # ============================================================
         if self.enable_pixel_branch:
             if self.use_chal_proj:
-                # Project semantic decoder condition tokens to vit_hidden_size for pixel global_blocks
+                # Project latent tokens back to vit_hidden_size for pixel global_blocks
                 self.gen_latent_proj = nn.Sequential(
-                    UniFlowRMSNorm(2 * vit_hidden_size),
-                    nn.Linear(2 * vit_hidden_size, 4 * vit_hidden_size),
+                    nn.Linear(64, 4 * vit_hidden_size),
                     nn.GELU(),
-                    nn.Linear(4 * vit_hidden_size, 4 * vit_hidden_size),
+                    nn.Linear(4 * vit_hidden_size, vit_hidden_size),
                 )
 
             self.global_blocks_depth = config.global_blocks_depth
@@ -1442,19 +1441,16 @@ class UniFlowVisionModel(PreTrainedModel):
                 x1=sem_tokens_target, z=condition_tokens, pos=pos
             )
             sem_tokens_pred = reconstruction_losses['pred']
-            return reconstruction_losses, sem_tokens_pred, condition_tokens
+            return reconstruction_losses, sem_tokens_pred
         else:
             # Inference: just reconstruct
             sem_tokens_pred = self.sem_flow_head(z=condition_tokens, pos=pos)
-            return sem_tokens_pred, condition_tokens
+            return sem_tokens_pred
 
-    def forward_pixel_decoder(
-        self, sem_condition_tokens, target_pixels=None, training=True
-    ):
-        # sem_condition_tokens: [B, N, 2*vit_hidden_size] from semantic decoder blocks
-        # Project to vit_hidden_size for pixel decoder
-        condition_tokens = self.gen_latent_proj(sem_condition_tokens)
-        condition_tokens = upsample_tokens(condition_tokens, scale_factor=2)
+    def forward_pixel_decoder(self, latent_tokens, target_pixels=None, training=True):
+        # Upsample latent tokens by 2x (N -> 4N)
+        latent_tokens = upsample_tokens(latent_tokens, scale_factor=2)
+        condition_tokens = self.gen_latent_proj(latent_tokens)
         # Apply global blocks with position embeddings
         B, N, C = condition_tokens.shape
         grid = int(N**0.5)
@@ -1491,17 +1487,14 @@ class UniFlowVisionModel(PreTrainedModel):
         # ============================================================
         # Semantic Branch Loss
         # ============================================================
-        sem_condition_tokens = None
         if self.enable_semantic_branch:
             # Step 3: Forward semantic decoder (training mode) using shared latent
-            sem_reconstruction_losses, sem_tokens_pred, sem_condition_tokens = (
-                self.forward_semantic_decoder(
-                    sem_tokens_target=F.layer_norm(
-                        sem_tokens, (sem_tokens.shape[-1],), eps=0.0
-                    ),
-                    sem_latent_tokens=shared_latent_tokens,
-                    training=True,
-                )
+            sem_reconstruction_losses, sem_tokens_pred = self.forward_semantic_decoder(
+                sem_tokens_target=F.layer_norm(
+                    sem_tokens, (sem_tokens.shape[-1],), eps=0.0
+                ),
+                sem_latent_tokens=shared_latent_tokens,
+                training=True,
             )
 
             # Calculate distillation loss
@@ -1523,13 +1516,9 @@ class UniFlowVisionModel(PreTrainedModel):
         # Pixel Generation Branch Loss
         # ============================================================
         if self.enable_pixel_branch:
-            # Step 4: Forward pixel decoder (training mode) using semantic decoder condition tokens
-            if sem_condition_tokens is None:
-                raise RuntimeError(
-                    "Semantic branch must be enabled to provide condition tokens for pixel decoder."
-                )
+            # Step 4: Forward pixel decoder (training mode) using shared latent
             flow_losses = self.forward_pixel_decoder(
-                sem_condition_tokens=sem_condition_tokens,
+                latent_tokens=shared_latent_tokens,
                 target_pixels=target_pixel_values,
                 training=True,
             )
@@ -1573,16 +1562,9 @@ class UniFlowVisionModel(PreTrainedModel):
         # Pixel Generation Mode
         # ============================================================
         if mode == 'pixel':
-            # Step 3: Forward semantic decoder to get condition tokens
-            sem_tokens_pred, sem_condition_tokens = self.forward_semantic_decoder(
-                sem_tokens_target=None,  # Not needed for inference
-                sem_latent_tokens=shared_latent_tokens,
-                training=False,
-            )
-
-            # Step 4: Forward pixel decoder (inference mode) using semantic decoder condition tokens
+            # Step 3: Forward pixel decoder (inference mode) using shared latent
             reconstructed_image = self.forward_pixel_decoder(
-                sem_condition_tokens=sem_condition_tokens, training=False
+                latent_tokens=shared_latent_tokens, training=False
             )
 
             return reconstructed_image
@@ -1592,12 +1574,12 @@ class UniFlowVisionModel(PreTrainedModel):
         # ============================================================
         elif mode == 'semantic':
             # Step 3: Forward semantic decoder (inference mode) using shared latent
-            sem_tokens_pred, sem_condition_tokens = self.forward_semantic_decoder(
+            sem_tokens = self.forward_semantic_decoder(
                 sem_tokens_target=None,  # Not needed for inference
                 sem_latent_tokens=shared_latent_tokens,
                 training=False,
             )
-            return sem_tokens_pred
+            return sem_tokens
 
 
 def resample_tokens(tokens, scale_factor):
