@@ -1245,6 +1245,7 @@ class UniFlowVisionModel(PreTrainedModel):
             if self.use_chal_proj:
                 # Project semantic decoder condition tokens to vit_hidden_size for pixel global_blocks
                 self.gen_latent_proj = nn.Sequential(
+                    UniFlowRMSNorm(2 * vit_hidden_size),
                     nn.Linear(2 * vit_hidden_size, 4 * vit_hidden_size),
                     nn.GELU(),
                     nn.Linear(4 * vit_hidden_size, 4 * vit_hidden_size),
