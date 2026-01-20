@@ -1556,7 +1556,12 @@ class UniFlowVisionModel(PreTrainedModel):
 
             # Calculate distillation loss
             sem_tokens_pred_after_mlp = self.mlp1(sem_tokens_pred)
-            distill_loss = F.mse_loss(sem_tokens_pred_after_mlp, sem_tokens_after_mlp)
+            if teacher_feat is not None:
+                distill_loss = F.mse_loss(sem_tokens_pred_after_mlp, teacher_feat)
+            else:
+                distill_loss = F.mse_loss(
+                    sem_tokens_pred_after_mlp, sem_tokens_after_mlp
+                )
 
             # Add semantic losses
             weighted_sem_mse_loss = 0.5 * sem_reconstruction_losses['mse_loss']

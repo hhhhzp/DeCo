@@ -58,13 +58,28 @@ class LightningUniFlowModel(pl.LightningModule):
         use_ema: bool = True,
         distill: bool = False,
         train_semantic_ae: bool = False,
+        frozen_encoder: bool = True,
+        frozen_mlp: bool = True,
+        resume: bool = False,
     ):
         super().__init__()
         config = UniFlowVisionConfig.from_pretrained(config_path)
         self.model = UniFlowVisionModel(config)
         self.use_ema = use_ema
-        self.distill = distill
         self.train_semantic_ae = train_semantic_ae
+        self.frozen_encoder = frozen_encoder
+        self.frozen_mlp = frozen_mlp
+        self.resume = resume
+
+        # Ensure distill is True if any frozen parameter is True
+        if frozen_encoder or frozen_mlp:
+            self.distill = True
+            if self.global_rank == 0 and not distill:
+                print(
+                    "Warning: distill automatically set to True because frozen_encoder or frozen_mlp is True"
+                )
+        else:
+            self.distill = distill
 
         # Create EMA model if enabled
         if self.use_ema:
@@ -155,41 +170,29 @@ class LightningUniFlowModel(pl.LightningModule):
             if self.global_rank == 0:
                 print(f"Loaded pretrained model from {self.pretrain_model_path}: {msg}")
 
-        # Copy parameters to EMA model
-        if self.use_ema:
+        # Copy parameters to EMA model after loading checkpoint if not resuming
+        if not self.resume and self.use_ema:
             copy_params(src_model=self.model, dst_model=self.ema_model)
-
-        if self.distill:
-            self.init_teacher_model()
-
-        # Compile models for better performance
-        # self.model = torch.compile(self.model)
-        # if self.use_ema:
-        #     self.ema_model = torch.compile(self.ema_model)
-
-        # Freeze strategy based on training mode
-        if self.train_semantic_ae:
-            # Semantic AE training: freeze all parameters first, then unfreeze sem_ae
-            no_grad(self.model)  # Freeze all parameters
-            # Unfreeze only sem_ae
-            for param in self.model.sem_ae.parameters():
-                param.requires_grad = True
-            # no_grad(self.model.sem_ae.up_proj)
             if self.global_rank == 0:
-                print("Training mode: Semantic Autoencoder (only sem_ae trainable)")
-        elif self.distill:
-            # Distillation training: freeze position embeddings only
+                print("Copied parameters from model to EMA model")
+
+        if self.teacher_model is not None:
             no_grad(self.teacher_model)
-            self.model.embeddings.position_embedding.requires_grad_(False)
             if self.global_rank == 0:
-                print("Training mode: Distillation (position embeddings frozen)")
-        else:
-            # Flow matching training: freeze encoder components
+                print("Frozen teacher model for distillation")
+
+        # Freeze encoder components if specified
+        if self.frozen_encoder:
             no_grad(self.model.embeddings)
             no_grad(self.model.encoder)
+            if self.global_rank == 0:
+                print("Frozen encoder (embeddings and encoder)")
+
+        # Freeze mlp if specified
+        if self.frozen_mlp:
             no_grad(self.model.mlp1)
             if self.global_rank == 0:
-                print("Training mode: Flow Matching (encoder frozen)")
+                print("Frozen mlp1")
 
     def configure_callbacks(self) -> Union[Sequence[Callback], Callback]:
         """Configure EMA callback"""
