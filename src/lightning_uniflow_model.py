@@ -232,30 +232,20 @@ class LightningUniFlowModel(pl.LightningModule):
             {"params": other_params, "name": "default"},  # Default learning rate
             {
                 "params": vision_encoder_params,
-                "lr": 5e-5,
+                "lr": 1e-5,
                 "name": "vision_encoder",
             },  # Lower learning rate for vision encoder
         ]
 
         optimizer: torch.optim.Optimizer = self.optimizer(param_groups)
 
-        lr_scheduler = get_cosine_with_min_lr_schedule_with_warmup(
-            optimizer,
-            num_warmup_steps=0,
-            num_training_steps=200000,
-            min_lr=1e-5,
-        )
-
         if self.distill:
             lr_scheduler = get_cosine_with_min_lr_schedule_with_warmup(
                 optimizer,
-                num_warmup_steps=10000,
+                num_warmup_steps=0,
                 num_training_steps=200000,
                 min_lr=1e-5,
             )
-            # get_cosine_schedule_with_warmup(
-            #     optimizer, num_warmup_steps=2000, num_training_steps=200000
-            # )
             return dict(
                 optimizer=optimizer,
                 lr_scheduler={

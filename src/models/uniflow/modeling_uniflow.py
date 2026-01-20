@@ -1186,11 +1186,11 @@ class UniFlowVisionModel(PreTrainedModel):
         llm_hidden_size = config.llm_hidden_size
         self.use_disp_loss = config.use_disp_loss
         self.image_size = config.image_size
-        self.patch_size = config.patch_size
+        self.patch_size = 2 * config.patch_size
 
         # Branch control flags
-        self.enable_semantic_branch = config.enable_semantic_branch
-        self.enable_pixel_branch = False
+        self.enable_semantic_branch = False  # config.enable_semantic_branch
+        self.enable_pixel_branch = True
 
         # vit encoder (shared by both branches)
         self.embeddings = UniFlowVisionEmbeddings(config)
@@ -1209,7 +1209,17 @@ class UniFlowVisionModel(PreTrainedModel):
         # ============================================================
         if self.enable_pixel_branch:
             if self.use_chal_proj:
-                self.gen_ae = ChannelProjector(vit_hidden_size, self.latent_ch)
+                self.gen_proj = nn.Sequential(
+                    nn.Linear(4 * vit_hidden_size, 4 * vit_hidden_size),
+                    nn.GELU(),
+                    nn.Linear(4 * vit_hidden_size, 256),
+                )
+                # Project sem_latent_tokens from latent_ch back to llm_hidden_size for sem_global_blocks
+                self.gen_latent_proj = nn.Sequential(
+                    nn.Linear(256, 4 * vit_hidden_size),
+                    nn.GELU(),
+                    nn.Linear(4 * vit_hidden_size, 2 * vit_hidden_size),
+                )
 
             self.global_blocks_depth = config.global_blocks_depth
             self.global_block_pos_embed = nn.Parameter(
@@ -1218,21 +1228,21 @@ class UniFlowVisionModel(PreTrainedModel):
             self.global_blocks = nn.ModuleList(
                 [
                     FlattenDiTBlock(
-                        hidden_size=vit_hidden_size,
-                        groups=16,
+                        hidden_size=2 * vit_hidden_size,
+                        groups=32,
                         mlp_ratio=4.0,
                     )
                     for _ in range(self.global_blocks_depth)
                 ]
             )
             self.flow_head = FlowDecoder(
-                target_channels=3 * config.patch_size * config.patch_size,
-                z_channels=config.vit_hidden_size,
-                width=config.vit_hidden_size,
-                depth=config.num_decoder_layers,
+                target_channels=3 * self.patch_size * self.patch_size,
+                z_channels=2 * config.vit_hidden_size,
+                width=2 * config.vit_hidden_size,
+                depth=3,
                 num_sampling_steps=config.num_sampling_steps,
                 grad_checkpointing=False,
-                patch_size=config.patch_size,
+                patch_size=self.patch_size,
                 img_size=config.image_size,
                 use_cfg=config.use_cfg,
                 max_freqs=32,
@@ -1394,6 +1404,10 @@ class UniFlowVisionModel(PreTrainedModel):
 
         # Get generation tokens from layer 4
         gen_tokens = encoder_outputs.hidden_states[4][:, 1:]
+        h = w = int(gen_tokens.shape[1] ** 0.5)
+        gen_tokens = gen_tokens.reshape(gen_tokens.shape[0], h, w, -1)
+        gen_tokens = pixel_shuffle(gen_tokens, scale_factor=0.5)
+        gen_tokens = gen_tokens.reshape(gen_tokens.shape[0], -1, gen_tokens.shape[-1])
 
         # Get semantic tokens from last layer
         sem_tokens = encoder_outputs.last_hidden_state[:, 1:]  # Remove CLS token
@@ -1483,7 +1497,7 @@ class UniFlowVisionModel(PreTrainedModel):
                 reconstructed_image: [B, C, H, W]
         """
         # Project latent tokens back to hidden size
-        condition_tokens = self.gen_ae.project_and_upsample(latent_tokens)
+        condition_tokens = self.gen_latent_proj(latent_tokens)
 
         # Apply global blocks with position embeddings
         B, N, C = condition_tokens.shape
@@ -1497,7 +1511,7 @@ class UniFlowVisionModel(PreTrainedModel):
 
         if training:
             # Training: compute flow matching loss
-            target_latent = p2l_transform_tensor(target_pixels, self.config.patch_size)
+            target_latent = p2l_transform_tensor(target_pixels, self.patch_size)
             flow_losses = self.flow_head.forward_train(
                 x1=target_latent, z=condition_tokens, pos=pos
             )
@@ -1574,7 +1588,7 @@ class UniFlowVisionModel(PreTrainedModel):
         # ============================================================
         if self.enable_pixel_branch:
             # Step 2: Encode pixel latent
-            latent_tokens = self.gen_ae.downsample_and_project(gen_tokens)
+            latent_tokens = self.gen_proj(gen_tokens)
             latent_tokens = F.layer_norm(latent_tokens, (latent_tokens.shape[-1],))
 
             # Step 4: Forward pixel decoder (training mode)
@@ -1636,7 +1650,7 @@ class UniFlowVisionModel(PreTrainedModel):
         # ============================================================
         if mode == 'pixel':
             # Step 2: Encode pixel latent
-            latent_tokens = self.gen_ae.downsample_and_project(gen_tokens)
+            latent_tokens = self.gen_proj(gen_tokens)
             latent_tokens = F.layer_norm(latent_tokens, (latent_tokens.shape[-1],))
 
             # Step 3: Forward pixel decoder (inference mode)
