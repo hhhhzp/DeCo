@@ -19,6 +19,7 @@ from torchvision.transforms import Normalize
 from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from src.models.autoencoder.base import fp2uint8
 from src.models.uniflow.modeling_uniflow import ChannelProjector, UniFlowVisionModel
+from src.models.uniflow.modeling_uniflow_dcae import UniFlowVisionModel_DCAE
 from src.models.uniflow.configuration_uniflow import UniFlowVisionConfig
 from src.callbacks.simple_ema import SimpleEMA
 from src.utils.no_grad import no_grad, filter_nograd_tensors
@@ -64,7 +65,7 @@ class LightningUniFlowModel(pl.LightningModule):
     ):
         super().__init__()
         config = UniFlowVisionConfig.from_pretrained(config_path)
-        self.model = UniFlowVisionModel(config)
+        self.model = UniFlowVisionModel_DCAE(config)
         self.use_ema = use_ema
         self.train_semantic_ae = train_semantic_ae
         self.frozen_encoder = frozen_encoder
