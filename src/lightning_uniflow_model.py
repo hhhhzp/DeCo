@@ -239,7 +239,7 @@ class LightningUniFlowModel(pl.LightningModule):
         # Print trainable parameters summary (only on rank 0)
         self.print_trainable_parameters()
 
-        self.model.global_blocks = torch.compile(self.model.global_blocks)
+        self.model = torch.compile(self.model)
 
     def configure_callbacks(self) -> Union[Sequence[Callback], Callback]:
         """Configure EMA callback"""
