@@ -18,6 +18,7 @@ from typing import Optional, Tuple, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from einops import rearrange
 
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.loaders import FromOriginalModelMixin
@@ -28,6 +29,18 @@ from diffusers.models.modeling_utils import ModelMixin
 from diffusers.models.normalization import RMSNorm, get_normalization
 from diffusers.models.transformers.sana_transformer import GLUMBConv
 from diffusers.models.autoencoders.vae import DecoderOutput, EncoderOutput
+
+try:
+    from src.models.layers.rope import (
+        apply_rotary_emb,
+        precompute_freqs_cis_ex2d as precompute_freqs_cis_2d,
+    )
+    from src.models.uniflow.flash_attention import FlashAttention
+
+    has_flash_attn = True
+except:
+    has_flash_attn = False
+    print('FlashAttention or RoPE is not available.')
 
 
 class ResBlock(nn.Module):
@@ -64,6 +77,149 @@ class ResBlock(nn.Module):
         return hidden_states + residual
 
 
+class StandardMultiHeadAttention(nn.Module):
+    r"""Standard multi-head attention with FlashAttention and RoPE support"""
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        num_attention_heads: Optional[int] = None,
+        attention_head_dim: int = 32,
+        mult: float = 1.0,
+        norm_type: str = "rms_norm",
+        attention_dropout: float = 0.0,
+        dropout: float = 0.0,
+        qkv_bias: bool = True,
+        qk_normalization: bool = True,
+        residual_connection: bool = True,
+        use_flash_attn: bool = True,
+        use_rope: bool = True,
+    ):
+        super().__init__()
+
+        self.norm_type = norm_type
+        self.attention_head_dim = attention_head_dim
+        self.qk_normalization = qk_normalization
+        self.residual_connection = residual_connection
+        self.use_flash_attn = use_flash_attn and has_flash_attn
+        self.use_rope = use_rope and has_flash_attn
+
+        num_attention_heads = (
+            int(in_channels // attention_head_dim * mult)
+            if num_attention_heads is None
+            else num_attention_heads
+        )
+        self.num_heads = num_attention_heads
+        inner_dim = num_attention_heads * attention_head_dim
+        self.inner_dim = inner_dim
+
+        self.scale = attention_head_dim**-0.5
+
+        # Input projection
+        self.qkv = nn.Linear(in_channels, 3 * inner_dim, bias=qkv_bias)
+
+        # QK normalization
+        if self.qk_normalization:
+            self.q_norm = RMSNorm(inner_dim, eps=1e-6)
+            self.k_norm = RMSNorm(inner_dim, eps=1e-6)
+
+        # Dropout
+        self.attn_drop = nn.Dropout(attention_dropout)
+        self.proj_drop = nn.Dropout(dropout)
+
+        # FlashAttention
+        if self.use_flash_attn:
+            self.inner_attn = FlashAttention(attention_dropout=attention_dropout)
+
+        # Output projection
+        self.proj = nn.Linear(inner_dim, out_channels, bias=False)
+        self.norm_out = get_normalization(norm_type, num_features=out_channels)
+
+    def _flash_attn(
+        self, x: torch.Tensor, pos: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        """FlashAttention implementation with RoPE"""
+        B, N, C = x.shape
+
+        # QKV projection for FlashAttention: (B, N, 3, H, D)
+        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.attention_head_dim)
+
+        # QK normalization
+        if self.qk_normalization:
+            q, k, v = qkv.unbind(2)
+            q = self.q_norm(q.flatten(-2, -1)).view(q.shape)
+            k = self.k_norm(k.flatten(-2, -1)).view(k.shape)
+            qkv = torch.stack([q, k, v], dim=2)
+
+        # Apply RoPE if enabled
+        if self.use_rope and pos is not None:
+            q, k, v = qkv.unbind(2)
+            # Rearrange for RoPE: (B, N, H, D) -> (B, H, N, D)
+            q = q.transpose(1, 2)
+            k = k.transpose(1, 2)
+            q, k = apply_rotary_emb(q, k, freqs_cis=pos)
+            # Rearrange back: (B, H, N, D) -> (B, N, H, D)
+            q = q.transpose(1, 2)
+            k = k.transpose(1, 2)
+            qkv = torch.stack([q, k, v], dim=2)
+
+        # Apply FlashAttention
+        context, _ = self.inner_attn(
+            qkv,
+            key_padding_mask=None,
+            need_weights=False,
+            causal=False,
+        )
+
+        # Reshape output: (B, N, H, D) -> (B, N, C)
+        x = rearrange(context, 'b n h d -> b n (h d)')
+        x = self.proj(x)
+        x = self.proj_drop(x)
+
+        return x
+
+    def forward(
+        self, hidden_states: torch.Tensor, pos: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        B, C, H, W = hidden_states.shape
+        N = H * W
+
+        # Reshape to (B, N, C) for attention
+        x = hidden_states.flatten(2).transpose(1, 2)  # (B, C, H, W) -> (B, N, C)
+
+        residual = x if self.residual_connection else None
+
+        # Compute RoPE position embeddings if needed
+        if self.use_rope and pos is None and has_flash_attn:
+            head_dim = self.attention_head_dim
+            pos = precompute_freqs_cis_2d(head_dim, H, W).to(x.device)
+
+        # Choose attention implementation
+        if self.use_flash_attn:
+            x = self._flash_attn(x, pos)
+        else:
+            x = self._naive_attn(x, pos)
+
+        # Apply normalization
+        if self.norm_type == "rms_norm":
+            x = self.norm_out(x)
+        else:
+            # For other norm types, reshape to (B, C, H, W) first
+            x = x.transpose(1, 2).reshape(B, -1, H, W)
+            x = self.norm_out(x)
+            x = x.flatten(2).transpose(1, 2)
+
+        # Residual connection
+        if residual is not None:
+            x = x + residual
+
+        # Reshape back to (B, C, H, W)
+        x = x.transpose(1, 2).reshape(B, -1, H, W)
+
+        return x
+
+
 class EfficientViTBlock(nn.Module):
     def __init__(
         self,
@@ -97,6 +253,53 @@ class EfficientViTBlock(nn.Module):
         return x
 
 
+class StandardAttentionBlock(nn.Module):
+    """Standard attention block using multi-head self-attention with FlashAttention and RoPE"""
+
+    def __init__(
+        self,
+        in_channels: int,
+        mult: float = 1.0,
+        attention_head_dim: int = 32,
+        norm_type: str = "rms_norm",
+        attention_dropout: float = 0.0,
+        dropout: float = 0.0,
+        qkv_bias: bool = True,
+        qk_normalization: bool = True,
+        use_flash_attn: bool = True,
+        use_rope: bool = True,
+    ) -> None:
+        super().__init__()
+
+        self.attn = StandardMultiHeadAttention(
+            in_channels=in_channels,
+            out_channels=in_channels,
+            mult=mult,
+            attention_head_dim=attention_head_dim,
+            norm_type=norm_type,
+            attention_dropout=attention_dropout,
+            dropout=dropout,
+            qkv_bias=qkv_bias,
+            qk_normalization=qk_normalization,
+            residual_connection=True,
+            use_flash_attn=use_flash_attn,
+            use_rope=use_rope,
+        )
+
+        self.conv_out = GLUMBConv(
+            in_channels=in_channels,
+            out_channels=in_channels,
+            norm_type="rms_norm",
+        )
+
+    def forward(
+        self, x: torch.Tensor, pos: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        x = self.attn(x, pos=pos)
+        x = self.conv_out(x)
+        return x
+
+
 def get_block(
     block_type: str,
     in_channels: int,
@@ -105,16 +308,23 @@ def get_block(
     norm_type: str,
     act_fn: str,
     qkv_mutliscales: Tuple[int] = (),
+    use_flash_attn: bool = True,
+    use_rope: bool = True,
 ):
     if block_type == "ResBlock":
         block = ResBlock(in_channels, out_channels, norm_type, act_fn)
 
     elif block_type == "EfficientViTBlock":
-        block = EfficientViTBlock(
+        block = StandardAttentionBlock(
             in_channels,
             attention_head_dim=attention_head_dim,
             norm_type=norm_type,
-            qkv_multiscales=qkv_mutliscales,
+            attention_dropout=0.0,
+            dropout=0.0,
+            qkv_bias=True,
+            qk_normalization=True,
+            use_flash_attn=use_flash_attn,
+            use_rope=use_rope,
         )
 
     else:

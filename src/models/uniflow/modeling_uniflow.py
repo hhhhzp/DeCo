@@ -1612,7 +1612,7 @@ class UniFlowVisionModel(PreTrainedModel):
             # Add pixel losses
             weighted_lpips_loss = 0.1 * flow_losses['lpips_loss']
             loss_dict['flow_loss'] = flow_losses['mse_loss']
-            loss_dict['lpips_loss'] = weighted_lpips_loss
+            loss_dict['lpips_loss'] = flow_losses['lpips_loss']
             total_loss = total_loss + flow_losses['mse_loss'] + weighted_lpips_loss
 
         loss_dict['loss'] = total_loss
