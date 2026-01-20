@@ -1301,7 +1301,7 @@ class UniFlowVisionModel(PreTrainedModel):
             logger.info("Init pos_embed from sincos pos_embed")
             pos_embed_spatial = get_2d_sincos_pos_embed(
                 self.global_block_pos_embed.shape[-1],
-                int(self.embeddings.num_patches**0.5),  # height or weight
+                self.image_size // self.patch_size,  # height or weight
             )
             self.global_block_pos_embed.data.copy_(
                 torch.from_numpy(pos_embed_spatial).float()
