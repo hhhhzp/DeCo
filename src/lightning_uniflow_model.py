@@ -18,7 +18,7 @@ from transformers import (
 from torchvision.transforms import Normalize
 from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from src.models.autoencoder.base import fp2uint8
-from src.models.uniflow.modeling_uniflow import ChannelProjector, UniFlowVisionModel
+from src.models.uniflow.modeling_uniflow import UniFlowVisionModel
 from src.models.uniflow.modeling_uniflow_dcae import UniFlowVisionModel_DCAE
 from src.models.uniflow.configuration_uniflow import UniFlowVisionConfig
 from src.callbacks.simple_ema import SimpleEMA
