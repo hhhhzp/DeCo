@@ -1289,13 +1289,13 @@ class UniFlowVisionModel(PreTrainedModel):
                 self.sem_latent_proj = nn.Sequential(
                     nn.Linear(256, 4 * vit_hidden_size),
                     nn.GELU(),
-                    nn.Linear(4 * vit_hidden_size, 2*vit_hidden_size),
+                    nn.Linear(4 * vit_hidden_size, 2 * vit_hidden_size),
                 )
 
             self.sem_global_blocks = nn.ModuleList(
                 [
                     FlattenDiTBlock(
-                        hidden_size=2*vit_hidden_size,
+                        hidden_size=2 * vit_hidden_size,
                         groups=32,
                         mlp_ratio=4.0,
                         is_causal=True,
@@ -1490,7 +1490,9 @@ class UniFlowVisionModel(PreTrainedModel):
         if self.enable_semantic_branch:
             # Step 3: Forward semantic decoder (training mode) using shared latent
             sem_reconstruction_losses, sem_tokens_pred = self.forward_semantic_decoder(
-                sem_tokens_target=F.layer_norm(sem_tokens, (sem_tokens.shape[-1],)),
+                sem_tokens_target=F.layer_norm(
+                    sem_tokens, (sem_tokens.shape[-1],), eps=0.0
+                ),
                 sem_latent_tokens=shared_latent_tokens,
                 training=True,
             )
