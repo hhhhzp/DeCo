@@ -1489,10 +1489,18 @@ class UniFlowVisionModel(PreTrainedModel):
         # ============================================================
         if self.enable_semantic_branch:
             # Step 3: Forward semantic decoder (training mode) using shared latent
-            sem_reconstruction_losses, sem_tokens_pred = self.forward_semantic_decoder(
-                sem_tokens_target=F.layer_norm(
+            if teacher_feat is not None:
+                sem_tokens_target = F.layer_norm(
+                    teacher_feat['vit_embeds'],
+                    (teacher_feat['vit_embeds'].shape[-1],),
+                    eps=0.0,
+                )
+            else:
+                sem_tokens_target = F.layer_norm(
                     sem_tokens, (sem_tokens.shape[-1],), eps=0.0
-                ),
+                )
+            sem_reconstruction_losses, sem_tokens_pred = self.forward_semantic_decoder(
+                sem_tokens_target=sem_tokens_target,
                 sem_latent_tokens=shared_latent_tokens,
                 training=True,
             )
@@ -1504,7 +1512,10 @@ class UniFlowVisionModel(PreTrainedModel):
                     sem_tokens_pred_after_mlp, teacher_feat['vit_embeds_mlp']
                 )
                 B, N, C = sem_tokens.shape
-                vit_distill_loss = F.mse_loss(sem_tokens.reshape(B, N, 4, C//4), teacher_feat['vit_embeds'].reshape(B, N, 4, C//4))
+                vit_distill_loss = F.mse_loss(
+                    sem_tokens,
+                    teacher_feat['vit_embeds'],
+                )
             else:
                 distill_loss = F.mse_loss(
                     sem_tokens_pred_after_mlp, sem_tokens_after_mlp
