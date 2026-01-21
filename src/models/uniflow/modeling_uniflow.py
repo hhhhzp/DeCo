@@ -1224,47 +1224,33 @@ class SimpleMLPAdaLN(nn.Module):
 #############################################################
 
 
-class CausalFrequencySplitter(nn.Module):
-    def __init__(self, channels, kernel_size=3, learnable=False):
+class AdaptiveFrequencySplitter(nn.Module):
+    def __init__(self, channels, kernel_size=5):
         super().__init__()
         self.kernel_size = kernel_size
-        # 左侧 Padding: kernel_size - 1
-        # 这样卷积输出的第 t 个点，只会看到 t, t-1, t-2...
         self.padding = kernel_size - 1
 
-        # 初始化一个平滑卷积核 (类似于均值滤波)
-        # 形状: [Out_C, In_C/Groups, K] -> [C, 1, K] (Depthwise Conv)
+        # 初始化固定权重的均值滤波器
+        # Shape: [C, 1, K] (Depthwise Convolution)
         weight = torch.ones(channels, 1, kernel_size) / kernel_size
-
-        if learnable:
-            self.filter = nn.Conv1d(
-                channels, channels, kernel_size, groups=channels, bias=False, padding=0
-            )
-            self.filter.weight.data = weight
-        else:
-            # 固定权重的均值滤波器
-            self.register_buffer('weight', weight)
+        self.register_buffer('weight', weight)
 
     def forward(self, x):
-        # x: [B, N, C]
-        x_perm = x.permute(0, 2, 1)  # -> [B, C, N]
+        """
+        x: [Batch, N, Channels]
+        return: z_low, z_high
+        """
+        x_perm = x.permute(0, 2, 1)
+        ones = torch.ones_like(x_perm)
+        x_padded = F.pad(x_perm, (self.padding, 0), mode='constant', value=0)
+        ones_padded = F.pad(ones, (self.padding, 0), mode='constant', value=0)
+        numerator = F.conv1d(x_padded, self.weight, groups=x.shape[2])
+        denominator = F.conv1d(ones_padded, self.weight, groups=x.shape[2])
+        z_low_perm = numerator / (denominator + 1e-6)
+        z_low = z_low_perm.permute(0, 2, 1)
+        z_high = x - z_low
 
-        # 1. 手动添加 Causal Padding (只在左边补0)
-        # F.pad 参数顺序: (左, 右, 上, 下...)
-        x_padded = F.pad(x_perm, (self.padding, 0))
-
-        # 2. 卷积 (低通滤波)
-        if hasattr(self, 'filter'):
-            z_low_t = self.filter(x_padded)
-        else:
-            z_low_t = F.conv1d(x_padded, self.weight, groups=x.shape[2])
-
-        z_low = z_low_t.permute(0, 2, 1)  # -> [B, N, C]
-
-        # 3. 高频 = 原始 - 低频
-        # z_high = x - z_low
-
-        return z_low
+        return z_low, z_high
 
 
 class UniFlowVisionModel(PreTrainedModel):
@@ -1359,7 +1345,9 @@ class UniFlowVisionModel(PreTrainedModel):
         # ============================================================
         if self.enable_semantic_branch:
             # Add CausalFrequencySplitter at the beginning of semantic branch
-            self.sem_freq_splitter = CausalFrequencySplitter(channels=256, kernel_size=5, learnable=False)
+            self.sem_freq_splitter = AdaptiveFrequencySplitter(
+                channels=256, kernel_size=5
+            )
 
             if self.use_chal_proj:
                 self.sem_latent_proj = nn.Sequential(
