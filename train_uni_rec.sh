@@ -24,6 +24,6 @@ export NODE_RANK=${NODE_RANK:-0}
 # export WANDB_RESUME=auto
 # export WANDB_RUN_ID=mjyvyry6
 
-python main.py fit -c  configs_flow/uniflow_internvit_2b_blip3o_rec_stage2.yaml \
+python main.py fit -c  configs_flow/uniflow_internvit_2b_blip3o_rec.yaml \
     --trainer.num_nodes=4 \
     --trainer.devices=8
