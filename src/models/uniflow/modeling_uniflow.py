@@ -1347,8 +1347,8 @@ class UniFlowVisionModel(PreTrainedModel):
             self.sem_flow_head = FlowDecoder(
                 target_channels=vit_hidden_size * 4,
                 z_channels=vit_hidden_size * 2,
-                width=config.vit_hidden_size,
-                depth=config.num_decoder_layers,
+                width=vit_hidden_size * 4,
+                depth=4,
                 num_sampling_steps=config.num_sampling_steps,
                 grad_checkpointing=False,
                 patch_size=1,
