@@ -1409,14 +1409,14 @@ class UniFlowVisionModel(PreTrainedModel):
     def _get_pos_embed(self, pos_embed, H, W):
         """Interpolate position embeddings to match spatial dimensions."""
         target_dtype = pos_embed.dtype
+        # Infer original spatial size from pos_embed shape
+        # pos_embed shape: [1, N, C] where N = orig_h * orig_w
+        N = pos_embed.shape[1]
+        orig_size = int(N ** 0.5)
+        
         pos_embed = (
             pos_embed.float()
-            .reshape(
-                1,
-                self.image_size // self.patch_size,
-                self.image_size // self.patch_size,
-                -1,
-            )
+            .reshape(1, orig_size, orig_size, -1)
             .permute(0, 3, 1, 2)
         )
         pos_embed = (
