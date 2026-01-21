@@ -1250,7 +1250,7 @@ class AdaptiveFrequencySplitter(nn.Module):
         z_low = z_low_perm.permute(0, 2, 1)
         z_high = x - z_low
 
-        return z_low, z_high
+        return z_low
 
 
 class UniFlowVisionModel(PreTrainedModel):
