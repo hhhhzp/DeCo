@@ -1299,8 +1299,8 @@ class UniFlowVisionModel(PreTrainedModel):
             self.flow_head = FlowDecoder(
                 target_channels=3 * self.patch_size * self.patch_size,
                 z_channels=config.vit_hidden_size,
-                width=2048,
-                depth=4,
+                width=config.vit_hidden_size,
+                depth=config.num_decoder_layers,
                 num_sampling_steps=config.num_sampling_steps,
                 grad_checkpointing=False,
                 patch_size=self.patch_size,
@@ -1412,12 +1412,10 @@ class UniFlowVisionModel(PreTrainedModel):
         # Infer original spatial size from pos_embed shape
         # pos_embed shape: [1, N, C] where N = orig_h * orig_w
         N = pos_embed.shape[1]
-        orig_size = int(N ** 0.5)
-        
+        orig_size = int(N**0.5)
+
         pos_embed = (
-            pos_embed.float()
-            .reshape(1, orig_size, orig_size, -1)
-            .permute(0, 3, 1, 2)
+            pos_embed.float().reshape(1, orig_size, orig_size, -1).permute(0, 3, 1, 2)
         )
         pos_embed = (
             F.interpolate(pos_embed, size=(H, W), mode='bicubic', align_corners=False)
