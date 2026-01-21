@@ -49,7 +49,7 @@ model:
       decay: 0.9999
 
   eval_original_model: true
-  frozen_encoder: true
+  frozen_encoder: false
   frozen_mlp: false
   
   optimizer:
