@@ -302,7 +302,7 @@ class LightningUniFlowModel(pl.LightningModule):
         if self.distill:
             lr_scheduler = get_cosine_with_min_lr_schedule_with_warmup(
                 optimizer,
-                num_warmup_steps=0,
+                num_warmup_steps=10000,
                 num_training_steps=200000,
                 min_lr=1e-5,
             )
