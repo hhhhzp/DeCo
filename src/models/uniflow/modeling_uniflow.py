@@ -1508,9 +1508,18 @@ class UniFlowVisionModel(PreTrainedModel):
             sem_tokens_pred = self.sem_flow_head(z=condition_tokens, pos=pos)
             return sem_tokens_pred
 
+    def noising(self, x: torch.Tensor, noise_tau) -> torch.Tensor:
+        noise_sigma = noise_tau * torch.rand(
+            (x.size(0),) + (1,) * (len(x.shape) - 1), device=x.device
+        )
+        noise = noise_sigma * torch.randn_like(x)
+        return x + noise
+
     def forward_pixel_decoder(
         self, latent_tokens, target_pixels=None, training=True, compute_lpips=True
     ):
+        if self.training:
+            latent_tokens = self.noising(latent_tokens, noise_tau=0.5)
         # Upsample latent tokens by 2x (N -> 4N)
         latent_tokens = upsample_tokens(latent_tokens, scale_factor=2)
         condition_tokens = self.gen_latent_proj(latent_tokens)
