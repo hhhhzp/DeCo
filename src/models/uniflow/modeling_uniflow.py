@@ -1347,7 +1347,7 @@ class UniFlowVisionModel(PreTrainedModel):
             self.sem_flow_head = FlowDecoder(
                 target_channels=vit_hidden_size * 4,
                 z_channels=vit_hidden_size * 2,
-                width=vit_hidden_size * 4,
+                width=2048,
                 depth=4,
                 num_sampling_steps=config.num_sampling_steps,
                 grad_checkpointing=False,
@@ -1390,21 +1390,19 @@ class UniFlowVisionModel(PreTrainedModel):
         return {}
 
     @lru_cache
-    def fetch_pos(self, height, width, patch_size, device):
-        orig_h = self.image_size // patch_size
-        orig_w = orig_h
-        scale_h = orig_h / height
-        scale_w = orig_w / width
-        scale = (scale_h, scale_w)
-        cache_key = (height, width, scale)
+    def fetch_pos(self, height, width, device, hidden_size=None):
+        """Fetch or compute RoPE position embeddings for given spatial dimensions"""
+        # Use vit_hidden_size by default for backward compatibility
+        if hidden_size is None:
+            hidden_size = self.config.vit_hidden_size
 
+        cache_key = (height, width, hidden_size)
         if cache_key in self.precompute_pos:
             return self.precompute_pos[cache_key].to(device)
         else:
-            head_dim = 64
-            pos = precompute_freqs_cis_2d(
-                dim=head_dim, height=height, width=width, scale=scale
-            ).to(device)
+            # Compute position embeddings based on head_dim
+            head_dim = 64  # num_heads=16
+            pos = precompute_freqs_cis_2d(head_dim, height, width).to(device)
             self.precompute_pos[cache_key] = pos
             return pos
 
@@ -1487,11 +1485,12 @@ class UniFlowVisionModel(PreTrainedModel):
         pos_embed = self._get_pos_embed(self.sem_global_block_pos_embed, grid, grid)
         condition_tokens = condition_tokens + pos_embed
 
+        # Get RoPE position embeddings
         pos = self.fetch_pos(
             grid,
             grid,
-            2 * self.patch_size,
             condition_tokens.device,
+            hidden_size=C,
         )
 
         for block in self.sem_global_blocks:
@@ -1521,7 +1520,7 @@ class UniFlowVisionModel(PreTrainedModel):
         pos_embed = self._get_pos_embed(self.global_block_pos_embed, grid, grid)
         condition_tokens = condition_tokens + pos_embed
 
-        pos = self.fetch_pos(grid, grid, self.patch_size, condition_tokens.device)
+        pos = self.fetch_pos(grid, grid, condition_tokens.device, hidden_size=C)
         for block in self.global_blocks:
             condition_tokens = block(condition_tokens, pos)
 

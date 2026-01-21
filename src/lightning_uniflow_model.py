@@ -173,8 +173,7 @@ class LightningUniFlowModel(pl.LightningModule):
             msg = self.model.shallow_encoder.load_state_dict(
                 model.vision_model.encoder.state_dict(), strict=False
             )
-            if self.global_rank == 0:
-                print(f"Loaded shallow_encoder from {pretrained_model_path}: {msg}")
+            print(f"Loaded shallow_encoder from {pretrained_model_path}: {msg}")
             self.model.shallow_embeddings.load_state_dict(
                 model.vision_model.embeddings.state_dict()
             )
