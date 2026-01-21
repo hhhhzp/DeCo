@@ -1224,6 +1224,49 @@ class SimpleMLPAdaLN(nn.Module):
 #############################################################
 
 
+class CausalFrequencySplitter(nn.Module):
+    def __init__(self, channels, kernel_size=3, learnable=False):
+        super().__init__()
+        self.kernel_size = kernel_size
+        # 左侧 Padding: kernel_size - 1
+        # 这样卷积输出的第 t 个点，只会看到 t, t-1, t-2...
+        self.padding = kernel_size - 1
+
+        # 初始化一个平滑卷积核 (类似于均值滤波)
+        # 形状: [Out_C, In_C/Groups, K] -> [C, 1, K] (Depthwise Conv)
+        weight = torch.ones(channels, 1, kernel_size) / kernel_size
+
+        if learnable:
+            self.filter = nn.Conv1d(
+                channels, channels, kernel_size, groups=channels, bias=False, padding=0
+            )
+            self.filter.weight.data = weight
+        else:
+            # 固定权重的均值滤波器
+            self.register_buffer('weight', weight)
+
+    def forward(self, x):
+        # x: [B, N, C]
+        x_perm = x.permute(0, 2, 1)  # -> [B, C, N]
+
+        # 1. 手动添加 Causal Padding (只在左边补0)
+        # F.pad 参数顺序: (左, 右, 上, 下...)
+        x_padded = F.pad(x_perm, (self.padding, 0))
+
+        # 2. 卷积 (低通滤波)
+        if hasattr(self, 'filter'):
+            z_low_t = self.filter(x_padded)
+        else:
+            z_low_t = F.conv1d(x_padded, self.weight, groups=x.shape[2])
+
+        z_low = z_low_t.permute(0, 2, 1)  # -> [B, N, C]
+
+        # 3. 高频 = 原始 - 低频
+        # z_high = x - z_low
+
+        return z_low
+
+
 class UniFlowVisionModel(PreTrainedModel):
     main_input_name = 'pixel_values'
     config_class = UniFlowVisionConfig
@@ -1315,6 +1358,9 @@ class UniFlowVisionModel(PreTrainedModel):
         # Semantic Reconstruction Branch
         # ============================================================
         if self.enable_semantic_branch:
+            # Add CausalFrequencySplitter at the beginning of semantic branch
+            self.sem_freq_splitter = CausalFrequencySplitter(channels=256, kernel_size=5, learnable=False)
+
             if self.use_chal_proj:
                 self.sem_latent_proj = nn.Sequential(
                     nn.Linear(256, 4 * vit_hidden_size),
@@ -1475,6 +1521,9 @@ class UniFlowVisionModel(PreTrainedModel):
     def forward_semantic_decoder(
         self, sem_tokens_target, sem_latent_tokens, training=True
     ):
+        # Apply CausalFrequencySplitter at the beginning
+        sem_latent_tokens = self.sem_freq_splitter(sem_latent_tokens)
+
         condition_tokens = self.sem_latent_proj(sem_latent_tokens)
 
         # Step 3: Apply sem_global_blocks with position embeddings
