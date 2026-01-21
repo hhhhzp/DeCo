@@ -1224,33 +1224,6 @@ class SimpleMLPAdaLN(nn.Module):
 #############################################################
 
 
-class AdaptiveFrequencySplitter(nn.Module):
-    def __init__(self, channels, kernel_size=5):
-        super().__init__()
-        self.kernel_size = kernel_size
-        self.padding = kernel_size - 1
-
-        # 初始化固定权重的均值滤波器
-        # Shape: [C, 1, K] (Depthwise Convolution)
-        weight = torch.ones(channels, 1, kernel_size) / kernel_size
-        self.register_buffer('weight', weight)
-
-    def forward(self, x):
-        """
-        x: [Batch, N, Channels]
-        return: z_low, z_high
-        """
-        x_perm = x.permute(0, 2, 1)
-        ones = torch.ones_like(x_perm)
-        x_padded = F.pad(x_perm, (self.padding, 0), mode='constant', value=0)
-        ones_padded = F.pad(ones, (self.padding, 0), mode='constant', value=0)
-        numerator = F.conv1d(x_padded, self.weight, groups=x.shape[2])
-        denominator = F.conv1d(ones_padded, self.weight, groups=x.shape[2])
-        z_low_perm = numerator / denominator
-        z_low = z_low_perm.permute(0, 2, 1)
-        return z_low
-
-
 class UniFlowVisionModel(PreTrainedModel):
     main_input_name = 'pixel_values'
     config_class = UniFlowVisionConfig
@@ -1326,8 +1299,8 @@ class UniFlowVisionModel(PreTrainedModel):
             self.flow_head = FlowDecoder(
                 target_channels=3 * self.patch_size * self.patch_size,
                 z_channels=config.vit_hidden_size,
-                width=2048,
-                depth=4,
+                width=config.vit_hidden_size,
+                depth=config.num_decoder_layers,
                 num_sampling_steps=config.num_sampling_steps,
                 grad_checkpointing=False,
                 patch_size=self.patch_size,
@@ -1342,11 +1315,6 @@ class UniFlowVisionModel(PreTrainedModel):
         # Semantic Reconstruction Branch
         # ============================================================
         if self.enable_semantic_branch:
-            # Add CausalFrequencySplitter at the beginning of semantic branch
-            self.sem_freq_splitter = AdaptiveFrequencySplitter(
-                channels=256, kernel_size=5
-            )
-
             if self.use_chal_proj:
                 self.sem_latent_proj = nn.Sequential(
                     nn.Linear(256, 4 * vit_hidden_size),
@@ -1379,8 +1347,8 @@ class UniFlowVisionModel(PreTrainedModel):
             self.sem_flow_head = FlowDecoder(
                 target_channels=vit_hidden_size * 4,
                 z_channels=vit_hidden_size * 2,
-                width=2048,
-                depth=4,
+                width=config.vit_hidden_size,
+                depth=config.num_decoder_layers,
                 num_sampling_steps=config.num_sampling_steps,
                 grad_checkpointing=False,
                 patch_size=1,
@@ -1509,9 +1477,6 @@ class UniFlowVisionModel(PreTrainedModel):
     def forward_semantic_decoder(
         self, sem_tokens_target, sem_latent_tokens, training=True
     ):
-        # Apply CausalFrequencySplitter at the beginning
-        sem_latent_tokens = self.sem_freq_splitter(sem_latent_tokens)
-
         condition_tokens = self.sem_latent_proj(sem_latent_tokens)
 
         # Step 3: Apply sem_global_blocks with position embeddings
@@ -1522,7 +1487,6 @@ class UniFlowVisionModel(PreTrainedModel):
         pos_embed = self._get_pos_embed(self.sem_global_block_pos_embed, grid, grid)
         condition_tokens = condition_tokens + pos_embed
 
-        # Get RoPE position embeddings
         pos = self.fetch_pos(
             grid,
             grid,
