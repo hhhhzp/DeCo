@@ -1049,8 +1049,8 @@ class FinalLayer(nn.Module):
 
 class LatentProjector(nn.Module):
     """
-    Latent projector using ResBlock*3 + FinalLayer structure (without condition gate).
-    Projects from 4*vit_hidden_size to latent_ch (256).
+    Latent projector using ResBlock*3 + FinalLayer structure (with condition gate).
+    Projects from vit_hidden_size to latent_ch (256) after pixel shuffle.
     """
 
     def __init__(self, in_channels, out_channels, num_res_blocks=3):
@@ -1061,13 +1061,20 @@ class LatentProjector(nn.Module):
         # Input projection to intermediate dimension
         self.input_proj = nn.Linear(in_channels, in_channels)
 
-        # Residual blocks without gate
+        # Condition projection (for shallow encoder hidden states)
+        self.cond_proj = nn.Linear(in_channels, in_channels)
+
+        # Residual blocks with gate (use_gate=True)
         self.res_blocks = nn.ModuleList(
-            [ResBlock(in_channels, use_gate=False) for _ in range(num_res_blocks)]
+            [ResBlock(in_channels, use_gate=True) for _ in range(num_res_blocks)]
         )
 
-        # Final projection layer without gate
-        self.final_layer = FinalLayer(in_channels, out_channels, use_gate=False)
+        # Final projection layer with gate
+        self.final_layer = FinalLayer(in_channels, in_channels, use_gate=True)
+
+        # After pixel shuffle, the channel dimension will be in_channels * 4
+        # Then we project it down to out_channels (256)
+        self.post_shuffle_proj = nn.Linear(in_channels * 4, out_channels)
 
         self.initialize_weights()
 
@@ -1080,21 +1087,38 @@ class LatentProjector(nn.Module):
 
         self.apply(_basic_init)
 
+        # Zero-out adaLN modulation layers in ResBlocks
+        for block in self.res_blocks:
+            nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
+            nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
+
         # Zero-out final layer for stable training
+        nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
+        nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
         nn.init.constant_(self.final_layer.linear.weight, 0)
         nn.init.constant_(self.final_layer.linear.bias, 0)
 
-    def forward(self, x):
+    def forward(self, x, condition):
         """
         Args:
-            x: [B, N, in_channels] input tokens
+            x: [B, N, in_channels] input tokens from encoder
+            condition: [B, N, in_channels] condition tokens from shallow encoder
         Returns:
-            x: [B, N, out_channels] projected tokens
+            x: [B, N', out_channels] projected tokens after pixel shuffle and projection
         """
         x = self.input_proj(x)
+        c = self.cond_proj(condition)
+
         for block in self.res_blocks:
-            x = block(x)  # No need to pass y and pos since use_gate=False
-        x = self.final_layer(x)  # No need to pass c since use_gate=False
+            x = block(x, y=c)  # Pass condition as y
+        x = self.final_layer(x, c=c)  # Pass condition as c
+
+        # Apply pixel shuffle: downsample by 0.5 (N -> N/4, C -> C*4)
+        x = downsample_tokens(x, scale_factor=0.5)
+
+        # Project down to out_channels (256)
+        x = self.post_shuffle_proj(x)
+
         return x
 
 
@@ -1218,6 +1242,10 @@ class UniFlowVisionModel(PreTrainedModel):
         # vit encoder (shared by both branches)
         self.embeddings = UniFlowVisionEmbeddings(config)
         self.encoder = UniFlowVisionEncoder(config)
+
+        config.num_hidden_layers = 4
+        self.shallow_embeddings = UniFlowVisionEmbeddings(config)
+        self.shallow_encoder = UniFlowVisionEncoder(config)
         self.mlp1 = nn.Sequential(
             nn.LayerNorm(vit_hidden_size * int(1 / 0.5) ** 2),
             nn.Linear(vit_hidden_size * int(1 / 0.5) ** 2, llm_hidden_size),
@@ -1233,9 +1261,9 @@ class UniFlowVisionModel(PreTrainedModel):
         if self.use_chal_proj:
             # Unified latent projection from sem_tokens using ResBlock*3 + FinalLayer
             self.shared_latent_proj = LatentProjector(
-                in_channels=4 * vit_hidden_size,
+                in_channels=vit_hidden_size,
                 out_channels=256,
-                num_res_blocks=2,
+                num_res_blocks=3,
             )
 
         # ============================================================
@@ -1375,7 +1403,7 @@ class UniFlowVisionModel(PreTrainedModel):
         return pos_embed
 
     # ============================================================
-    # Step 1: Forward Encoder
+    # Step 1: Forward Encoder (with latent encoding)
     # ============================================================
     def forward_encoder(self, pixel_values, normalize_type='siglip'):
         assert pixel_values.ndim == 4, f'wrong pixel_values size: {pixel_values.shape}'
@@ -1387,32 +1415,36 @@ class UniFlowVisionModel(PreTrainedModel):
             )
         else:
             x = pixel_values
-        x = self.embeddings(x)
 
-        # Step 1.2: Extract features from encoder
+        # Step 1.2: Get shallow encoder features (for condition)
+        shallow_x = self.shallow_embeddings(x)
+        shallow_encoder_outputs = self.shallow_encoder(
+            inputs_embeds=shallow_x,
+            output_hidden_states=False,
+        )
+        shallow_hidden_state = shallow_encoder_outputs.last_hidden_state[:, 1:]
+        # Step 1.3: Get main encoder features
+        x = self.embeddings(x)
         encoder_outputs = self.encoder(
             inputs_embeds=x,
             output_hidden_states=False,
         )
 
-        # Step 1.3: Get semantic tokens from last layer and apply pixel_shuffle
+        # Step 1.4: Get semantic tokens from last layer
         sem_tokens = encoder_outputs.last_hidden_state[:, 1:]  # Remove CLS token
-        sem_tokens = downsample_tokens(sem_tokens, scale_factor=0.5)
 
-        # Step 1.4: Apply mlp1 for distillation loss computation
-        sem_tokens_after_mlp = self.mlp1(sem_tokens)
-
-        return sem_tokens, sem_tokens_after_mlp
-
-    # ============================================================
-    # Step 2: Encode Latent
-    # ============================================================
-    def encode_latent(self, sem_tokens):
-        shared_latent_tokens = self.shared_latent_proj(sem_tokens)
+        # Step 1.5: Apply LatentProjector with condition from shallow encoder
+        # This includes: ResBlocks with gate -> pixel shuffle -> linear projection to 256
+        shared_latent_tokens = self.shared_latent_proj(sem_tokens, shallow_hidden_state)
         shared_latent_tokens = F.layer_norm(
             shared_latent_tokens, (shared_latent_tokens.shape[-1],)
         )
-        return shared_latent_tokens
+
+        # Step 1.6: Downsample sem_tokens for distillation loss computation
+        sem_tokens_downsampled = downsample_tokens(sem_tokens, scale_factor=0.5)
+        sem_tokens_after_mlp = self.mlp1(sem_tokens_downsampled)
+
+        return sem_tokens_downsampled, sem_tokens_after_mlp, shared_latent_tokens
 
     # ============================================================
     # Step 3: Forward Semantic Decoder
@@ -1474,11 +1506,10 @@ class UniFlowVisionModel(PreTrainedModel):
             return reconstructed_image
 
     def forward_loss(self, target_pixel_values, teacher_feat=None):
-        # Step 1: Forward encoder
-        sem_tokens, sem_tokens_after_mlp = self.forward_encoder(target_pixel_values)
-
-        # Step 2: Encode to shared latent space
-        shared_latent_tokens = self.encode_latent(sem_tokens)
+        # Step 1: Forward encoder (includes latent encoding)
+        sem_tokens, sem_tokens_after_mlp, shared_latent_tokens = self.forward_encoder(
+            target_pixel_values
+        )
 
         # Initialize loss dict
         loss_dict = {}
@@ -1569,13 +1600,10 @@ class UniFlowVisionModel(PreTrainedModel):
                 "Semantic reconstruction branch is disabled. Cannot perform inference in semantic mode."
             )
 
-        # Step 1: Forward encoder
-        sem_tokens, sem_tokens_after_mlp = self.forward_encoder(
+        # Step 1: Forward encoder (includes latent encoding)
+        sem_tokens, sem_tokens_after_mlp, shared_latent_tokens = self.forward_encoder(
             pixel_values, normalize_type=normalize_type
         )
-
-        # Step 2: Encode to shared latent space
-        shared_latent_tokens = self.encode_latent(sem_tokens)
 
         # ============================================================
         # Pixel Generation Mode
