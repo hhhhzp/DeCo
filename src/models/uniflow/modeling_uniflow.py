@@ -1500,17 +1500,25 @@ class UniFlowVisionModel(PreTrainedModel):
             # Calculate distillation loss
             sem_tokens_pred_after_mlp = self.mlp1(sem_tokens_pred)
             if teacher_feat is not None:
-                distill_loss = F.mse_loss(sem_tokens_pred_after_mlp, teacher_feat)
+                distill_loss = F.mse_loss(
+                    sem_tokens_pred_after_mlp, teacher_feat['vit_embeds_mlp']
+                )
+                B, N, C = sem_tokens.shape
+                vit_distill_loss = F.mse_loss(sem_tokens.reshape(B, N, 4, C//4), teacher_feat['vit_embeds'].reshape(B, N, 4, C//4))
             else:
                 distill_loss = F.mse_loss(
                     sem_tokens_pred_after_mlp, sem_tokens_after_mlp
                 )
+                vit_distill_loss = torch.tensor(0.0)
 
             # Add semantic losses
             weighted_sem_mse_loss = sem_reconstruction_losses['mse_loss']
             loss_dict['distill_loss'] = distill_loss
+            loss_dict['vit_distill_loss'] = vit_distill_loss
             loss_dict['sem_mse_loss'] = weighted_sem_mse_loss
-            total_loss = total_loss + distill_loss + weighted_sem_mse_loss
+            total_loss = (
+                total_loss + distill_loss + weighted_sem_mse_loss + vit_distill_loss
+            )
 
         # ============================================================
         # Pixel Generation Branch Loss
