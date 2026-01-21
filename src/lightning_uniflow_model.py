@@ -524,5 +524,5 @@ class LightweightTeacherModel(nn.Module):
         vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], h, w, -1)
         vit_embeds = self.pixel_shuffle(vit_embeds, scale_factor=self.downsample_ratio)
         vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], -1, vit_embeds.shape[-1])
-        vit_embeds = self.mlp1(vit_embeds)
-        return vit_embeds
+        vit_embeds_mlp = self.mlp1(vit_embeds)
+        return {"vit_embeds": vit_embeds, "vit_embeds_mlp": vit_embeds_mlp}

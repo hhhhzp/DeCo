@@ -21,10 +21,9 @@ export NNODES=4
 export NGPUS_PER_NODE=8
 export NODE_RANK=${NODE_RANK:-0}
 
-export WANDB_RESUME=auto
-export WANDB_RUN_ID=mjyvyry6
+# export WANDB_RESUME=auto
+# export WANDB_RUN_ID=mjyvyry6
 
-python main.py fit -c  configs_flow/uniflow_internvit_2b_blip3o_rec.yaml \
+python main.py fit -c  configs_flow/uniflow_internvit_2b_blip3o_rec_stage2.yaml \
     --trainer.num_nodes=4 \
-    --trainer.devices=8 \
-    --ckpt_path=dual_internvit_2b/exp_sem_gen_c256/epoch=0-step=7500.ckpt
+    --trainer.devices=8
