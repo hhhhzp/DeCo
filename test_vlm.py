@@ -33,7 +33,10 @@ with torch.no_grad():
         return_distill_loss=True,
     )
 
-# distill_loss shape: [1, N, C]
+# distill_loss shape: [1, N, C], dtype: bfloat16
+# Convert to float32 for better precision in calculations
+distill_loss = distill_loss.float()
+
 # Average over C dimension to get [1, N]
 loss_per_position = distill_loss.mean(dim=-1).squeeze(0).cpu().numpy()  # [N]
 
