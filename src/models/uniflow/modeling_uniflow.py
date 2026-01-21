@@ -1246,10 +1246,8 @@ class AdaptiveFrequencySplitter(nn.Module):
         ones_padded = F.pad(ones, (self.padding, 0), mode='constant', value=0)
         numerator = F.conv1d(x_padded, self.weight, groups=x.shape[2])
         denominator = F.conv1d(ones_padded, self.weight, groups=x.shape[2])
-        z_low_perm = numerator / (denominator + 1e-6)
+        z_low_perm = numerator / denominator
         z_low = z_low_perm.permute(0, 2, 1)
-        z_high = x - z_low
-
         return z_low
 
 
