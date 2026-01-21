@@ -766,12 +766,13 @@ class FlowDecoder(nn.Module):
         else:
             self.lpips_loss = None
 
-    def forward_train(self, x1, z, pos):
+    def forward_train(self, x1, z, pos, compute_lpips=True):
         """
         Training forward pass for flow matching.
         Args:
             x1: target clean data [B, N, C] where C = target_channels
             z: condition from encoder [B, N, C_z]
+            compute_lpips: whether to compute lpips loss (controlled by training step)
         Returns:
             dict: loss components including mse_loss and lpips_loss
         """
@@ -815,8 +816,9 @@ class FlowDecoder(nn.Module):
         # Compute MSE loss on velocity
         mse_loss = F.mse_loss(v_pred, v_target)
         x1_pred = x_t + (1 - t_expanded) * v_pred
-        # Compute LPIPS loss only if use_lpips is True
-        if self.use_lpips:
+
+        # Compute LPIPS loss only if use_lpips is True AND compute_lpips is True
+        if self.use_lpips and compute_lpips:
             # Derive predicted x1 from predicted velocity
             # From flow matching: x_t = t * x1 + (1 - t) * x0
             # And v = x1 - x0
@@ -1320,6 +1322,17 @@ class UniFlowVisionModel(PreTrainedModel):
                     nn.Linear(4 * vit_hidden_size, 2 * vit_hidden_size),
                 )
 
+            # Position embedding for semantic branch (spatial size is 1/4 of pixel branch)
+            # Pixel branch: (image_size // patch_size) ** 2 = 16 ** 2 = 256
+            # Semantic branch: 256 / 4 = 64 (8 x 8)
+            self.sem_global_block_pos_embed = nn.Parameter(
+                torch.randn(
+                    1,
+                    (self.image_size // self.patch_size // 2) ** 2,
+                    2 * vit_hidden_size,
+                )
+            )
+
             self.sem_global_blocks = nn.ModuleList(
                 [
                     FlattenDiTBlock(
@@ -1349,13 +1362,25 @@ class UniFlowVisionModel(PreTrainedModel):
 
         # init params
         if self.enable_pixel_branch:
-            logger.info("Init pos_embed from sincos pos_embed")
+            logger.info("Init pixel branch pos_embed from sincos pos_embed")
             pos_embed_spatial = get_2d_sincos_pos_embed(
                 self.global_block_pos_embed.shape[-1],
                 self.image_size // self.patch_size,  # height or weight
             )
             self.global_block_pos_embed.data.copy_(
                 torch.from_numpy(pos_embed_spatial).float()
+            )
+
+        if self.enable_semantic_branch:
+            logger.info("Init semantic branch pos_embed from sincos pos_embed")
+            sem_pos_embed_spatial = get_2d_sincos_pos_embed(
+                self.sem_global_block_pos_embed.shape[-1],
+                self.image_size
+                // self.patch_size
+                // 2,  # spatial size is half of pixel branch
+            )
+            self.sem_global_block_pos_embed.data.copy_(
+                torch.from_numpy(sem_pos_embed_spatial).float()
             )
 
         # Initialize RoPE position cache for FlattenDiTBlock
@@ -1457,6 +1482,12 @@ class UniFlowVisionModel(PreTrainedModel):
         # Step 3: Apply sem_global_blocks with position embeddings
         B, N, C = condition_tokens.shape
         grid = int(N**0.5)
+
+        # Add learnable position embedding (similar to pixel branch)
+        pos_embed = self._get_pos_embed(self.sem_global_block_pos_embed, grid, grid)
+        condition_tokens = condition_tokens + pos_embed
+
+        # Get RoPE position embeddings
         pos = self.fetch_pos(
             grid,
             grid,
@@ -1479,7 +1510,9 @@ class UniFlowVisionModel(PreTrainedModel):
             sem_tokens_pred = self.sem_flow_head(z=condition_tokens, pos=pos)
             return sem_tokens_pred
 
-    def forward_pixel_decoder(self, latent_tokens, target_pixels=None, training=True):
+    def forward_pixel_decoder(
+        self, latent_tokens, target_pixels=None, training=True, compute_lpips=True
+    ):
         # Upsample latent tokens by 2x (N -> 4N)
         latent_tokens = upsample_tokens(latent_tokens, scale_factor=2)
         condition_tokens = self.gen_latent_proj(latent_tokens)
@@ -1497,7 +1530,10 @@ class UniFlowVisionModel(PreTrainedModel):
             # Training: compute flow matching loss
             target_latent = p2l_transform_tensor(target_pixels, self.patch_size)
             flow_losses = self.flow_head.forward_train(
-                x1=target_latent, z=condition_tokens, pos=pos
+                x1=target_latent,
+                z=condition_tokens,
+                pos=pos,
+                compute_lpips=compute_lpips,
             )
             return flow_losses
         else:
@@ -1505,7 +1541,7 @@ class UniFlowVisionModel(PreTrainedModel):
             reconstructed_image = self.flow_head(z=condition_tokens, pos=pos)
             return reconstructed_image
 
-    def forward_loss(self, target_pixel_values, teacher_feat=None):
+    def forward_loss(self, target_pixel_values, teacher_feat=None, compute_lpips=True):
         # Step 1: Forward encoder (includes latent encoding)
         sem_tokens, sem_tokens_after_mlp, shared_latent_tokens = self.forward_encoder(
             target_pixel_values
@@ -1571,10 +1607,11 @@ class UniFlowVisionModel(PreTrainedModel):
                 latent_tokens=shared_latent_tokens,
                 target_pixels=target_pixel_values,
                 training=True,
+                compute_lpips=compute_lpips,
             )
 
             # Add pixel losses
-            weighted_lpips_loss = 0.1 * flow_losses['lpips_loss']
+            weighted_lpips_loss = flow_losses['lpips_loss']
             loss_dict['flow_loss'] = flow_losses['mse_loss']
             loss_dict['lpips_loss'] = flow_losses['lpips_loss']
             total_loss = total_loss + flow_losses['mse_loss'] + weighted_lpips_loss

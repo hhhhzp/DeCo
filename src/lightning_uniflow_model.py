@@ -356,7 +356,14 @@ class LightningUniFlowModel(pl.LightningModule):
                 teacher_feat = self.teacher_model.extract_feature(teacher_img)
         else:
             teacher_feat = None
-        loss_dict = self.model.forward_loss(img, teacher_feat=teacher_feat)
+
+        # Determine whether to compute lpips_loss based on training step
+        # Start computing lpips_loss after 10000 steps
+        compute_lpips = self.global_step >= 10000
+
+        loss_dict = self.model.forward_loss(
+            img, teacher_feat=teacher_feat, compute_lpips=compute_lpips
+        )
 
         # Compute total loss
         total_loss = loss_dict["loss"]
