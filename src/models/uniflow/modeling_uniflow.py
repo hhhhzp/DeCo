@@ -256,7 +256,7 @@ class Attention(nn.Module):
         ).contiguous()  # B, H, N, Hc
         v = v.view(B, self.num_heads, -1, C // self.num_heads).contiguous()
 
-        x = attention(q, k, v, is_causal=self.is_causal)
+        x = F.scaled_dot_product_attention(q, k, v, is_causal=self.is_causal)
         x = x.transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
