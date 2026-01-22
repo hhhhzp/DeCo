@@ -54,11 +54,9 @@ state_dict = torch.load(
     map_location='cpu',
 )['state_dict']
 
-# Process state dict in one pass - separate into vision_model and mlp1 for both model and ema_model
-vision_model_dict = {}
-mlp1_dict = {}
-vision_ema_dict = {}
-mlp1_ema_dict = {}
+# Process state dict in one pass - separate into model and ema_model
+vision_model_dict = {}  # For model (including vision_model and mlp1)
+vision_ema_dict = {}  # For ema_model (including vision_model and mlp1)
 
 for key, value in state_dict.items():
     if any(pattern in key for pattern in SKIP_KEY_PATTERNS):
@@ -78,6 +76,7 @@ for key, value in state_dict.items():
     new_key = new_key.replace('.module.', '.')
     new_key = new_key.replace('._orig_mod.', '.')
 
+    # Store all parameters (including mlp1)
     if is_ema:
         vision_ema_dict[new_key] = value
     else:
@@ -105,15 +104,19 @@ def copy_additional_files(src_dir, dst_dir, files_list):
 
 
 # Helper function to load and save model
-def load_and_save_model(model, vision_dict, mlp1_dict, output_path, model_type="Model"):
+def load_and_save_model(model, vision_dict, output_path, model_type="Model"):
     """Load vision_model and mlp1, then save to output_path"""
     print(f"\n{'='*50}")
     print(f"Loading {model_type}...")
     print(f"{'='*50}")
 
-    # Load vision_model
+    # Load vision_model (mlp1 will be loaded from the same dict)
     msg_vision = model.vision_model.load_state_dict(vision_dict)
     print(f"{model_type} vision_model load result:", msg_vision)
+
+    # Load mlp1 from the same dict
+    msg_mlp1 = model.mlp1.load_state_dict(vision_dict)
+    print(f"{model_type} mlp1 load result:", msg_mlp1)
 
     # Save model
     model.save_pretrained(output_path)
@@ -130,7 +133,7 @@ def load_and_save_model(model, vision_dict, mlp1_dict, output_path, model_type="
 
 
 # Save model version
-load_and_save_model(model, vision_model_dict, mlp1_dict, OUTPUT_MODEL_PATH, "Model")
+load_and_save_model(model, vision_model_dict, OUTPUT_MODEL_PATH, "Model")
 
 # Save ema_model version
-load_and_save_model(model, vision_ema_dict, mlp1_ema_dict, OUTPUT_EMA_PATH, "EMA Model")
+load_and_save_model(model, vision_ema_dict, OUTPUT_EMA_PATH, "EMA Model")
