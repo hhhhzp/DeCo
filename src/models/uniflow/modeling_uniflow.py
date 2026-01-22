@@ -1518,8 +1518,8 @@ class UniFlowVisionModel(PreTrainedModel):
     def forward_pixel_decoder(
         self, latent_tokens, target_pixels=None, training=True, compute_lpips=True
     ):
-        if self.training:
-            latent_tokens = self.noising(latent_tokens, noise_tau=0.5)
+        # if self.training:
+        #     latent_tokens = self.noising(latent_tokens, noise_tau=0.5)
         # Upsample latent tokens by 2x (N -> 4N)
         latent_tokens = upsample_tokens(latent_tokens, scale_factor=2)
         condition_tokens = self.gen_latent_proj(latent_tokens)
