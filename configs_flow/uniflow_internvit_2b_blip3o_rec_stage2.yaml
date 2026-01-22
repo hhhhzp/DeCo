@@ -55,12 +55,12 @@ model:
   optimizer:
     class_path: torch.optim.AdamW
     init_args:
-      lr: 2e-4
+      lr: 1e-4
       weight_decay: 0.0
       betas: [0.9, 0.95]
   # Pretrained model path
   distill: true
-  pretrain_model_path: dual_internvit_2b/exp_sem_gen_c256/epoch=2-step=75000.ckpt
+  pretrain_model_path: dual_internvit_2b/exp_sem_gen_gate_c256_new_448px_noise_tau0.5/epoch=1-step=60000.ckpt
 
 data:
   train_dataset:
