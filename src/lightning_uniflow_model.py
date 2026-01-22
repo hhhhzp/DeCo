@@ -359,7 +359,7 @@ class LightningUniFlowModel(pl.LightningModule):
 
         # Determine whether to compute lpips_loss based on training step
         # Start computing lpips_loss after 10000 steps
-        compute_lpips = self.global_step >= 10000
+        compute_lpips = self.global_step >= 0
 
         loss_dict = self.model.forward_loss(
             img, teacher_feat=teacher_feat, compute_lpips=compute_lpips
