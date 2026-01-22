@@ -116,7 +116,7 @@ def load_and_save_model(model, vision_dict, mlp1_dict, output_path, model_type="
     msg_vision = model.vision_model.load_state_dict(vision_dict)
     print(f"{model_type} vision_model load result:", msg_vision)
 
-    msg_mlp1 = model.mlp1.load_state_dict(model.vision_model.state_dict())
+    msg_mlp1 = model.mlp1.load_state_dict(model.vision_model.mlp1.state_dict())
     print(f"{model_type} mlp1 load result:", msg_mlp1)
 
     # Save model
