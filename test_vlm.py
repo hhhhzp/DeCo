@@ -3,7 +3,7 @@ import torch
 
 model = (
     AutoModel.from_pretrained(
-        "exp_sem_layer4_r14_mlp_c32_c256_norm/InternVL3-2B-step95000",
+        "/apdcephfs_sh2/share_300000800/user/leike/interns/zhenpeng/project/DeCo/exp_sem_gen_gate_c256_new_stage2_448px/InternVL3-2B-step35000-model",
         dtype=torch.bfloat16,
         trust_remote_code=True,
     )

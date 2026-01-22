@@ -134,28 +134,3 @@ load_and_save_model(model, vision_model_dict, mlp1_dict, OUTPUT_MODEL_PATH, "Mod
 
 # Save ema_model version
 load_and_save_model(model, vision_ema_dict, mlp1_ema_dict, OUTPUT_EMA_PATH, "EMA Model")
-
-# Evaluate semantic reconstruction quality
-print("\nEvaluating semantic reconstruction quality...")
-from PIL import Image
-import torchvision.transforms as transforms
-
-# Load and preprocess the image
-image = Image.open(TEST_IMAGE_PATH).convert("RGB")
-transform = transforms.Compose(
-    [
-        transforms.Resize(IMAGE_SIZE),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=NORMALIZE_MEAN, std=NORMALIZE_STD),
-    ]
-)
-image_tensor = transform(image).unsqueeze(0).to(MODEL_DTYPE)
-
-with torch.no_grad():
-    sem_tokens, distill_loss = model.vision_model(
-        image_tensor,
-        mode='semantic',
-        normalize_type='imagenet',
-        return_distill_loss=True,
-    )
-print(f"Distill Loss: {distill_loss.item():.6f}")
