@@ -116,6 +116,7 @@ def copy_additional_files(src_dir, dst_dir, files_list):
 # Helper function to load and save model
 def load_and_save_model(model, vision_dict, mlp1_dict, output_path, model_type="Model"):
     """Load vision_model and mlp1, then save to output_path"""
+    print(mlp1_dict)
     print(f"\n{'='*50}")
     print(f"Loading {model_type}...")
     print(f"{'='*50}")
