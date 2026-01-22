@@ -79,7 +79,7 @@ for key, value in state_dict.items():
     new_key = new_key.replace('._orig_mod.', '.')
 
     # Categorize into vision_model or mlp1
-    if '.mlp1.' in new_key:
+    if new_key.startswith('mlp1.') or '.mlp1.' in new_key:
         # Keep the full key including mlp1 prefix for now
         if is_ema:
             mlp1_ema_dict[new_key] = value
