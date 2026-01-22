@@ -78,19 +78,10 @@ for key, value in state_dict.items():
     new_key = new_key.replace('.module.', '.')
     new_key = new_key.replace('._orig_mod.', '.')
 
-    # Categorize into vision_model or mlp1
-    if new_key.startswith('mlp1.') or '.mlp1.' in new_key:
-        # Keep the full key including mlp1 prefix for now
-        if is_ema:
-            mlp1_ema_dict[new_key] = value
-        else:
-            mlp1_dict[new_key] = value
+    if is_ema:
+        vision_ema_dict[new_key] = value
     else:
-        # Vision model parameters
-        if is_ema:
-            vision_ema_dict[new_key] = value
-        else:
-            vision_model_dict[new_key] = value
+        vision_model_dict[new_key] = value
 
 
 # Helper function to copy additional files
