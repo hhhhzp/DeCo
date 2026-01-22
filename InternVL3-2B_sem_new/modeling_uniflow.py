@@ -5,6 +5,7 @@
 # --------------------------------------------------------
 
 import ast
+import copy
 import math
 import os
 from collections import OrderedDict
@@ -1392,9 +1393,10 @@ class UniFlowVisionModel(PreTrainedModel):
         self.embeddings = UniFlowVisionEmbeddings(config)
         self.encoder = UniFlowVisionEncoder(config)
 
-        config.num_hidden_layers = 4
-        self.shallow_embeddings = UniFlowVisionEmbeddings(config)
-        self.shallow_encoder = UniFlowVisionEncoder(config)
+        shallow_config = copy.deepcopy(config)
+        shallow_config.num_hidden_layers = 4
+        self.shallow_embeddings = UniFlowVisionEmbeddings(shallow_config)
+        self.shallow_encoder = UniFlowVisionEncoder(shallow_config)
         self.mlp1 = nn.Sequential(
             nn.LayerNorm(vit_hidden_size * int(1 / 0.5) ** 2),
             nn.Linear(vit_hidden_size * int(1 / 0.5) ** 2, llm_hidden_size),
