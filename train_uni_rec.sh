@@ -27,4 +27,4 @@ export WANDB_RUN_ID=0u8tcxuc
 python main.py fit -c  configs_flow/uniflow_internvit_2b_blip3o_rec_stage2.yaml \
     --trainer.num_nodes=4 \
     --trainer.devices=8 \
-    --ckpt_path=dual_internvit_2b/exp_sem_gen_gate_c256_new_stage2/epoch=0-step=25000.ckpt
+    --ckpt_path=dual_internvit_2b/exp_sem_gen_gate_c256_new_stage2_448px/epoch=0-step=35000.ckpt
