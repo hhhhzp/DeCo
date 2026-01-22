@@ -1893,7 +1893,13 @@ class UniFlowVisionModel(PreTrainedModel):
     # ============================================================
     # Step 6: Forward (Inference Main Function)
     # ============================================================
-    def forward(self, pixel_values, mode='pixel', normalize_type='siglip'):
+    def forward(
+        self,
+        pixel_values,
+        mode='pixel',
+        normalize_type='siglip',
+        return_distill_loss=False,
+    ):
         # Validate mode
         if mode not in ['pixel', 'semantic']:
             raise ValueError(f"Invalid mode: {mode}. Must be 'pixel' or 'semantic'.")
@@ -1929,12 +1935,19 @@ class UniFlowVisionModel(PreTrainedModel):
         # ============================================================
         elif mode == 'semantic':
             # Step 3: Forward semantic decoder (inference mode) using shared latent
-            sem_tokens = self.forward_semantic_decoder(
+            if return_distill_loss:
+                sem_tokens_pred = self.forward_semantic_decoder(
+                    sem_tokens_target=None,  # Not needed for inference
+                    sem_latent_tokens=shared_latent_tokens,
+                    training=False,
+                )
+                return sem_tokens_pred, F.mse_loss(sem_tokens_pred, sem_tokens)
+            sem_tokens_pred = self.forward_semantic_decoder(
                 sem_tokens_target=None,  # Not needed for inference
                 sem_latent_tokens=shared_latent_tokens,
                 training=False,
             )
-            return sem_tokens
+            return sem_tokens_pred
 
 
 def resample_tokens(tokens, scale_factor):
