@@ -244,8 +244,12 @@ class LightningUniFlowModel(pl.LightningModule):
 
         if self.frozen_encoder and not self.frozen_mlp:
             self.model.teacher_mlp = copy.deepcopy(self.model.mlp1)
+            no_grad(self.model.teacher_mlp)
             if self.use_ema:
                 self.ema_model.teacher_mlp = copy.deepcopy(self.model.mlp1)
+
+        if self.use_ema:
+            no_grad(self.ema_model.teacher_mlp)
 
         if self.teacher_model is not None:
             no_grad(self.teacher_model)
