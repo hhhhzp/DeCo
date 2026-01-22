@@ -155,13 +155,39 @@ class PixHFDataset(Dataset):
         # Setup transforms using create_image_transform function
         # For validation split, force random_crop=False and random_flip=False
         is_train = split == 'train'
-        self.transform = create_image_transform(
-            resolution=resolution,
-            random_crop=random_crop if is_train else False,
-            random_flip=random_flip if is_train else False,
-            normalize_mean=[0.5, 0.5, 0.5],
-            normalize_std=[0.5, 0.5, 0.5],
-        )
+        if random_crop:
+            self.transform = torchvision.transforms.Compose(
+                [
+                    torchvision.transforms.Resize(resolution),
+                    torchvision.transforms.RandomCrop(resolution),
+                    torchvision.transforms.RandomHorizontalFlip(),
+                    torchvision.transforms.ToTensor(),
+                    Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+                ]
+            )
+        else:
+            if random_flip is False:
+                self.transform = torchvision.transforms.Compose(
+                    [
+                        torchvision.transforms.Lambda(
+                            partial(center_crop_fn, image_size=resolution)
+                        ),
+                        torchvision.transforms.ToTensor(),
+                        Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+                    ]
+                )
+            else:
+                self.transform = torchvision.transforms.Compose(
+                    [
+                        torchvision.transforms.Lambda(
+                            partial(center_crop_fn, image_size=resolution)
+                        ),
+                        torchvision.transforms.RandomHorizontalFlip(),
+                        torchvision.transforms.ToTensor(),
+                        Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+                    ]
+                )
+
         print(f"PixHFDataset ({split}) transform: {self.transform}")
 
     def __len__(self):
