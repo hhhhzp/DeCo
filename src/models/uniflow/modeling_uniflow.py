@@ -1467,7 +1467,7 @@ class UniFlowVisionModel(PreTrainedModel):
         # Step 1.6: Downsample sem_tokens for distillation loss computation
         sem_tokens_downsampled = downsample_tokens(sem_tokens, scale_factor=0.5)
         if self.teacher_mlp is not None:
-            sem_tokens_downsampled = self.teacher_mlp(sem_tokens_downsampled)
+            sem_tokens_after_mlp = self.teacher_mlp(sem_tokens_downsampled)
         else:
             sem_tokens_after_mlp = self.mlp1(sem_tokens_downsampled)
 
