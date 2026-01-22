@@ -336,7 +336,14 @@ class LightningUniFlowModel(pl.LightningModule):
                     "frequency": 1,
                 },
             )
-        return dict(optimizer=optimizer)
+        return dict(
+            optimizer=optimizer,
+            lr_scheduler={
+                "scheduler": lr_scheduler,
+                "interval": "step",
+                "frequency": 1,
+            },
+        )
 
     def on_validation_start(self) -> None:
         """Prepare for validation"""
