@@ -8,13 +8,13 @@ import os
 # Model paths
 PRETRAINED_MODEL_PATH = "./InternVL3-2B_sem_new"
 CHECKPOINT_PATH = (
-    "dual_internvit_2b/exp_sem_gen_gate_c256_new_stage2_448px/epoch=0-step=35000.ckpt"
+    "dual_internvit_2b/exp_sem_gen_gate_c256_new_stage2_448px/epoch=0-step=40000.ckpt"
 )
 
 # Output paths
 OUTPUT_BASE_DIR = "exp_sem_gen_gate_c256_new_stage2_448px"
-OUTPUT_MODEL_NAME = "InternVL3-2B-step35000-model"
-OUTPUT_EMA_NAME = "InternVL3-2B-step35000-emamodel"
+OUTPUT_MODEL_NAME = "InternVL3-2B-step40000-model"
+OUTPUT_EMA_NAME = "InternVL3-2B-step40000-emamodel"
 OUTPUT_MODEL_PATH = f"{OUTPUT_BASE_DIR}/{OUTPUT_MODEL_NAME}"
 OUTPUT_EMA_PATH = f"{OUTPUT_BASE_DIR}/{OUTPUT_EMA_NAME}"
 
