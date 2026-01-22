@@ -80,12 +80,11 @@ for key, value in state_dict.items():
 
     # Categorize into vision_model or mlp1
     if '.mlp1.' in new_key:
-        # Extract mlp1 parameter name (remove 'mlp1.' prefix)
-        mlp1_key = new_key.split('mlp1.', 1)[1]
+        # Keep the full key including mlp1 prefix for now
         if is_ema:
-            mlp1_ema_dict[mlp1_key] = value
+            mlp1_ema_dict[new_key] = value
         else:
-            mlp1_dict[mlp1_key] = value
+            mlp1_dict[new_key] = value
     else:
         # Vision model parameters
         if is_ema:
@@ -125,8 +124,16 @@ def load_and_save_model(model, vision_dict, mlp1_dict, output_path, model_type="
     msg_vision = model.vision_model.load_state_dict(vision_dict)
     print(f"{model_type} vision_model load result:", msg_vision)
 
-    # Load mlp1
-    msg_mlp1 = model.mlp1.load_state_dict(mlp1_dict)
+    # Load mlp1 - need to remove 'mlp1.' prefix from keys
+    mlp1_state_dict = {}
+    for key, value in mlp1_dict.items():
+        if key.startswith('mlp1.'):
+            new_key = key[len('mlp1.') :]
+            mlp1_state_dict[new_key] = value
+        else:
+            mlp1_state_dict[key] = value
+
+    msg_mlp1 = model.mlp1.load_state_dict(mlp1_state_dict)
     print(f"{model_type} mlp1 load result:", msg_mlp1)
 
     # Save model
