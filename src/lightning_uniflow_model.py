@@ -242,6 +242,11 @@ class LightningUniFlowModel(pl.LightningModule):
             if self.global_rank == 0:
                 print("Copied parameters from model to EMA model")
 
+        if self.frozen_encoder and not self.frozen_mlp:
+            self.model.teacher_mlp = copy.deepcopy(self.model.mlp1)
+            if self.use_ema:
+                self.ema_model.teacher_mlp = copy.deepcopy(self.model.mlp1)
+
         if self.teacher_model is not None:
             no_grad(self.teacher_model)
             if self.global_rank == 0:
@@ -306,7 +311,12 @@ class LightningUniFlowModel(pl.LightningModule):
         ]
 
         optimizer: torch.optim.Optimizer = self.optimizer(param_groups)
-
+        lr_scheduler = get_cosine_with_min_lr_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=10000,
+            num_training_steps=200000,
+            min_lr=1e-5,
+        )
         if self.distill:
             lr_scheduler = get_cosine_with_min_lr_schedule_with_warmup(
                 optimizer,

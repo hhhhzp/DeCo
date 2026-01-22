@@ -1,6 +1,6 @@
 seed_everything: true
 tags:
-  exp: &exp sem_gen_gate_c256_new_stage2_448px
+  exp: &exp sem_gen_gate_c256_new_stage2
 torch_hub_dir: ~/.cache/torch/hub
 huggingface_cache_dir: null
 
@@ -49,7 +49,7 @@ model:
       decay: 0.9999
 
   eval_original_model: true
-  frozen_encoder: false
+  frozen_encoder: true
   frozen_mlp: false
   
   optimizer:
@@ -59,8 +59,8 @@ model:
       weight_decay: 0.0
       betas: [0.9, 0.95]
   # Pretrained model path
-  distill: true
-  pretrain_model_path: dual_internvit_2b/exp_sem_gen_gate_c256_new_448px_noise_tau0.5/epoch=1-step=60000.ckpt
+  distill: false
+  pretrain_model_path: dual_internvit_2b/exp_sem_gen_gate_c256_new/epoch=1-step=50000.ckpt
 
 data:
   train_dataset:
