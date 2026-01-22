@@ -1456,6 +1456,7 @@ class UniFlowVisionModel(PreTrainedModel):
                 max_freqs=32,
                 num_heads=16,
                 mlp_ratio=2 / 3,
+                use_lpips=False,
             )
 
         # ============================================================
