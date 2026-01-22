@@ -220,23 +220,6 @@ class InternVLChatModel(PreTrainedModel):
         vit_embeds = self.vision_model(
             pixel_values, mode='semantic', normalize_type='imagenet'
         )
-        # Extract features from encoder
-        # encoder_outputs = self.vision_model.encoder(
-        #     inputs_embeds=vit_embeds,
-        #     output_hidden_states=True,
-        # )
-        # vit_embeds = encoder_outputs.last_hidden_state[:, 1:]
-        # vit_embeds = sem_tokens
-        # vit_embeds = self.vision_model.channel_projector.downsample_and_project(
-        #     vit_embeds
-        # )
-        # vit_embeds = self.vision_model.channel_projector.project_and_upsample(
-        #     vit_embeds
-        # )
-        # h = w = int(vit_embeds.shape[1] ** 0.5)
-        # vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], h, w, -1)
-        # vit_embeds = self.pixel_shuffle(vit_embeds, scale_factor=self.downsample_ratio)
-        # vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], -1, vit_embeds.shape[-1])
         vit_embeds = self.vision_model.mlp1(vit_embeds)
         return vit_embeds
 
