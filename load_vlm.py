@@ -1,3 +1,4 @@
+import copy
 from transformers import AutoModel
 import torch
 import shutil
@@ -115,8 +116,8 @@ def load_and_save_model(model, vision_dict, output_path, model_type="Model"):
     print(f"{model_type} vision_model load result:", msg_vision)
 
     # Load mlp1 from the same dict
-    msg_mlp1 = model.mlp1.load_state_dict(vision_dict)
-    print(f"{model_type} mlp1 load result:", msg_mlp1)
+    model.mlp1 = copy.deepcopy(model.vision_model.mlp1)
+    print(f"{model_type} mlp1 load result:", "mlp1 copied from vision_model")
 
     # Save model
     model.save_pretrained(output_path)
