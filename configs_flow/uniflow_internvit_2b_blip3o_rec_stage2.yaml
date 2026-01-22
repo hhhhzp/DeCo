@@ -1,6 +1,6 @@
 seed_everything: true
 tags:
-  exp: &exp sem_gen_gate_c256_new_448px_noise_tau0.5
+  exp: &exp sem_gen_gate_c256_new_stage2_448px
 torch_hub_dir: ~/.cache/torch/hub
 huggingface_cache_dir: null
 
